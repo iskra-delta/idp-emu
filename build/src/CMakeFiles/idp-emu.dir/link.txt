@@ -1,1 +1,0 @@
-/usr/bin/c++ -g "CMakeFiles/idp-emu.dir/main.cpp.o" -o /media/tomaz/Work/partner/idp-emu/bin/idp-emu 
