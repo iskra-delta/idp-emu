@@ -1,0 +1,5 @@
+/media/tomaz/Work/partner/idp-emu/build/CMakeFiles/edit_cache.dir
+/media/tomaz/Work/partner/idp-emu/build/CMakeFiles/rebuild_cache.dir
+/media/tomaz/Work/partner/idp-emu/build/src/CMakeFiles/idp-emu.dir
+/media/tomaz/Work/partner/idp-emu/build/src/CMakeFiles/edit_cache.dir
+/media/tomaz/Work/partner/idp-emu/build/src/CMakeFiles/rebuild_cache.dir

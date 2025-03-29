@@ -1,0 +1,8 @@
+[
+{
+  "directory": "/media/tomaz/Work/partner/idp-emu/build/src",
+  "command": "/usr/bin/c++  -I/media/tomaz/Work/partner/idp-emu/src -g -std=gnu++20 -o CMakeFiles/idp-emu.dir/main.cpp.o -c /media/tomaz/Work/partner/idp-emu/src/main.cpp",
+  "file": "/media/tomaz/Work/partner/idp-emu/src/main.cpp",
+  "output": "src/CMakeFiles/idp-emu.dir/main.cpp.o"
+}
+]

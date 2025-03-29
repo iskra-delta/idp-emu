@@ -1,0 +1,14 @@
+{
+    "version": "2.0.0",
+    "tasks": [
+      {
+        "label": "CMake Build",
+        "type": "shell",
+        "command": "cmake -S . -B build -G 'Unix Makefiles' -DCMAKE_BUILD_TYPE=Debug && cmake --build build",
+        "group": "build",
+        "problemMatcher": ["$gcc"],
+        "detail": "Builds the project using CMake and Makefiles"
+      }
+    ]
+  }
+  
