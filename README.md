@@ -15,7 +15,7 @@ For deep technical details, check out:
 - [Iskra Delta Partner: The Complete Reference](docs/books/PARTNER-COMPLETE-REFERENCE.md)
 - [IDP-DEV: The Iskra Delta Partner Development Repository](http://github.com/tstih/idp-dev)
 
-> 💡 This emulator targets **Linux** only and is under active development. Binary releases are not yet available.
+> This emulator targets **Linux** only and is under active development. Binary releases are not yet available.
 
 ---
 

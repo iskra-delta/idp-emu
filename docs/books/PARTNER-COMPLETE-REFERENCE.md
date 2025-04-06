@@ -131,7 +131,7 @@ The command register (0x39) supports master reset (`0x00`), cursor enable/disabl
 Other ports in the 0x81–0x8F range are unused or undocumented.
 
 <details>
-<summary>Example: Set and Get Date/Time (MM58167A) (in BCD!)
+<summary>Example: Disable ROM and toggle RAM banks
 </summary>
 
 ```asm
