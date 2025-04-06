@@ -1,58 +1,63 @@
-![status.badge] [![language.badge]][language.url] [![standard.badge]][standard.url] 
+![status.badge] [![language.badge]][language.url] [![standard.badge]][standard.url]
 
 # Iskra Delta Partner Emulator
 
-Welcome to the **Iskra Delta Partner Emulator**. 
+Welcome to the **Iskra Delta Partner Emulator** — a faithful, low-level recreation of the original 1980s _Iskra Delta Partner_ microcomputer.
 
-*Iskra Delta Partner* was a computer developed by the *Iskra Delta* company, in Slovenia (former Yugoslavia), behind the Iron curtain in 1983. It featured a *Z80* processor with 128KB of (banked) RAM and 4KB of ROM. In addition, it had a built-in 12" (monochrome) monitor supporting a 132x26 text mode and optional 1024x512 high-resolution graphics. The basic model came with a 5.25" floppy disk and an optional 10MB hard disk. The operating system was *CP/M* 3.0.
+The _Iskra Delta Partner_ was a modular Z80A-based system, developed in Slovenia (then Yugoslavia) in 1983. It featured up to 64KB of directly addressable RAM, plus a banked memory architecture with additional RAM pages and a small 2KB system EPROM. The system supported both text-only and graphical display models, optional real-time clock, and up to two floppy drives and a 10MB hard disk.
+
+In graphical configurations (`G` models), it combined the **Signetics SCN2674 AVDC** for text mode with the **Thomson EF9367 GDP** for high-resolution raster graphics (1024×512). Both display processors had dedicated video RAM and worked together to present a unified screen.
 
 ![Iskra Delta Partner](docs/img/partner.jpg)
 
-More technical details about *Iskra Delta Partner* can be found here:
- * [Iskra Delta Partner: The Complete Reference](docs/PARTNER.md)
- * [IDP-DEV: The Iskra Delta Partner Development Repository](http://github.com/tstih/idp-dev)
+For deep technical details, check out:
 
-This emulator is available only for Linux. Navigate to the [Installing and Using](#installing-and-using) chapter for downloads. 
+- [Iskra Delta Partner: The Complete Reference](docs/PARTNER-COMPLETE-REFERENCE.md)
+- [IDP-DEV: The Iskra Delta Partner Development Repository](http://github.com/tstih/idp-dev)
 
-We emulate hardware directly, i.e., there are no interceptions of BIOS or BDOS calls, common to *CP/M* emulators. Furthermore, the emulator is second-generation. Therefore, it strives to be cycle-accurate instead of just depending on the primary interrupt (such as the screen blanking) for timed emulation tasks, typical for first-generation emulators. 
+> 💡 This emulator targets **Linux** only and is under active development. Binary releases are not yet available.
 
-# Installing and Using
+---
 
-The emulator is in the early stages of development, and no deployment packages are available. Therefore, you can only compile it from the source code. 
+## What Makes This Emulator Unique?
+
+This emulator is **hardware-level** and **cycle-stepped** — we simulate the behavior of each chip (Z80, SIO, AVDC, GDP, 8272, etc.) down to the signal level. No shortcuts like intercepting BDOS/BIOS calls are used. All hardware timing, boot process, device initialization, and I/O occur just as on the original Partner.
+
+It’s also a **second-generation emulator**: rather than relying solely on periodic interrupts or software timers, it carefully models the actual chip-level interactions and timing behavior.
+
+---
+
+## Installing and Using
+
+### Clone
+
+```bash
+git clone https://github.com/tstih/idp-emu.git --recursive
+```
 
 ## Clone
 
-~~~
-git clone https://github.com/tstih/idp-emu.git --recursive
-~~~
+```bash
+git clone https://github.com/tstih/idp-emu.git
+```
 
 ## Compile
 
-~~~
+```bash
 cmake -S . -B build
 cmake --build build
-~~~
-
-The executable is `build/partner`. Put it and the `partner.rom` into 
-the same folder. 
+```
 
 ## Run
 
-~~~
-src/partner -r partner.rom
-~~~
+...todo...
 
 # Dependencies
 
-The emulator uses OpenGL and depends on the following libraries:
- * [cxx_argp argument parser](https://github.com/pboettch/cxx_argp)
- * [glfw library for OpenGL](https://github.com/glfw/glfw)
- * [imgui user interface library](https://github.com/ocornut/imgui)
+...todo...
 
-[language.url]:   https://isocpp.org/
+[language.url]: https://isocpp.org/
 [language.badge]: https://img.shields.io/badge/language-C++-blue.svg
-
-[standard.url]:   https://en.wikipedia.org/wiki/C%2B%2B#Standardization
+[standard.url]: https://en.wikipedia.org/wiki/C%2B%2B#Standardization
 [standard.badge]: https://img.shields.io/badge/C%2B%2B-20-blue.svg
-
-[status.badge]:  https://img.shields.io/badge/status-unstable-red.svg
+[status.badge]: https://img.shields.io/badge/status-unstable-red.svg
