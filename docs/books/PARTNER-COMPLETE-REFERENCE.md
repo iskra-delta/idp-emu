@@ -476,7 +476,46 @@ read_result:
 
 ## Memory Map
 
-(TO BE CONTINUED – with insights from ROM and known CP/M layout)
+#### Partner Physical Memory Map Diagram
+
+```
++--------------------------+  FFFFh
+|      Shared RAM          |  (Always visible, not banked,
+|      (16 KB)             |   Used for data sharing, IRQs, buffers)
++--------------------------+  C000h
+|                          |
+|                          |
+|     Banked RAM           |  (48 KB switchable via OUT #0x88/#0x90
+|                          |   Visible at 1000h–BFFFh)
+|                          |
++--------------------------+  1000h
+|   Empty ROM Socket Area  |  (Physical 4 KB socket partially used)
++--------------------------+  0800h
+|       ROM (2 KB)         |  (Enabled on reset
+|      (EPROM active)      |   Can be disabled with OUT #0x80)
++--------------------------+  0000h
+```
+
+#### Partner Logical Memory Map Diagram
+
+```
++-------------------------+  FFFFh
+|     Shared Memory       |  (Shared RAM, interrupt vectors, etc.)
+|    (Banked 3 KB)        |
+|-------------------------|
+|     CP/M BIOS           |  F000h - FFFFh
+|-------------------------|
+|     CP/M BDOS           |  E400h - EFFFh (typical)
+|-------------------------|
+|     CP/M CCP            |  DC00h - E3FFh (typical)
+|-------------------------|
+|  Transient Program Area |  0100h - DBFFh
+|   (User Application)    |
+|-------------------------|
+|    System I/O Buffers   |  0000h - 00FFh
++-------------------------+  0000h
+
+```
 
 ---
 
