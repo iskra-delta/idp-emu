@@ -130,6 +130,37 @@ The command register (0x39) supports master reset (`0x00`), cursor enable/disabl
 
 Other ports in the 0x81–0x8F range are unused or undocumented.
 
+<details>
+<summary>Example: Set and Get Date/Time (MM58167A) (in BCD!)
+</summary>
+
+```asm
+;===============================================================================
+; Disable ROM and toggle RAM banks
+;===============================================================================
+
+switch_banks:
+        ; Disable ROM at 0000h–07FFh (Enable RAM there)
+        ld      a, #0x00
+        out     (#0x80), a                       ; Disable EPROM (shows RAM)
+
+        ; Select RAM Bank 1 (default)
+        ld      a, #0x00
+        out     (#0x88), a                       ; Select Bank 1
+
+        ; Select RAM Bank 2
+        ld      a, #0x00
+        out     (#0x90), a                       ; Select Bank 2
+
+        ; Switch back to RAM Bank 1
+        ld      a, #0x00
+        out     (#0x88), a                       ; Select Bank 1 again
+
+        ret
+```
+
+</details>
+
 ### MM58167A Real-Time Clock
 
 BCD-based RTC with alarm, interrupt, and NVRAM.
@@ -144,6 +175,71 @@ BCD-based RTC with alarm, interrupt, and NVRAM.
 | 0xB3      | 179     | Reset NVRAM flags                 | Out   |            |
 | 0xB4–0xB6 | 180–182 | Status and standby                | Mixed |            |
 | 0xBF      | 191     | Chip test mode                    | ?     |            |
+
+<details>
+<summary>Example: Set and Get Date/Time (MM58167A) (in BCD!)
+</summary>
+
+```asm
+;===============================================================================
+; Write Date and Time to MM58167A
+;===============================================================================
+; Sets:
+;   - Seconds = 45
+;   - Minutes = 30
+;   - Hours   = 14
+;   - Day     = 25
+;   - Month   = 4
+;===============================================================================
+
+set_datetime:
+        ; Seconds (#0x45 = 45 BCD)
+        ld      a, #0x45
+        out     (#0xA1), a                            ; Seconds
+
+        ; Minutes (#0x30 = 30 BCD)
+        ld      a, #0x30
+        out     (#0xA2), a                            ; Minutes
+
+        ; Hours (#0x14 = 14 BCD)
+        ld      a, #0x14
+        out     (#0xA3), a                            ; Hours
+
+        ; Day (#0x25 = 25 BCD)
+        ld      a, #0x25
+        out     (#0xA5), a                            ; Day
+
+        ; Month (#0x04 = April)
+        ld      a, #0x04
+        out     (#0xA7), a                            ; Month
+
+        ret
+
+;===============================================================================
+; Read Date and Time from MM58167A
+;===============================================================================
+; Returns values in BCD in registers:
+;   E = Seconds
+;   D = Minutes
+;   C = Hours
+;   B = Day
+;   A = Month
+;===============================================================================
+
+get_datetime:
+        in      e, (#0xA1)                            ; Read Seconds
+        in      d, (#0xA2)                            ; Read Minutes
+        in      c, (#0xA3)                            ; Read Hours
+        in      b, (#0xA5)                            ; Read Day
+        in      a, (#0xA7)                            ; Read Month
+
+        ret
+
+```
+
+</details>
+
+---
 
 ### Z80 PIO: Parallel Ports
 
@@ -224,6 +320,63 @@ serial_isr:
         pop   af
         ei                                            ; Enable next interrupt
         reti                                           ; Return from interrupt
+```
+
+</details>
+
+---
+
+### Z80 DMA
+
+| Port | Dec | Description  | Dir | Notes        |
+| ---- | --- | ------------ | --- | ------------ |
+| 0xC0 | 192 | DMA Register | ?   | Possibly DMA |
+
+<details>
+<summary>Example: DMA Memory Copy: #0x8000 ➝ #0x4000, size #0x4000
+</summary>
+
+```asm
+        ld      c, #0xC0                              ; DMA port
+        ld      hl, dma_program                       ; DMA program in memory
+        ld      b, #0x11                              ; 17 bytes to write
+        otir                                          ; Send to DMA controller
+
+        ld      a, #0x01                              ; Start DMA transfer
+        out     (#0xDF03), a                          ; Trigger transfer
+        ret
+
+;-----------------------------------------------
+; DMA program: 17 bytes for memory copy
+;-----------------------------------------------
+dma_program:
+        db      #0xC3                                 ; Command: memory-to-memory
+        db      #0x05                                 ; Channel (src/dest interleaved)
+
+        ; Source address (start at 0x8000)
+        db      #0x00, #0x80                          ; Source address low, high
+
+        ; Destination address (start at 0x4000)
+        db      #0x00, #0x40                          ; Dest address low, high
+
+        ; Transfer length (0x4000 bytes)
+        db      #0x00, #0x40                          ; Count low, high
+
+        ; Source page
+        db      #0x80
+
+        ; Destination page
+        db      #0x40
+
+        ; Mode register
+        db      #0x45                                 ; Mode: mem→mem, increment
+
+        ; Misc/Timing
+        db      #0xF1                                 ; Misc
+        db      #0x8A                                 ; Timing
+        db      #0xCF                                 ; Master control
+        db      #0x01, #0xCF, #0x87                   ; Final bytes (specific to IDP ROM)
+
 ```
 
 </details>
