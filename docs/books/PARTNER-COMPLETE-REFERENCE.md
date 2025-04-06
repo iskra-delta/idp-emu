@@ -30,14 +30,6 @@ This document provides a complete and detailed technical reference for the Partn
   - Z80 CTC for counters/timers (when present)
 - **ROM disassembly insights**, covering bootloader, memory tests, and device initialization
 
-The **W**, **F**, and **G** suffixes in model names indicate configuration:
-
-- `W` – hard disk
-- `1F`/`2F` – one or two floppy drives
-- `G` – graphical display capability (AVDC + GDP)
-
-For example, a `2FG` model includes two floppies and the graphical display system, while a `WF` model has only text output and a hard disk.
-
 This reference draws from ROM disassembly, original documentation, and direct hardware research. It is meant for programmers, hardware tinkerers, emulator developers, and digital preservationists working with the Partner system.
 
 Whether you're reverse-engineering the ROM, restoring an original machine, or writing an emulator, this guide offers comprehensive and authoritative information on every aspect of the Iskra Delta Partner.
@@ -171,6 +163,73 @@ Dual SIO channels for CRT, printer, and host.
 | 0xD8–0xDB | 216–219 | SIO Channel 1 (Keyboard/Printer) | I/O |     |
 | 0xE0–0xE4 | 224–228 | SIO Channel 2 (Host/VAX)         | I/O |     |
 
+<details>
+<summary>Example: Interrupt-Driven Serial I/O Routine Using Z80 SIO (Channel A)
+</summary>
+
+```asm
+SIO1_CTRL_A    equ   #0xD9                             ; SIO1 Channel A control port
+SIO1_DATA_A    equ   #0xD8                             ; SIO1 Channel A data port
+INT_VEC_TABLE  equ   #0x0200                           ; IM2 vector table location
+ISR_ADDRESS    equ   serial_isr                        ; Actual ISR routine
+
+;---------------------------------------
+; Setup interrupt mode and vector table
+;---------------------------------------
+init_interrupts:
+        di                                            ; Disable interrupts
+        ld    a, #0x02                                 ; Interrupt page = 0x02
+        ld    i, a                                     ; Set high byte of vector
+        ld    hl, INT_VEC_TABLE
+        ld    de, INT_VEC_TABLE + 1
+        ld    bc, #0x0100                              ; Fill 256 bytes
+        ld    (hl), low(ISR_ADDRESS)                   ; Fill with ISR address
+        ldir
+        im    2                                        ; Interrupt Mode 2
+        ei                                            ; Enable interrupts
+        ret
+
+;---------------------------------------
+; SIO Channel A Initialization (9600 8N1)
+;---------------------------------------
+init_sio1:
+        ld    c, SIO1_CTRL_A
+        ld    hl, sio1_init_data
+        ld    b, #0x07                                 ; 7 control words
+        otir                                           ; Send init data to SIO
+        ret
+
+sio1_init_data:
+        db   #0x18                                     ; WR0: Point to WR1
+        db   #0x04                                     ; WR1: Enable RX interrupt only
+        db   #0x05                                     ; WR2: Vector base = 0x00
+        db   #0x04                                     ; WR3: RX enable, 8-bit
+        db   #0x44                                     ; WR4: 1 stop, 8-bit, async
+        db   #0x00                                     ; WR5: TX disabled for now
+        db   #0x10                                     ; WR0: Reset ext/status interrupts
+
+;---------------------------------------
+; Install SIO ISR (simple echo routine)
+;---------------------------------------
+serial_isr:
+        push af
+        in    a, (SIO1_CTRL_A)                         ; Read RR0: interrupt reason
+        bit   2, a                                     ; RX ready?
+        jr    z, .done
+
+        in    a, (SIO1_DATA_A)                         ; Read incoming byte
+        out   (SIO1_DATA_A), a                         ; Echo it back
+
+.done:
+        pop   af
+        ei                                            ; Enable next interrupt
+        reti                                           ; Return from interrupt
+```
+
+</details>
+
+---
+
 ### 8272 Floppy Disk Controller
 
 | Port | Dec | Description                 | Dir | Notes         |
@@ -180,6 +239,85 @@ Dual SIO channels for CRT, printer, and host.
 | 0xE8 | 232 | Interrupt Vector Register   | ?   |               |
 | 0xF0 | 240 | FDC Status                  | In  |               |
 | 0xF1 | 241 | FDC Data                    | I/O |               |
+
+<details>
+<summary>Example: Boot Sector Read Example (with #0x prefix and proper alignment)
+</summary>
+
+```asm
+FDC_STATUS     equ   #0xF0                             ; FDC status register (read)
+FDC_DATA       equ   #0xF1                             ; FDC data register (read/write)
+LOAD_ADDR      equ   #0x8000                           ; Boot sector destination
+BUFFER         equ   LOAD_ADDR
+
+;---------------------------------------
+; Wait until FDC is ready to accept data
+;---------------------------------------
+wait_fdc_ready:
+        in    a, (FDC_STATUS)                          ; Read FDC status
+        and   #0xC0                                    ; Mask RQM and DIO
+        cp    #0x80                                    ; RQM=1, DIO=0?
+        jr    nz, wait_fdc_ready                       ; Loop until ready
+        ret
+
+;---------------------------------------
+; Issue READ SECTOR command (sector 1)
+;---------------------------------------
+fdc_read_sector:
+        call  wait_fdc_ready
+        ld    a, #0x06                                 ; READ SECTOR command
+        out   (FDC_DATA), a
+
+        call  wait_fdc_ready
+        ld    a, #0x00                                 ; Drive 0, Head 0
+        out   (FDC_DATA), a
+
+        call  wait_fdc_ready
+        ld    a, #0x00                                 ; Track 0
+        out   (FDC_DATA), a
+
+        call  wait_fdc_ready
+        ld    a, #0x00                                 ; Head 0
+        out   (FDC_DATA), a
+
+        call  wait_fdc_ready
+        ld    a, #0x01                                 ; Sector 1
+        out   (FDC_DATA), a
+
+        call  wait_fdc_ready
+        ld    a, #0x02                                 ; 512 byte sector size (2^2)
+        out   (FDC_DATA), a
+
+        call  wait_fdc_ready
+        ld    a, #0x01                                 ; One sector
+        out   (FDC_DATA), a
+
+        call  wait_fdc_ready
+        ld    a, #0x1B                                 ; GAP3 length
+        out   (FDC_DATA), a
+
+        call  wait_fdc_ready
+        ld    a, #0xFF                                 ; DTL (don’t care)
+        out   (FDC_DATA), a
+
+;---------------------------------------
+; Wait for result phase and read results
+;---------------------------------------
+wait_result_phase:
+        in    a, (FDC_STATUS)
+        and   #0xC0
+        cp    #0x80
+        jr    nz, wait_result_phase
+
+        ld    b, #0x07                                 ; Expect 7 result bytes
+read_result:
+        call  wait_fdc_ready
+        in    a, (FDC_DATA)                            ; Read result byte
+        djnz  read_result
+        ret
+```
+
+</details>
 
 ---
 
