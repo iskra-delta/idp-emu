@@ -12,7 +12,7 @@ In graphical configurations (`G` models), it combined the **Signetics SCN2674 AV
 
 For deep technical details, check out:
 
-- [Iskra Delta Partner: The Complete Reference](docs/PARTNER-COMPLETE-REFERENCE.md)
+- [Iskra Delta Partner: The Complete Reference](docs/books/PARTNER-COMPLETE-REFERENCE.md)
 - [IDP-DEV: The Iskra Delta Partner Development Repository](http://github.com/tstih/idp-dev)
 
 > 💡 This emulator targets **Linux** only and is under active development. Binary releases are not yet available.
@@ -28,12 +28,6 @@ It’s also a **second-generation emulator**: rather than relying solely on peri
 ---
 
 ## Installing and Using
-
-### Clone
-
-```bash
-git clone https://github.com/tstih/idp-emu.git --recursive
-```
 
 ## Clone
 
