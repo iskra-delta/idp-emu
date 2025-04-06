@@ -1,0 +1,158 @@
+
+;;HDNaloziCPMLDR:
+060B	CALL	hdd_init       ; inicializacija?
+
+060E	LD	A,#C3           ; C3 = dma reset
+0610	OUT	(#C0),A         ; C0...DMA RESET
+0612	LD	HL,#075B
+0615	CALL #063D
+  063D	CALL	#067F       ; gain control
+    067F	IN	A,(#10)
+    0681	AND	#08
+    0683	JP	Z,#068B
+    0686	LD	A,#41
+    0688	JP	#06D7
+    068B	LD	A,#01
+    068D	OUT	(#10),A
+    068F	IN	A,(#10)
+    0691	AND	#08
+    0693	JP	Z,#068F
+    0696	LD	A,#02
+    0698	OUT	(#10),A
+    069A	RET
+  0640	CALL	#069B
+    ;; xebec_wait_req
+    069B	IN	A,(#10)
+    069D	RLA
+    069E	JP	NC,#069B  ;; loop
+    06A1	RRA
+    06A2	RET
+  0643	LD	B,A
+  0644	AND	#10
+  0646	RET	Z
+  0647	LD	A,B
+  0648	AND	#40
+  064A	RET	NZ
+  064B	LD	A,(HL)
+  064C	OUT	(#11),A
+  064E	INC	HL
+  064F	JP	#0640
+0618	IN	A,(#10)
+061A	AND	#40
+061C	JP	Z,#0618
+061F	IN	A,(#10)
+0621	AND	#10
+0623	JP	NZ,#0634
+0626	LD	A,#22
+0628	OUT	(#10),A
+062A	CALL	#06A9
+062D	IN	A,(#10)
+062F	AND	#10
+0631	JP	Z,#062D
+0634	CALL	#0662
+0637	RET	Z
+0638	LD	A,#32
+063A	JP	#06D7
+
+
+hdd_init:
+05AD	XOR	A           ; a=0
+05AE	OUT	(#12),A     ; 0->12 (HDD reset)
+05B0	DI  
+        ;; configure the CTC
+05B1	LD	A,#47
+05B3	OUT	(#C8),A     ; C8 - CF (CTC) 
+05B5	LD	A,#FF
+05B7	OUT	(#C8),A
+05B9	LD	A,#C7
+05BB	OUT	(#C9),A
+05BD	LD	A,#50
+05BF	OUT	(#C9),A
+05C1	EI
+05C2	CALL	#05FC
+  05FC	LD	HL,xebec_hdd_init
+  05FF	CALL	#0652
+    0652	CALL	#067F
+      ;; gain control
+      067F	IN	A,(#10)     ; read HDD status RDSTAT
+      0681	AND	#08         ; check if busy?
+      0683	JP	Z,#068B     ; not busy
+        068B	LD	A,#01   ; DRIVE SELECT
+        068D	OUT	(#10),A ; write to WRCONTR
+        ;; take control over the drive... 
+wait_until_busy:
+        068F	IN	A,(#10) ; read status
+        0691	AND	#08     ; check if busy?
+        0693	JP	Z,wait_busy
+        ;; enable drive after successful drive select
+        0696	LD	A,#02   ; DRIVE ENABLE
+        0698	OUT	(#10),A ; write 2 to WRCONTR
+        069A	RET
+      ;; disk controller is busy...
+      ;; write hard disk malfunction 
+      ;; and return to the command line
+      0686	LD	A,#41
+      0688	JP	#06D7       
+
+xebec_cmd:
+   0655	CALL	#069B
+xebec_wait_req:
+    069B	IN	A,(#10)     ; get drive status
+    069D	RLA             ; check bit 7 (REQ)
+    069E	JP	NC,xebec_wait_req    ; if disk not ready toaccept data...
+    06A1	RRA             ; restore status to A
+    06A2	RET
+0658	AND	#40         ; check IN/OUT direction
+065A	RET	NZ          ; return if not cpu->controller hdd_init
+065B	LD	A,(HL)      ; xebec_hdd_init 0x0c
+065C	OUT	(#11),A     ; 00001100 to WRDATA register
+065E	INC	HL
+065F	JP	xebec_cmd
+
+
+
+
+
+;; HDD parameters
+;; opcode 0xc0 is Initialize Drive Characteristics
+;; followed by 5 bytes that are ignored then followed
+;; by eight bytes defining drive Characteristics
+;; INIT DRIVE CHARACTERISTICS COMMAND
+;; 0xc0, 0x00, 0x00, 0x00, 0x00, 0x00
+;; 0x01, 0x32 = max cylinders (306)
+;; 0x04 = max heads (4)
+;; 0x00, 0x80 = starting reduced write cylinder (128)
+;; 0x00, 0x40 = starting write precompens. cyl (64)
+;; 0x0b = max ECC burst data len (11)
+xebec_hdd_init:
+0747	DB	$0C, $00, $00, $00, $00, $00,   $01, $32
+;; 0x01 recalibrate
+;; 0x00, 0x00, 0x00, 0x00, 0x00 ... recalibrate args
+;; bit 5 of second byte is drive number = 0
+;; retries and step are both 0
+074F	DB	$04,   $00, $80,   $00, $40,   $0B,   $01, $00
+;; 0x08 read (b=block count = 1f = 31 blocks)
+0757	DB	$00, $00, $00, $00,   $08, $00, $00, $00
+075F	DB	$1F, $00
+
+
+
+
+;; initialize Z80 DMA
+06A9	LD	HL,#06B3
+06AC	LD	C,#C0
+06AE	LD	B,#0F
+06B0	OTIR
+06B2	RET
+06B3	DB	$79, $00, $E0, $FF, $1E, $14, $28, $95
+06BB	DB	$11, $00, $8A, $CF, $01, $CF, $87
+
+
+
+// dma.C
+// https://github.com/benbaker76/zxnext_dma_sample/blob/master/src/dma.c
+// https://github.com/breakintoprogram/lib-spectrum-next/blob/master/lib/dma.z80
+// https://wiki.specnext.dev/dma
+// https://github.com/jdersch/PERQemu/commit/9991c59d608ae59b7b4511c5de811fe0864c56c4
+// https://github.com/nop90/Neopop-SDL/blob/master/Core/dma.c
+// 

@@ -1,0 +1,318 @@
+;; links
+;; https://github.com/willsowerbutts/kiss-bios/blob/571f8a94c415a2c993bea1510a1361b1efb23849/fdc8272.c
+;; https://github.com/wwarthen/RomWBW/blob/94239866a514019bad5d922a869c4566c5738bed/Source/HBIOS/fd.asm#L3
+;; https://github.com/vipoo/msxrc2014/blob/7b083ca6d46d6f47179fb95082ca9297e5fcf9e2/apps/fdd.asm#L10
+;; https://helppc.netcore2k.net/hardware/fdc
+;; http://www.brokenthorn.com/Resources/OSDev20.html
+;; https://wiki.osdev.org/Floppy_Disk_Controller
+;; https://github.com/freebsd/freebsd-src/blob/fef74e99fc234a687f1a00318ece1834587c4e92/sys/dev/fdc/fdc.c#L11
+;; https://github.com/simh/simh/blob/676ca3a8366218e56f528a9a4cc6b172f2506339/AltairZ80/s100_disk1a.c#L34
+;; https://github.com/openmach/openmach/blob/a185c84f7f5052b7b9f5531ab3612aaf88d3802e/i386/kernel/i386at/nfd.c
+;; 
+;; https://github.com/EtchedPixels/EmulatorKit/blob/master/lib765/lib/765fdc.c
+
+
+    ;; sends the command to the 8272 chip
+    ;; command is received in the A register
+fdc_send_command:
+    0337	PUSH	AF
+fsc_loop:
+    0338	IN	A,(#F0) ; read FDC status
+    033A	AND	#C0     ; 1100 0000
+    ;; wait until FDC is ready to accept commands
+    ;; 1xxx xxxx Data Register is ready
+    ;; x0xx xxxx 0 Transfer from processor to data register
+    033C	CP	#80     ; top 2 bits equals to 10
+    033E	JP	NZ,#fsc_loop
+    0341	POP	AF
+    ;; send command in A to GDC
+    0342	OUT	(#F1),A
+    0344	RET
+
+    ;; read result form the 8272 chip
+    ;; then read value to A
+fdc_recv_command:
+frc_loop:
+    0345	IN	A,(#F0)
+    0347	AND	#C0
+    0349	CP	#C0
+    034B	JP	NZ,frc_loop
+    034E	IN	A,(#F1)
+    0350	RET
+
+;;FDCInit:
+02FD	DI              ; no interrupts
+02FE	IM	2           ; why?
+0300	LD	HL,#02E8    ; interrupt table
+0303	LD	A,L         
+0304	OUT	(#E8),A     ; into RDC interrupt vector 
+;; value E8 (1100 1000) for CTC means --
+;; xxxx xxx0 ... set vector address
+;; aaaa axxx ... 11001 vector address is E8
+0306	OUT	(#C8),A     ; set interrupt vector table
+0308	LD	A,H         ; high interrupt tbl addr.
+0309	LD	I,A         ; into I
+030B	EI              ; enable interrupts
+030C	HALT            ; wait for drive status
+030D	LD	A,#08       ; 08: FDD sense interrupt status
+030F	CALL	fdd_send_command
+;; read interrupt status ST0 and PCN
+0312	CALL	fdd_recv_command
+0315	CALL	fdd_recv_command
+    ;; command 3 is SPECIFY!
+    ;; and must be followed by two more bytes
+0318	LD	A,#03
+031A	CALL	fdd_send_command
+    ;; SPECIFY is followed by 2 bytes
+    ;; the weird code that follows is result of
+    ;; following requirement:
+    ;; after receiving the command byte, the 
+    ;; RQM flag may remind set for 12 microseconds,
+    ;; software should not attempt to read the main
+    ;; status register during this time
+    ;; theory check: 1 t-state on Z80 is
+    ;; 1/4mio is 0.00000025, 12 ms is 0.000012
+    ;; so that would require 48 t-states delay
+031D	LD	A,#0D       ; 0x0d to A
+031F	AND	#0F         ; still 0x0d
+0321	RLCA            ; mode d to higher nibble 0xd0
+0322	RLCA
+0323	RLCA
+0324	RLCA
+0325	LD	B,A         ; store a (0xd0)
+0326	LD	A,#0E       ; a=0x0e
+0328	AND	#0F         ; still 0x0e
+032A	OR	B           ; ox0d | 0x0e = 0x0f WHY???!?
+032B	CALL	fdd_send_command ; first byte for SPECIFY
+032E	LD	A,#04       ; a=0x04
+0330	RLCA            ; a=0x08
+0331	AND	#FE         ; still a=0x08
+0333	CALL	fdd_send_command
+0336	RET
+
+
+; interrupt vector table for CTC0, CTC1, CTC2
+; some vectors could be double used?
+02E8	DW	$04CA, $05D6, $0524
+
+; interrupt 1 (?)
+; strange difference between int1 and int3
+; is carry flag...
+04CA	EI
+04CB	SCF         ; carry set
+04CC	RETI
+
+;; interrupt 2
+;; this handler seems to reset CTC channel 1
+;; and write error "hard disk not ready"
+;; 03 = 0000 0011
+;; this value resets channel 1, auto timer,
+;; prescaler 16, no interrupt
+;; xxxx xxx1 = command
+;; xxxx xx1x = software reset
+05D6	LD	A,#03
+05D8	OUT	(#C9),A         ; CTC channel 1
+05DA	CALL do_reti        ; will return here
+05DD	EI                  ; enable interrupts
+05DE	LD	HL,hdd_not_ready_msg     
+05E1	JP	Napaka
+
+hdd_not_ready_msg:
+05E6	DB	$21, $00
+05E8	DZ	"HARD DISK NOT READY"
+
+;; interrupt 3 (???)
+0524	EI
+0525	SCF
+0526	CCF         ; carry reset
+0527	RETI
+
+do_reti:
+05E4	RETI
+
+;; some sort of CTC initialisation
+fdd_start_motor:
+0501	CALL	fdd_check_motor
+0504	JP	NZ,fdd_motor_on ; is the motor on?
+        ;; motor is off
+0507	OUT	(#98),A         ; start motor (any value!)
+0509	CALL	fdd_motor_delay
+fdd_motor_on:
+050C	XOR	A               ; a=0
+050D	OUT	(#98),A         ; motor on (again, why?)
+
+;; CTC channels 0,1 are automatic counters
+;; 47 is automatic counter
+;; xxxx xxx1 ... control word
+;; xxxx xx1x ... software reset
+;; xxxx x1xx ... 1=constant follows
+;; x1xx xxxx ... 1=set counter mode
+050F	LD	A,#47           ; 47=0100 0111
+0511	OUT	(#C8),A         ; CTC channel 0
+0513	OUT	(#C9),A         ; CTC channel 1
+;; value 0x82 is time constant (130)
+0515	LD	A,#82           ; time constnt
+0517	OUT	(#C8),A         ; CTC channel 0
+0519	OUT	(#C9),A         ; CTC channel 1, no need?
+
+;; CTC channel 2 is automatic interrupt driven timer
+;; A7 is automatic timer
+;; xxxx xxx1 ... control word
+;; xxxx xx1x ... software reset
+;; xxxx x1xx ... 1=constant follows
+;; xx1x xxxx ... prescaler value is 0xff
+;; x0xx xxxx ... timer mode
+;; 1xxx xxxx ... interrupt driven
+051B	LD	A,#A7           ; A7=1010 0111
+051D	OUT	(#CA),A         ; CTC channel 2
+;; ff is constant for channel 2
+051F	LD	A,#FF           ; FF=1111 1111
+0521	OUT	(#CA),A         ; CTC channel 2
+0523	RET                 ; fdd_start_motor
+
+;; 98 returns floppy motor status in bit 1
+fdd_check_motor:
+04ED	IN	A,(#98)     ; read floppy motor status
+04EF	AND	#01         ; bit 1=on/off
+04F1	RET             ; return motor status in A
+
+;; a delay of 65536 loops
+fdd_motor_delay:
+04F2	LD	A,#FF       ; outer loop
+04F4	PUSH	BC      ; preserve BC
+fmd_outer_loop:            
+04F5	LD	B,#FF       ; inner loop
+fmd_inner_loop:
+04F7	DEC	B
+04F8	JP	NZ,fmd_inner_loop
+04FB	DEC	A
+04FC	JP	NZ,fmd_outer_loop
+04FF	POP	BC          ; restore BC
+0500	RET
+
+;;FDBootSkok:
+02FA	JP	FDBoot
+...
+;;FDBoot:
+04D4	CALL	FDNaloziCPMLDR
+04D7	LD	A,(CPMLDR)	; Prvi bajt prvega sektorja...
+04DA	CP	#C3	; ... mora biti opcode za brezpogojni JP...
+04DC	JP	Z,#04EA ;; jump to OS
+04DF	CP	#31	; ... ali LD SP, nn
+04E1	JP	Z,#04EA  ;; also jump to OS
+04E4	LD	HL,#0593 ;; 
+04E7	JP	Napaka
+; Nalagalnik OSa je nalozxen; skocximo vanj
+04EA	JP	Trampolin ; f600 ; start loader
+
+
+0593	DB	$21, $00
+0595	DZ	"NO SYSTEM ON DISK"
+
+;;FDNaloziCPMLDR:
+0484	LD	A,#13           ; 0x13 (19)to addr
+0486	LD	(Neznano7),A    ; 0x13 to address FFD7
+0489	XOR	A               ; A=0 
+048A	LD	(Neznano1),A    ; 0x00 to address 0xffd0
+048D	CALL	#0351
+
+    0351	LD	A,#07       ; recalibrate
+    0353	CALL	fdd_send_command
+    0356	LD	A,(Neznano1); restore A (=0)
+    0359	CALL	#0337   ; recalibrate  disk select 0
+    035C	EI              
+    035D	HALT            ; wait for interrupt
+    035E	LD	A,#08       ; 8=sense interrupt status
+    0360	CALL	fdd_send_command
+    ;; and ignore it...why?
+    0363	CALL	fdd_recv_command
+    0366	CALL	fdd_recv_command
+    0369	XOR	A
+    036A	LD	(Neznano2),A ; 0 to ffd2
+    036D	LD	(Neznano6),A ; 0 to ffd6
+    0370	RET
+
+0490	LD	HL,#E000
+0493	LD	(Neznano3),HL   ; store e000 to FFD3. (bios warm?)
+fdc_load_loop:
+0496	XOR	A
+0497	INC	A               ; a=1
+0498	LD	(Neznano4),A    ; to FFD4
+
+loop_48b:
+049B	CALL	#0371       
+    0371	CALL	#03ED
+        03ED	CALL	fdd_start_motor
+        03F0	LD	A,#0F   ; cmd=SEEK,cy
+        03F2	CALL	#0337
+        03F5	CALL	#041B
+            041B	LD	A,(Neznano6) ; a=0 (head)
+            041E	RLCA
+            041F	RLCA
+            0420	AND	#04
+            0422	PUSH	BC
+            0423	LD	B,A
+            0424	LD	A,(Neznano1)  ;(disk number)
+            0427	OR	B
+            0428	POP	BC
+            0429	RET         ; a=0
+        03F8	CALL	#0337   ; seek hd0, disk 0
+        03FB	LD	A,(Neznano2) ; cylinder/track
+        03FE	CALL	#0337 ; seek cylinder 0
+        0401	EI
+        0402	HALT        ; wait interrupt
+        0403	LD	A,#08   ; 8 = sense interrupt
+        0405	CALL	#0337
+        0408	CALL	#0345
+        040B	CALL	#0345
+        ;; we are now at the right location to read!
+        040E	LD	B,A
+        040F	LD	A,(Neznano2)
+        0412	CP	B
+        0413	JP	Z,#0419 
+        0416	XOR	A
+        0417	INC	A
+        0418	RET
+        0419	XOR	A
+        041A	RET
+    0374	RET	NZ
+049E	JP	NZ,#06D1 ; floppy disk malfunction
+04A1	LD	DE,#0100
+04A4	LD	HL,(Neznano3)
+04A7	ADD	HL,DE
+04A8	LD	(Neznano3),HL
+04AB	LD	A,(Neznano4)    
+04AE	INC	A
+04AF	LD	(Neznano4),A
+
+;; count using the Neznano7 counter
+04B2	LD	HL,Neznano7 ; ffd8
+04B5	CP	(HL)
+04B6	JP	NZ,loop_48b
+
+;; if Neznano6 is head
+04B9	LD	A,(Neznano6)    ; get head number?
+04BC	OR	A               ; not null?
+04BD	RET	NZ              ; then we're done
+04BE	INC	A               ; else increase head no
+04BF	LD	(Neznano6),A    ; write to head number
+
+04C2	LD	A,#0E           ; Write 14 to
+04C4	LD	(Neznano7),A    ; our counter
+04C7	JP	fdc_load_loop   ; and repeat
+
+
+
+; Init string za FDC???
+;; nope, this is DMA init!
+046E	DB	$FF, $00, $14, $28, $85, $F1, $8A, $CF
+0476	DB	$01, $CF, $87, $FF, $00, $14, $28, $85
+047E	DB	$F1, $8A, $CF, $05, $CF, $87
+
+Neznano1: drive number
+Neznano2: cylinder/track
+Neznano3: ???
+Neznano4: ???
+Neznano5: ???
+Neznano6: head number
+Neznano7: some sort of counter

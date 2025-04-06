@@ -1,0 +1,43 @@
+# idp mame howto
+
+## Where can I find MAME with Iskra Delta Partner emulator?
+
+[https://github.com/mamedev/mame](https://github.com/mamedev/mame)
+
+## How can I compile MAME with Iskra Delta emulator
+
+make SUBTARGET=id SOURCES=src/mame/sfrj/idpartner.cpp -j4 REGENIE=1 TOOLS=1
+
+Start it and fetch a coffee, it'll take some time. After the compilation the
+root directory contains program ./id. Since there already is a program id on
+Linux, we renamed this to idp-mame to prevent conflicts.
+
+## Where can I download ROMS?
+
+Download all roms (using torrent) from here (latest version, merged)
+
+https://pleasuredome.github.io/pleasuredome/mame/index.html
+
+Unpack ROM zip files (don't unzip individual rom zips, but do unzip the whole rom package) 
+into your mame folder, subfolder roms/ 
+
+## How can I prepare boot hard disk image?
+
+./chdman createhd -i hdd.img -o hdd.chd -chs 306,4,32 -ss 256 -f -c none
+
+## How can I run it?
+
+### With hard disk
+
+./id partnerwfg -window -debug -hard1 ./hdd.chd
+
+### With floppy disk
+
+With floppy drive
+./id partner1f -window -debug -flop1 boot.img
+ 
+## How can I communicate with idp-mame
+
+Use the serial port
+
+https://tlindner.macmess.org/?page_id=659

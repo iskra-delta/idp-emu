@@ -1,23 +1,33 @@
+// chips_impl.cpp
 #define CHIPS_IMPL
-#include "z80pio.h"
-#include "z80ctc.h"
+#include "z80.h"
 #include "z80sio.h"
-#include "z80dma.h"
-#include "mm58167.h"
 
-int main()
+#include "partner_crt.hpp"
+#include <iostream>
+
+int main(int argc, char **argv)
 {
-    z80pio_t pio;
-    z80ctc_t ctc;
-    mm58167a_t rtc;
+    if (argc < 2)
+    {
+        std::cerr << "usage: idp-emu <rom_file>\n";
+        return 1;
+    }
 
-    z80pio_init(&pio);
-    z80ctc_init(&ctc);
-    mm58167a_init(&rtc);
+    try
+    {
+        partner_crt idp;
+        idp.load_rom(argv[1]);
+        idp.reset();
 
-    // Simulate one tick...
-    uint64_t pins = 0;
-    pins = mm58167a_tick(&rtc, pins);
-
-    return 0;
+        while (true)
+        {
+            idp.tick();
+        }
+    }
+    catch (const std::exception &e)
+    {
+        std::cerr << "[error] " << e.what() << "\n";
+        return 1;
+    }
 }

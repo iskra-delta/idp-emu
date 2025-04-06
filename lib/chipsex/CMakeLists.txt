@@ -13,6 +13,3 @@ target_include_directories(chipsex INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/national
     ${CMAKE_CURRENT_SOURCE_DIR}/signetics
 )
-
-# Define CHIPS_IMPL for anyone using this
-target_compile_definitions(chipsex INTERFACE CHIPS_IMPL)
