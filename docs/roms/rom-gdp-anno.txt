@@ -1,0 +1,1126 @@
+; partner wf/g rom disassembly
+; TOMAZ STIH, LONDON 2025
+
+; --------------------------------------------------
+; 0000: rom entry point — cold boot vector
+; jumps to initialization on power-on/reset
+0000  c3 6d 01      jp    boot_init_016d         ; begin system boot process
+
+; --------------------------------------------------
+; 0003: command line interface
+; prompts user to select boot source ('a' for hd, 'f' for floppy)
+0003  31 c0 ff      ld    sp,#ffc0               ; set stack pointer to 0xffc0 (top of 128kb ram, 64 bytes reserved)
+0006  cd bf 00      call  newline_00bf           ; print cr+lf to gdp display
+0009  3e 2a         ld    a,#2a                  ; load ascii '*' as prompt
+000b  cd ac 00      call  gdp_command_00ac       ; output '*' to gdp (port 0x20)
+000e  cd 9f 00      call  read_and_print_char_009f ; wait for keypress and echo it
+0011  e6 df         and   #df                    ; convert to uppercase (clear bit 5)
+0013  fe 41         cp    #41                    ; compare with 'a' (hard disk boot)
+0015  ca f4 02      jp    z,hd_boot_02f4         ; if 'a', jump to hard disk boot
+0018  fe 46         cp    #46                    ; compare with 'f' (floppy boot)
+001a  ca fa 02      jp    z,fd_boot_02fa         ; if 'f', jump to floppy boot
+001d  3e 3f         ld    a,#3f                  ; load ascii '?' for invalid input
+001f  cd ac 00      call  gdp_command_00ac       ; print '?' to gdp
+0022  18 df         jr    command_line_0003      ; loop back to prompt
+
+; --------------------------------------------------
+; 0024: unused padding
+; 66 bytes of zeros (nops), likely for alignment or future use
+0024  00            nop                          ; start of 66-byte nop block
+; ... (bytes 00 repeated until 0065)
+
+; --------------------------------------------------
+; 0066: unused jump
+; jumps to invalid command handler, never referenced
+0066  c3 1d 00      jp    invalid_command_001d   ; redundant jump to '?' output
+
+; --------------------------------------------------
+; 0069: unused 16-bit hex print routine
+; prints hl as four hex digits followed by a space
+0069  cd bf 00      call  newline_00bf           ; print cr+lf to gdp
+006c  7c            ld    a,h                    ; load high byte of hl
+006d  cd 79 00      call  print_hex_byte_0079    ; print h as two hex digits
+0070  7d            ld    a,l                    ; load low byte of hl
+0071  cd 79 00      call  print_hex_byte_0079    ; print l as two hex digits
+0074  3e 20         ld    a,#20                  ; load ascii space
+0076  c3 ac 00      jp    gdp_command_00ac       ; print space and return
+
+; 0079: unused 8-bit hex print routine
+; prints a as two hex digits
+0079  c5            push  bc                     ; save bc (used as temp register)
+007a  47            ld    b,a                    ; save original byte in b
+007b  cb 2f         sra   a                      ; shift right 4 times for high nibble
+007d  cb 2f         sra   a                      ;
+007f  cb 2f         sra   a                      ;
+0081  cb 2f         sra   a                      ;
+0083  e6 0f         and   #0f                    ; mask to isolate high nibble (0-15)
+0085  cd 90 00      call  print_hex_nibble_0090  ; print high nibble as ascii
+0088  78            ld    a,b                    ; restore original byte
+0089  e6 0f         and   #0f                    ; isolate low nibble
+008b  cd 90 00      call  print_hex_nibble_0090  ; print low nibble as ascii
+008e  c1            pop   bc                     ; restore bc
+008f  c9            ret                          ; return to caller
+
+; 0090: unused nibble-to-ascii conversion
+; converts a nibble (0-f) to ascii and prints it
+0090  fe 0a         cp    #0a                    ; compare with 10 (digit or letter?)
+0092  fa 99 00      jp    m,nibble_is_digit_0099 ; if < 10, handle as 0-9
+0095  c6 37         add   a,#37                  ; for a-f, add 55 (e.g., 10 → 'a')
+0097  18 02         jr    print_nibble_009b      ; jump to print
+0099  c6 30         add   a,#30                  ; for 0-9, add 48 (e.g., 5 → '5')
+009b  cd ac 00      call  gdp_command_00ac       ; output ascii char to gdp
+009e  c9            ret                          ; return
+
+; --------------------------------------------------
+; 009f: read and echo keyboard input
+; waits for a keypress via sio and echoes to gdp
+009f  db d9         in    a,(#d9)                ; read sio status (port 0xd9)
+00a1  cb 47         bit   0,a                    ; check bit 0 (rx data ready)
+00a3  28 fa         jr    z,read_and_print_char_009f ; loop until key available
+00a5  db d8         in    a,(#d8)                ; read char from sio data port
+00a7  cb bf         res   7,a                    ; clear bit 7 (strip parity/errors)
+00a9  fe 20         cp    #20                    ; compare with space (control char check)
+00ab  d8            ret   c                      ; return if control char (< 0x20)
+
+; --------------------------------------------------
+; 00ac: send command to gdp
+; outputs a to gdp command port after waiting
+00ac  cd b2 00      call  wait_gdp_00b2          ; wait for gdp to be ready
+00af  d3 20         out   (#20),a                ; send command to gdp port 0x20
+00b1  c9            ret                          ; return
+
+; --------------------------------------------------
+; 00b2: wait for gdp readiness
+; polls gdp status until it’s free
+00b2  f5            push  af                     ; save a (command to send)
+00b3  db 20         in    a,(#20)                ; read gdp status port
+00b5  e6 04         and   #04                    ; check bit 2 (gdp ready flag)
+00b7  28 fa         jr    z,wait_gdp_loop_00b3   ; loop until ready
+00b9  f1            pop   af                     ; restore command
+00ba  c9            ret                          ; return
+
+; --------------------------------------------------
+; 00bb: unused space print routine
+; prints a space to gdp (never called)
+00bb  3e 20         ld    a,#20                  ; load ascii space
+00bd  18 f1         jr    gdp_command_00ac       ; jump to gdp output
+
+; --------------------------------------------------
+; 00bf: print newline to gdp
+; scrolls display up 12 pixels and clears new line
+00bf  cd b2 00      call  wait_gdp_00b2          ; wait for gdp readiness
+00c2  3a eb ff      ld    a,(scroll_ffeb)        ; load current scroll position
+00c5  d6 0c         sub   #0c                    ; subtract 12 (scroll up 12 pixels)
+00c7  32 eb ff      ld    (scroll_ffeb),a        ; update scroll position
+00ca  d3 36         out   (#36),a                ; set gdp scroll register
+00cc  e5            push  hl                     ; save hl
+00cd  21 de 00      ld    hl,#00de               ; point to clear_line_string_00de
+00d0  cd 46 02      call  print_string_0246       ; execute clear line commands
+00d3  21 f3 00      ld    hl,#00f3               ; point to move_pen_left_00f3
+00d6  cd 46 02      call  print_string_0246       ; move pen to left edge
+00d9  e1            pop   hl                     ; restore hl
+00da  af            xor   a                      ; clear a (select draw mode)
+00db  c3 ac 00      jp    gdp_command_00ac       ; set gdp mode and return
+
+; --------------------------------------------------
+; 00de: gdp command string to clear line
+; moves pen to bottom left and clears line
+00de  03 00 05 01   .db   #03, #00, #05, #01     ; set pen position (bottom)
+00e2  0b 0b 0b 0b   .db   #0b, #0b, #0b, #0b     ; draw right (clear line)
+00e6  0b 0b 0b 0b   .db   #0b, #0b, #0b, #0b     ; continue clearing
+00ea  0b 0b 0b 0b   .db   #0b, #0b, #0b, #0b     ; continue
+00ee  0b 0b 0b 0b   .db   #0b, #0b, #0b, #0b     ; finish clear line
+00f2  00            .db   #00                    ; null terminator
+
+; --------------------------------------------------
+; 00f3: gdp command string to move pen left
+; repositions pen to left edge
+00f3  21 00 0d 00   .db   #21, #00, #0d, #00     ; move pen to x=0 (left)
+
+; --------------------------------------------------
+; 00f7: memory test routine
+; tests 64kb of ram with patterns 0x00/0xff and 0x55/0xaa
+00f7  21 d1 02      ld    hl,#02d1               ; point to "testing memory ..." string
+00fa  cd 43 02      call  print_newline_string_0243 ; print test start message
+00fd  21 00 20      ld    hl,#2000               ; start of ram test (32kb into 128kb)
+0100  01 80 ff      ld    bc,#ff80               ; length = 64kb minus reserved area
+0103  16 02         ld    d,#02                  ; two test passes
+0105  3e 00         ld    a,#00                  ; first pattern = 0x00
+0107  d5            push  de                     ; save pass counter
+0108  f5            push  af                     ; save pattern
+0109  cd 14 01      call  write_verify_0114      ; write and verify pattern
+010c  f1            pop   af                     ; restore pattern
+010d  d1            pop   de                     ; restore pass counter
+010e  c6 55         add   a,#55                  ; next pattern (0x00 → 0x55)
+0110  15            dec   d                      ; decrement pass count
+0111  20 f4         jr    nz,mem_test_loop_0107  ; repeat for second pass
+0113  c9            ret                          ; test complete
+
+; 0114: write and verify memory pattern
+; performs write and verify steps for one pattern
+0114  cd 25 01      call  write_pattern_0125     ; fill ram with pattern/complement
+0117  d3 90         out   (#90),a                ; signal write complete (led?)
+0119  cd 25 01      call  write_pattern_0125     ; write again (redundant?)
+011c  cd 38 01      call  verify_pattern_0138    ; verify ram contents
+011f  d3 88         out   (#88),a                ; signal verify result (port 0x88)
+0121  cd 38 01      call  verify_pattern_0138    ; verify again (consistency)
+0124  c9            ret                          ; return
+
+; 0125: write pattern to ram
+; fills ram with pattern and its complement
+0125  f5            push  af                     ; save pattern
+0126  e5            push  hl                     ; save start address
+0127  57            ld    d,a                    ; d = pattern (e.g., 0x00)
+0128  2f            cpl                          ; a = complement (e.g., 0xff)
+0129  5f            ld    e,a                    ; e = complement
+012a  72            ld    (hl),d                 ; write pattern
+012b  23            inc   hl                     ; next address
+012c  73            ld    (hl),e                 ; write complement
+012d  23            inc   hl                     ; next pair
+012e  e5            push  hl                     ; save current position
+012f  b7            or    a                      ; clear carry
+0130  ed 42         sbc   hl,bc                  ; check if end reached
+0132  e1            pop   hl                     ; restore hl
+0133  38 f5         jr    c,write_loop_012a      ; continue if more to write
+0135  e1            pop   hl                     ; restore start address
+0136  f1            pop   af                     ; restore pattern
+0137  c9            ret                          ; done
+
+; 0138: verify memory pattern
+; checks ram against pattern and complement
+0138  e5            push  hl                     ; save start address
+0139  f5            push  af                     ; save pattern
+013a  57            ld    d,a                    ; d = expected pattern
+013b  2f            cpl                          ; a = expected complement
+013c  5f            ld    e,a                    ; e = complement
+013d  7e            ld    a,(hl)                 ; read byte from ram
+013e  ba            cp    d                      ; compare with pattern
+013f  20 10         jr    nz,verify_fail_0151    ; jump if mismatch
+0141  23            inc   hl                     ; next address
+0142  7e            ld    a,(hl)                 ; read next byte
+0143  bb            cp    e                      ; compare with complement
+0144  20 0b         jr    nz,verify_fail_0151    ; jump if mismatch
+0146  23            inc   hl                     ; next pair
+0147  e5            push  hl                     ; save current hl
+0148  b7            or    a                      ; clear carry
+0149  ed 42         sbc   hl,bc                  ; check if end reached
+014b  e1            pop   hl                     ; restore hl
+014c  38 ef         jr    c,verify_loop_013d     ; continue if more to verify
+014e  f1            pop   af                     ; restore pattern
+014f  e1            pop   hl                     ; restore start address
+0150  c9            ret                          ; verification passed
+0151  21 5a 01      ld    hl,#015a               ; point to "memory error" string
+0154  cd 43 02      call  print_newline_string_0243 ; print error message
+0157  c3 03 00      jp    command_line_0003      ; restart at command line
+
+; --------------------------------------------------
+; 015a: memory test failure message
+; displayed if ram test fails
+015a  21 00         .db   #21, #00               ; '!' followed by null (prefix)
+015c              dz    "MEMORY ERROR !!!"      ; error message (null-terminated)
+; bytes: 21 00 4d 45 4d 4f 52 59 20 45 52 52 4f 52 20 21 21 21 00
+
+; --------------------------------------------------
+; 016d: boot initialization
+; main entry point for system startup
+016d  31 c0 ff      ld    sp,#ffc0               ; reset stack to 0xffc0
+0170  3e 07         ld    a,#07                  ; pio control word (mode select?)
+0172  d3 31         out   (#31),a                ; init pio port a control
+0174  d3 33         out   (#33),a                ; init pio port b control
+0176  3e 0f         ld    a,#0f                  ; enable pio outputs
+0178  d3 31         out   (#31),a                ; set pio a mode
+017a  d3 33         out   (#33),a                ; set pio b mode
+017c  3e 18         ld    a,#18                  ; pio a data (reset or config?)
+017e  d3 30         out   (#30),a                ; output to pio a data port
+0180  3e 6d         ld    a,#6d                  ; pio b data (specific config)
+0182  d3 32         out   (#32),a                ; output to pio b data port
+0184  af            xor   a                      ; clear a
+0185  d3 39         out   (#39),a                ; reset avdc control port
+0187  d3 36         out   (#36),a                ; reset gdp scroll register
+0189  32 eb ff      ld    (scroll_ffeb),a        ; initialize scroll position to 0
+018c  af            xor   a                      ; redundant clear a
+018d  d3 21         out   (#21),a                ; reset gdp mode (unused?)
+018f  3e 03         ld    a,#03                  ; select gdp pen mode
+0191  d3 21         out   (#21),a                ; activate pen
+0193  3e 04         ld    a,#04                  ; gdp clear screen command
+0195  cd ac 00      call  gdp_command_00ac       ; clear gdp display
+0198  3e 05         ld    a,#05                  ; move pen to left edge
+019a  cd ac 00      call  gdp_command_00ac       ; set pen position
+019d  af            xor   a                      ; clear a
+019e  d3 39         out   (#39),a                ; reset avdc again
+01a0  d3 30         out   (#30),a                ; reset pio a data
+01a2  cd 62 02      call  avdc_init1_0262        ; initialize avdc (part 1)
+01a5  cd 86 02      call  avdc_init2_0286        ; initialize avdc (part 2)
+01a8  0e d9         ld    c,#d9                  ; sio crt channel control (port 0xd9)
+01aa  21 b6 02      ld    hl,#02b6               ; point to sio config block
+01ad  06 07         ld    b,#07                  ; 7 bytes to write
+01af  ed b3         otir                         ; configure sio crt (keyboard)
+01b1  0e db         ld    c,#db                  ; sio lpt channel control
+01b3  21 b6 02      ld    hl,#02b6               ; same config block
+01b6  06 07         ld    b,#07                  ; 7 bytes
+01b8  ed b3         otir                         ; configure sio lpt
+01ba  0e e1         ld    c,#e1                  ; sio vax channel control
+01bc  21 b6 02      ld    hl,#02b6               ; same config
+01bf  06 07         ld    b,#07                  ; 7 bytes
+01c1  ed b3         otir                         ; configure sio vax
+01c3  31 c0 ff      ld    sp,#ffc0               ; reset stack (redundant)
+01c6  3e 64         ld    a,#64                  ; y-coordinate = 100
+01c8  d3 2b         out   (#2b),a                ; set gdp y-position
+01ca  21 bd 02      ld    hl,#02bd               ; point to boot banner
+01cd  cd 43 02      call  print_newline_string_0243 ; print "delta partner gdp"
+01d0  3e 05         ld    a,#05                  ; move pen to left edge
+01d2  cd ac 00      call  gdp_command_00ac       ; reposition pen
+01d5  21 2d 02      ld    hl,#022d               ; point to version string
+01d8  cd 43 02      call  print_newline_string_0243 ; print "[ boot v 1.1 - wf ]"
+01db  cd f7 00      call  memory_test_00f7       ; run ram test
+01de  cd fd 02      call  fdc_init_02fd          ; initialize floppy controller
+01e1  cd ee 02      call  empty_function_02ee    ; call empty ret (placeholder?)
+01e4  db d9         in    a,(#d9)                ; check sio status
+01e6  e6 01         and   #01                    ; test bit 0 (key available?)
+01e8  ca f4 02      jp    z,hd_boot_02f4         ; if no key, default to hd boot
+01eb  cd 9f 00      call  read_and_print_char_009f ; read and echo key
+01ee  fe 03         cp    #03                    ; check for ctrl+c
+01f0  c2 f4 02      jp    nz,hd_boot_02f4        ; if not ctrl+c, hd boot
+01f3  21 fc 01      ld    hl,#01fc               ; point to interrupt message
+01f6  cd 43 02      call  print_newline_string_0243 ; print interrupt prompt
+01f9  c3 03 00      jp    command_line_0003      ; return to command line
+
+; --------------------------------------------------
+; 01fc: boot interrupted message
+; shown if ctrl+c pressed during startup
+01fc  21 00         .db   #21, #00               ; '!' followed by null
+01fe              dz    "Interrupted, press A or F to load the system !"
+; bytes: 21 00 49 6e 74 65 72 72 75 70 74 65 64 2c 20 70 72 65 73 73 20 41 20 6f 72 20 46 20 74 6f 20 6c 6f 61 64 20 74 68 65 20 73 79 73 74 65 6d 20 21 00
+
+; --------------------------------------------------
+; 022d: boot version string
+; displays firmware version
+022d  21 00         .db   #21, #00               ; '!' followed by null
+022f              dz    "[ Boot V 1.1 - WF ]"   ; version string
+; bytes: 21 00 5b 20 42 6f 6f 74 20 56 20 31 2e 31 20 2d 20 57 46 20 5d 00
+
+; --------------------------------------------------
+; 0243: print newline and string
+; combines newline with string output
+0243  cd bf 00      call  newline_00bf           ; print cr+lf to gdp
+0246  cd b2 00      call  wait_gdp_00b2          ; wait for gdp readiness
+0249  7e            ld    a,(hl)                 ; load size byte
+024a  d3 23         out   (#23),a                ; set gdp char size register
+024c  23            inc   hl                     ; next byte
+024d  7e            ld    a,(hl)                 ; load control byte (usually 0)
+024e  d3 22         out   (#22),a                ; set gdp control register 2
+0250  23            inc   hl                     ; point to string start
+0251  7e            ld    a,(hl)                 ; load next char
+0252  b7            or    a                      ; test for null
+0253  c8            ret   z                      ; return if end of string
+0254  cd ac 00      call  gdp_command_00ac       ; print char to gdp
+0257  23            inc   hl                     ; next char
+0258  18 f7         jr    print_string_loop_0251 ; loop until null
+
+; --------------------------------------------------
+; 025a: delay routine
+; simple delay loop for timing
+025a  c5            push  bc                     ; save bc
+025b  06 ff         ld    b,#ff                  ; loop counter = 255
+025d  00            nop                          ; waste cycle
+025e  10 fd         djnz  delay_loop_025d        ; decrement and loop
+0260  c1            pop   bc                     ; restore bc
+0261  c9            ret                          ; return
+
+; --------------------------------------------------
+; 0262: avdc initialization (part 1)
+; configures avdc display controller
+0262  3e 00         ld    a,#00                  ; clear value
+0264  d3 39         out   (#39),a                ; reset avdc control
+0266  cd 5a 02      call  delay_025a             ; delay for stability
+0269  cd 5a 02      call  delay_025a             ; delay again
+026c  cd 5a 02      call  delay_025a             ; triple delay
+026f  21 ac 02      ld    hl,#02ac               ; point to avdc config block
+0272  af            xor   a                      ; clear a
+0273  d3 3e         out   (#3e),a                ; reset ss1 low
+0275  d3 3f         out   (#3f),a                ; reset ss1 high
+0277  d3 3a         out   (#3a),a                ; reset ss2 low
+0279  d3 3b         out   (#3b),a                ; reset ss2 high
+027b  3e 10         ld    a,#10                  ; select avdc register bank
+027d  d3 39         out   (#39),a                ; set avdc mode
+027f  06 0a         ld    b,#0a                  ; 10 bytes to write
+0281  0e 38         ld    c,#38                  ; avdc data port
+0283  ed b3         otir                         ; output config block
+0285  c9            ret                          ; return
+
+; --------------------------------------------------
+; 0286: avdc initialization (part 2)
+; enables cursor and sets display address
+0286  3e 3d         ld    a,#3d                  ; enable avdc cursor
+0288  d3 39         out   (#39),a                ; set avdc control
+028a  af            xor   a                      ; clear a
+028b  d3 3d         out   (#3d),a                ; set cursor low byte to 0
+028d  d3 3c         out   (#3c),a                ; set cursor high byte to 0
+028f  21 ff 1f      ld    hl,#1fff               ; display address = 0x1fff
+0292  cd a1 02      call  avdc_set_display_addr_02a1 ; set avdc display address
+0295  3e 20         ld    a,#20                  ; load ascii space
+0297  d3 34         out   (#34),a                ; set avdc fill char
+0299  af            xor   a                      ; clear a
+029a  d3 35         out   (#35),a                ; reset avdc pointer
+029c  3e bb         ld    a,#bb                  ; write from cursor to pointer
+029e  d3 39         out   (#39),a                ; execute avdc fill
+02a0  c9            ret                          ; return
+
+; --------------------------------------------------
+; 02a1: set avdc display address
+; updates avdc registers 10 and 11
+02a1  3e 1a         ld    a,#1a                  ; select display address regs
+02a3  d3 39         out   (#39),a                ; set avdc control
+02a5  7d            ld    a,l                    ; load low byte of hl
+02a6  d3 38         out   (#38),a                ; set display addr low
+02a8  7c            ld    a,h                    ; load high byte
+02a9  d3 38         out   (#38),a                ; set display addr high
+02ab  c9            ret                          ; return
+
+; --------------------------------------------------
+; 02ac: avdc initialization block
+; 10-byte config for avdc display
+02ac  d0 2f 0d 05   .db   #d0, #2f, #0d, #05     ; timing and mode settings
+02b0  99 4f 0a ea   .db   #99, #4f, #0a, #ea     ; resolution and sync
+02b4  00 30         .db   #00, #30               ; end of config
+
+; --------------------------------------------------
+; 02b6: sio initialization block
+; 7-byte config for serial ports
+02b6  18 04 44 03   .db   #18, #04, #44, #03     ; reset, x16 clock, 8-bit rx
+02ba  c1 05 68      .db   #c1, #05, #68          ; 8-bit tx, rts on, no ints
+
+; --------------------------------------------------
+; 02bd: boot banner string
+; initial welcome message
+02bd  a8 00         .db   #a8, #00               ; char size 0xa8, control 0x00
+02bf              dz    "Delta Partner GDP"     ; system identifier
+; bytes: a8 00 44 65 6c 74 61 20 50 61 72 74 6e 65 72 20 47 44 50 00
+
+; --------------------------------------------------
+; 02d1: memory test start message
+; displayed during ram test
+02d1  21 00         .db   #21, #00               ; '!' followed by null
+02d3              dz    "TESTING MEMORY ... "  ; test status message
+; bytes: 21 00 54 45 53 54 49 4e 47 20 4d 45 4d 4f 52 59 20 2e 2e 2e 20 00
+
+; --------------------------------------------------
+; 02e7: unused byte
+; single zero byte (padding?)
+02e7  00            .db   #00                    ; isolated null byte
+
+; --------------------------------------------------
+; 02e8: interrupt vector table fragment
+; points to fdc and other handlers
+02e8  ca 04 d6 05   dw    #04ca, #05d6           ; fdc_int_handler_04ca, ctc_int_handler_05d6
+02ec  24 05         dw    #0524                  ; unknown_int_handler_0524
+
+; --------------------------------------------------
+; 02ee: empty function
+; placeholder routine (development stub?)
+02ee  c9            ret                          ; simple return
+
+; --------------------------------------------------
+; 02ef: unused padding
+; two nops (filler bytes)
+02ef  00            nop                          ; padding
+02f0  00            nop                          ; padding
+
+; --------------------------------------------------
+; 02f1: unused jump
+; jumps to redundant floppy load handler
+02f1  c3 ce 04      jp    unused_floppy_load_04ce ; never called
+
+; --------------------------------------------------
+; 02f4: hard disk boot jump
+; entry point for hd boot selection
+02f4  c3 46 05      jp    hd_boot_0546           ; jump to hd boot routine
+
+; --------------------------------------------------
+; 02f7: unused jump
+; jumps to redundant hd load handler
+02f7  c3 a7 05      jp    unused_hd_load_05a7    ; never called
+
+; --------------------------------------------------
+; 02fa: floppy disk boot jump
+; entry point for floppy boot selection
+02fa  c3 d4 04      jp    fd_boot_04d4           ; jump to floppy boot routine
+
+; --------------------------------------------------
+; 02fd: floppy disk controller initialization
+; sets up fdc with im2 interrupts
+02fd  f3            di                           ; disable interrupts
+02fe  ed 5e         im    2                      ; set interrupt mode 2
+0300  21 e8 02      ld    hl,#02e8               ; point to ivt at 0x02e8
+0303  7d            ld    a,l                    ; low byte (0xe8)
+0304  d3 e8         out   (#e8),a                ; set fdc vector low
+0306  d3 c8         out   (#c8),a                ; set ctc vector base
+0308  7c            ld    a,h                    ; high byte (0x02)
+0309  ed 47         ld    i,a                    ; set i for im2 table (0x0200-0x02ff)
+030b  fb            ei                           ; enable interrupts
+030c  76            halt                         ; wait for interrupt
+030d  3e 08         ld    a,#08                  ; sense interrupt status
+030f  cd 37 03      call  fdc_send_cmd_0337      ; send to fdc
+0312  cd 45 03      call  fdc_read_result_0345   ; read status byte 1
+0315  cd 45 03      call  fdc_read_result_0345   ; read status byte 2
+0318  3e 03         ld    a,#03                  ; specify command
+031a  cd 37 03      call  fdc_send_cmd_0337      ; send to fdc
+031d  3e 0d         ld    a,#0d                  ; step rate or head load
+031f  e6 0f         and   #0f                    ; isolate low nibble
+0321  07            rlca                         ; shift left 4 times
+0322  07            rlca                         ;
+0323  07            rlca                         ;
+0324  07            rlca                         ; move to high nibble (0xd0)
+0325  47            ld    b,a                    ; save shifted value
+0326  3e 0e         ld    a,#0e                  ; additional parameter
+0328  e6 0f         and   #0f                    ; isolate low nibble
+032a  b0            or    b                      ; combine (e.g., 0xde)
+032b  cd 37 03      call  fdc_send_cmd_0337      ; send constructed command
+032e  3e 04         ld    a,#04                  ; another parameter (step?)
+0330  07            rlca                         ; shift left (0x08)
+0331  e6 fe         and   #fe                    ; clear bit 0
+0333  cd 37 03      call  fdc_send_cmd_0337      ; send parameter
+0336  c9            ret                          ; return
+
+; --------------------------------------------------
+; 0337: send command to fdc
+; outputs a to fdc command port
+0337  f5            push  af                     ; save command
+0338  db f0         in    a,(#f0)                ; read fdc status
+033a  e6 c0         and   #c0                    ; check bits 7 and 6 (ready)
+033c  fe 80         cp    #80                    ; wait for bit 7=0, bit 6=1
+033e  c2 38 03      jp    nz,fdc_wait_0338       ; loop until ready
+0341  f1            pop   af                     ; restore command
+0342  d3 f1         out   (#f1),a                ; send to fdc command port
+0344  c9            ret                          ; return
+
+; --------------------------------------------------
+; 0345: read fdc result
+; reads data byte from fdc
+0345  db f0         in    a,(#f0)                ; read fdc status
+0347  e6 c0         and   #c0                    ; check bits 7 and 6
+0349  fe c0         cp    #c0                    ; wait for data ready (11xxxxxx)
+034b  c2 45 03      jp    nz,fdc_read_wait_0345  ; loop until ready
+034e  db f1         in    a,(#f1)                ; read data from fdc
+0350  c9            ret                          ; return with result
+
+; --------------------------------------------------
+; 0351: fdc recalibrate
+; recalibrates floppy drive
+0351  3e 07         ld    a,#07                  ; recalibrate command
+0353  cd 37 03      call  fdc_send_cmd_0337      ; send to fdc
+0356  3a d0 ff      ld    a,(drvselsts_ffd0)      ; load drive select?
+0359  cd 37 03      call  fdc_send_cmd_0337      ; send parameter
+035c  fb            ei                           ; enable interrupts
+035d  76            halt                         ; wait for interrupt
+035e  3e 08         ld    a,#08                  ; sense interrupt status
+0360  cd 37 03      call  fdc_send_cmd_0337      ; send to fdc
+0363  cd 45 03      call  fdc_read_result_0345   ; read response byte 1
+0366  cd 45 03      call  fdc_read_result_0345   ; read response byte 2
+0369  af            xor   a                      ; clear a
+036a  32 d1 ff      ld    (unknown2_ffd1),a      ; clear status flag
+036d  32 d7 ff      ld    (unknown6_ffd7),a      ; clear another flag
+0370  c9            ret                          ; return
+
+; --------------------------------------------------
+; 0371: floppy load attempt
+; attempts to load cp/m from floppy
+0371  cd ed 03      call  fdc_force_interrupt_03ed ; force fdc interrupt
+0374  c0            ret   nz                     ; return if failed
+0375  3e 0a         ld    a,#0a                  ; retry counter = 10
+0377  32 d5 ff      ld    (unknown5_ffd5),a      ; store retry count
+037a  3e 05         ld    a,#05                  ; dma control value
+037c  d3 c0         out   (#c0),a                ; send to dma port
+037e  3e cf         ld    a,#cf                  ; enable dma?
+0380  d3 c0         out   (#c0),a                ; send to dma
+0382  cd 5c 04      call  fdc_setup_dma_045c     ; setup dma parameters
+0385  21 6e 04      ld    hl,#046e               ; point to fdc config block
+0388  ed b3         otir                         ; output config to dma
+038a  3e 06         ld    a,#06                  ; read sector command base
+038c  f6 40         or    #40                    ; modify to 0x46 (read?)
+038e  cd 2a 04      call  fdc_send_extended_cmd_042a ; send extended command
+0391  cd 46 04      call  fdc_setup_irq_0446     ; configure interrupt
+0394  fb            ei                           ; enable interrupts
+0395  76            halt                         ; wait for irq
+0396  da ab 03      jp    c,irq_retry_0396       ; if carry, retry
+0399  db 98         in    a,(#98)                ; read fdc/dma status
+039b  e6 01         and   #01                    ; check bit 0 (busy?)
+039d  c2 94 03      jp    nz,fdc_load_loop_0394  ; loop if busy
+03a0  21 29 05      ld    hl,#0529               ; point to "floppy not ready" msg
+03a3  cd 43 02      call  print_newline_string_0243 ; print error
+03a6  d3 98         out   (#98),a                ; reset fdc/dma status
+03a8  c3 94 03      jp    fdc_load_loop_0394     ; loop back to check status
+03ab  3e 03         ld    a,#03                  ; ctc/dma control value
+03ad  d3 ca         out   (#ca),a                ; send to ctc channel (port 0xca)
+03af  cd 45 03      call  fdc_read_result_0345   ; read fdc result byte 1
+03b2  cd 45 03      call  fdc_read_result_0345   ; read result byte 2
+03b5  f5            push  af                     ; save status
+03b6  06 05         ld    b,#05                  ; retry 5 times
+03b8  cd 45 03      call  fdc_read_result_0345   ; read additional status byte
+03bb  05            dec   b                      ; decrement counter
+03bc  c2 b8 03      jp    nz,fdc_status_loop_03b8 ; loop until done
+03bf  f1            pop   af                     ; restore initial status
+03c0  fe 80         cp    #80                    ; check for success (0x80)
+03c2  c8            ret   z                      ; return if successful
+03c3  3a d5 ff      ld    a,(unknown5_ffd5)      ; load retry counter
+03c6  b7            or    a                      ; test if zero
+03c7  ca eb 03      jp    z,fdc_load_fail_03eb   ; if zero, fail
+03ca  3d            dec   a                      ; decrement retry count
+03cb  32 d5 ff      ld    (unknown5_ffd5),a      ; update counter
+03ce  3a d1 ff      ld    a,(unknown2_ffd1)      ; load status flag
+03d1  f5            push  af                     ; save it
+03d2  3c            inc   a                      ; increment flag
+03d3  32 d1 ff      ld    (unknown2_ffd1),a      ; store updated flag
+03d6  3a d7 ff      ld    a,(unknown6_ffd7)      ; load another flag
+03d9  f5            push  af                     ; save it
+03da  cd ed 03      call  fdc_force_interrupt_03ed ; force interrupt and check
+03dd  f1            pop   af                     ; restore second flag
+03de  32 d7 ff      ld    (unknown6_ffd7),a      ; restore it
+03e1  f1            pop   af                     ; restore first flag
+03e2  32 d1 ff      ld    (unknown2_ffd1),a      ; restore it
+03e5  cd ed 03      call  fdc_force_interrupt_03ed ; retry interrupt
+03e8  c3 7a 03      jp    fdc_load_retry_037a    ; retry dma operation
+03eb  3c            inc   a                      ; set nz flag (failure)
+03ec  c9            ret                          ; return with failure
+
+; --------------------------------------------------
+; 03ed: force fdc interrupt and verify
+; forces interrupt and checks status consistency
+03ed  cd 01 05      call  fdc_reset_status_0501  ; reset fdc status
+03f0  3e 0f         ld    a,#0f                  ; force interrupt command
+03f2  cd 37 03      call  fdc_send_cmd_0337      ; send to fdc
+03f5  cd 1b 04      call  fdc_merge_flags_041b   ; merge status flags
+03f8  cd 37 03      call  fdc_send_cmd_0337      ; send merged value
+03fb  3a d1 ff      ld    a,(unknown2_ffd1)      ; load status flag
+03fe  cd 37 03      call  fdc_send_cmd_0337      ; send as parameter
+0401  fb            ei                           ; enable interrupts
+0402  76            halt                         ; wait for interrupt
+0403  3e 08         ld    a,#08                  ; sense interrupt status
+0405  cd 37 03      call  fdc_send_cmd_0337      ; send to fdc
+0408  cd 45 03      call  fdc_read_result_0345   ; read result byte 1
+040b  cd 45 03      call  fdc_read_result_0345   ; read result byte 2
+040e  47            ld    b,a                    ; save result in b
+040f  3a d1 ff      ld    a,(unknown2_ffd1)      ; reload status flag
+0412  b8            cp    b                      ; compare with result
+0413  ca 19 04      jp    z,fdc_int_match_0419   ; if match, success
+0416  af            xor   a                      ; clear a
+0417  3c            inc   a                      ; set nz (failure)
+0418  c9            ret                          ; return failure
+0419  af            xor   a                      ; clear a (success)
+041a  c9            ret                          ; return success
+
+; --------------------------------------------------
+; 041b: merge fdc flags
+; combines status flags for fdc command
+041b  3a d7 ff      ld    a,(unknown6_ffd7)      ; load flag
+041e  07            rlca                         ; shift left twice
+041f  07            rlca                         ; bit 0 → bit 2
+0420  e6 04         and   #04                    ; isolate bit 2
+0422  c5            push  bc                     ; save bc
+0423  47            ld    b,a                    ; save shifted flag
+0424  3a d0 ff      ld    a,(drvselsts_ffd0)      ; load base flag
+0427  b0            or    b                      ; merge flags
+0428  c1            pop   bc                     ; restore bc
+0429  c9            ret                          ; return merged value
+
+; --------------------------------------------------
+; 042a: send extended fdc command
+; sends command with additional parameters
+042a  cd 37 03      call  fdc_send_cmd_0337      ; send initial command
+042d  cd 1b 04      call  fdc_merge_flags_041b   ; merge flags
+0430  cd 37 03      call  fdc_send_cmd_0337      ; send merged value
+0433  3a d1 ff      ld    a,(unknown2_ffd1)      ; load status flag
+0436  cd 37 03      call  fdc_send_cmd_0337      ; send as parameter
+0439  3a d7 ff      ld    a,(unknown6_ffd7)      ; load another flag
+043c  cd 37 03      call  fdc_send_cmd_0337      ; send it
+043f  3a d4 ff      ld    a,(unknown4_ffd4)      ; load retry counter
+0442  cd 37 03      call  fdc_send_cmd_0337      ; send final parameter
+0445  c9            ret                          ; return
+
+; --------------------------------------------------
+; 0446: setup fdc interrupt
+; configures additional fdc parameters
+0446  3e 01         ld    a,#01                  ; control byte
+0448  cd 37 03      call  fdc_send_cmd_0337      ; send to fdc
+044b  3a d4 ff      ld    a,(unknown4_ffd4)      ; load retry counter
+044e  cd 37 03      call  fdc_send_cmd_0337      ; send as parameter
+0451  3e 0a         ld    a,#0a                  ; retry limit?
+0453  cd 37 03      call  fdc_send_cmd_0337      ; send
+0456  3e ff         ld    a,#ff                  ; end marker
+0458  cd 37 03      call  fdc_send_cmd_0337      ; send
+045b  c9            ret                          ; return
+
+; --------------------------------------------------
+; 045c: setup fdc dma parameters
+; prepares dma for floppy operation
+045c  3e 79         ld    a,#79                  ; drive/head flags (drive 1?)
+045e  d3 c0         out   (#c0),a                ; send to dma port
+0460  2a d2 ff      ld    hl,(unknown3_ffd2)     ; load buffer address
+0463  7d            ld    a,l                    ; low byte
+0464  d3 c0         out   (#c0),a                ; send to dma
+0466  7c            ld    a,h                    ; high byte
+0467  d3 c0         out   (#c0),a                ; send to dma
+0469  06 0b         ld    b,#0b                  ; 11 bytes remaining
+046b  0e c0         ld    c,#c0                  ; dma port
+046d  c9            ret                          ; return (otir follows)
+
+; --------------------------------------------------
+; 046e: fdc/dma configuration block
+; 22-byte config for floppy read (two attempts)
+046e  ff 00 14 28   .db   #ff, #00, #14, #28     ; length 0xff, buffer 0x2814
+0472  85 f1 8a cf   .db   #85, #f1, #8a, #cf     ; flags, command, gap
+0476  01 cf 87      .db   #01, #cf, #87          ; drive select, control, end
+0479  ff 00 14 28   .db   #ff, #00, #14, #28     ; second attempt (same buffer)
+047d  85 f1 8a cf   .db   #85, #f1, #8a, #cf     ; same flags and command
+0481  05 cf 87      .db   #05, #cf, #87          ; alternate parameter, end
+
+; --------------------------------------------------
+; 0484: load cp/m loader from floppy
+; manages floppy boot process
+0484  3e 13         ld    a,#13                  ; initial retry count?
+0486  32 d8 ff      ld    (unknown7_ffd8),a      ; store in ram
+0489  af            xor   a                      ; clear a
+048a  32 d0 ff      ld    (drvselsts_ffd0),a      ; clear drive flag
+048d  cd 51 03      call  fdc_recalibrate_0351   ; recalibrate drive
+0490  21 00 e0      ld    hl,#e000               ; initial buffer address
+0493  22 d2 ff      ld    (unknown3_ffd2),hl     ; store buffer addr
+0496  af            xor   a                      ; clear a
+0497  3c            inc   a                      ; set to 1
+0498  32 d4 ff      ld    (unknown4_ffd4),a      ; initialize retry counter
+049b  cd 71 03      call  fdc_load_attempt_0371  ; attempt to load sector
+049e  c2 d1 06      jp    nz,floppy_error_06d1   ; if failed, handle error
+04a1  11 00 01      ld    de,#0100               ; increment by 256 bytes
+04a4  2a d2 ff      ld    hl,(unknown3_ffd2)     ; load current buffer addr
+04a7  19            add   hl,de                  ; advance buffer
+04a8  22 d2 ff      ld    (unknown3_ffd2),hl     ; store new addr
+04ab  3a d4 ff      ld    a,(unknown4_ffd4)      ; load retry counter
+04ae  3c            inc   a                      ; increment sector count
+04af  32 d4 ff      ld    (unknown4_ffd4),a      ; update counter
+04b2  21 d8 ff      ld    hl,#ffd8               ; point to unknown7_ffd8
+04b5  be            cp    (hl)                   ; compare with max retries
+04b6  c2 9b 04      jp    nz,load_next_sector_049b ; if not done, continue
+04b9  3a d7 ff      ld    a,(unknown6_ffd7)      ; check final status
+04bc  b7            or    a                      ; test if zero
+04bd  c0            ret   nz                     ; return if error
+04be  3c            inc   a                      ; set to 1
+04bf  32 d7 ff      ld    (unknown6_ffd7),a      ; mark completion
+04c2  3e 0e         ld    a,#0e                  ; adjust retry count?
+04c4  32 d8 ff      ld    (unknown7_ffd8),a      ; update ram
+04c7  c3 96 04      jp    fd_load_init_0496      ; restart load process
+
+; --------------------------------------------------
+; 04ca: fdc interrupt handler
+; handles fdc interrupts
+04ca  fb            ei                           ; enable interrupts
+04cb  37            scf                          ; set carry (success?)
+04cc  ed 4d         reti                         ; return from breviated
+
+; --------------------------------------------------
+; 04ce: unused floppy load handler
+; redundant routine, never called
+04ce  cd 84 04      call  fd_load_cpml_0484      ; load cp/m from floppy
+04d1  c3 03 00      jp    command_line_0003      ; return to command line
+
+; --------------------------------------------------
+; 04d4: floppy disk boot routine
+; initiates floppy boot and verifies loader
+04d4  cd 84 04      call  fd_load_cpml_0484      ; load cp/m loader
+04d7  3a 00 e0      ld    a,(cpml_0e000)         ; load first byte of loader
+04da  fe c3         cp    #c3                    ; check for jp opcode
+04dc  ca ea 04      jp    z,boot_trampoline_04ea ; if valid, jump to loader
+04df  fe 31         cp    #31                    ; check for ld sp,nn opcode
+04e1  ca ea 04      jp    z,boot_trampoline_04ea ; if valid, jump
+04e4  21 93 05      ld    hl,#0593               ; point to "no system" msg
+04e7  c3 da 06      jp    error_handler_06da     ; display error
+
+; 04ea: jump to cp/m loader
+; executes loaded cp/m system
+04ea  c3 00 f6      jp    trampoline_f600        ; jump to trampoline
+
+; --------------------------------------------------
+; 04ed: check fdc/dma status
+; reads status from port 0x98
+04ed  db 98         in    a,(#98)                ; read fdc/dma status
+04ef  e6 01         and   #01                    ; check bit 0 (busy?)
+04f1  c9            ret                          ; return status
+
+; --------------------------------------------------
+; 04f2: long delay routine
+; extended delay for timing
+04f2  3e ff         ld    a,#ff                  ; outer loop counter
+04f4  c5            push  bc                     ; save bc
+04f5  06 ff         ld    b,#ff                  ; inner loop counter
+04f7  05            dec   b                      ; decrement inner
+04f8  c2 f7 04      jp    nz,inner_delay_04f7    ; loop 255 times
+04fb  3d            dec   a                      ; decrement outer
+04fc  c2 f5 04      jp    nz,outer_delay_04f5    ; loop 255 times
+04ff  c1            pop   bc                     ; restore bc
+0500  c9            ret                          ; return
+
+; --------------------------------------------------
+; 0501: reset fdc status with delay
+; resets fdc and configures ctc
+0501  cd ed 04      call  check_fdc_status_04ed  ; check status
+0504  c2 0c 05      jp    nz,reset_fdc_050c      ; if busy, skip delay
+0507  d3 98         out   (#98),a                ; reset fdc status
+0509  cd f2 04      call  long_delay_04f2        ; delay
+050c  af            xor   a                      ; clear a
+050d  d3 98         out   (#98),a                ; reset fdc again
+050f  3e 47         ld    a,#47                  ; ctc control word
+0511  d3 c8         out   (#c8),a                ; send to ctc channel 0
+0513  d3 c9         out   (#c9),a                ; send to ctc channel 1
+0515  3e 82         ld    a,#82                  ; another control value
+0517  d3 c8         out   (#c8),a                ; ctc channel 0
+0519  d3 c9         out   (#c9),a                ; ctc channel 1
+051b  3e a7         ld    a,#a7                  ; ctc mode?
+051d  d3 ca         out   (#ca),a                ; send to ctc
+051f  3e ff         ld    a,#ff                  ; timer value
+0521  d3 ca         out   (#ca),a                ; set timer
+0523  c9            ret                          ; return
+
+; --------------------------------------------------
+; 0524: unknown interrupt handler
+; generic interrupt handler
+0524  fb            ei                           ; enable interrupts
+0525  37            scf                          ; set carry
+0526  3f            ccf                          ; clear carry
+0527  ed 4d         reti                         ; return from interrupt
+
+; --------------------------------------------------
+; 0529: floppy not ready message
+; displayed if floppy fails to respond
+0529  21 00         .db   #21, #00               ; '!' followed by null
+052b              dz    "FLOPPY DISK NOT READY !!!!"
+; bytes: 21 00 46 4c 4f 50 50 59 20 44 49 53 4b 20 4e 4f 54 20 52 45 41 44 59 20 21 21 21 21 00
+
+; --------------------------------------------------
+; 0546: hard disk boot routine
+; initiates hd boot and verifies loader
+0546  cd 0b 06      call  hd_load_cpml_060b      ; load cp/m from hd
+0549  3a 00 e0      ld    a,(cpml_0e000)         ; load first byte
+054c  fe 31         cp    #31                    ; check for ld sp,nn opcode
+054e  ca 57 05      jp    z,hd_copy_rom_0557     ; if valid, proceed
+0551  21 93 05      ld    hl,#0593               ; point to "no system" msg
+0554  c3 da 06      jp    error_handler_06da     ; display error
+
+; 0557: copy rom for hd boot
+; prepares ram and jumps to loader
+0557  21 00 00      ld    hl,#0000               ; source: rom start
+055a  11 00 20      ld    de,#2000               ; dest: ram buffer
+055d  01 00 08      ld    bc,#0800               ; length: 2kb
+0560  ed b0         ldir                         ; copy rom to ram
+0562  21 61 07      ld    hl,#0761               ; source: hd handler ivt
+0565  11 00 c0      ld    de,#c000               ; dest: ram handler area
+0568  01 6c 00      ld    bc,#006c               ; length: 108 bytes
+056b  ed b0         ldir                         ; copy handler to 0xc000
+056d  f3            di                           ; disable interrupts
+056e  3e 03         ld    a,#03                  ; ctc mode
+0570  d3 c8         out   (#c8),a                ; set ctc channel 0
+0572  d3 c9         out   (#c9),a                ; set ctc channel 1
+0574  21 00 c0      ld    hl,#c000               ; point to handler
+0577  7c            ld    a,h                    ; high byte (0xc0)
+0578  ed 47         ld    i,a                    ; set i for im2 (0xc000-0xc0ff)
+057a  7d            ld    a,l                    ; low byte (0x00)
+057b  d3 e8         out   (#e8),a                ; set fdc vector low
+057d  d3 c8         out   (#c8),a                ; set ctc vector base
+057f  3e 47         ld    a,#47                  ; ctc control word
+0581  d3 c8         out   (#c8),a                ; ctc channel 0
+0583  3e ff         ld    a,#ff                  ; timer value
+0585  d3 c8         out   (#c8),a                ; set timer
+0587  3e c7         ld    a,#c7                  ; another control value
+0589  d3 c9         out   (#c9),a                ; ctc channel 1
+058b  3e 64         ld    a,#64                  ; timer count (100)
+058d  d3 c9         out   (#c9),a                ; set timer
+058f  fb            ei                           ; enable interrupts
+0590  c3 00 f6      jp    trampoline_f600        ; jump to cp/m loader
+
+; --------------------------------------------------
+; 0593: no system on disk message
+; displayed if boot sector is invalid
+0593  21 00         .db   #21, #00               ; '!' followed by null
+0595              dz    "NO SYSTEM ON DISK"     ; error message
+; bytes: 21 00 4e 4f 20 53 59 53 54 45 4d 20 4f 4e 20 44 49 53 4b 00
+
+; --------------------------------------------------
+; 05a7: unused hd load handler
+; redundant routine, never called
+05a7  cd 0b 06      call  hd_load_cpml_060b      ; load cp/m from hd
+05aa  c3 03 00      jp    command_line_0003      ; return to command line
+
+; --------------------------------------------------
+; 05ad: hd initialization
+; prepares hd controller
+05ad  af            xor   a                      ; clear a
+05ae  d3 12         out   (#12),a                ; reset hd port
+05b0  f3            di                           ; disable interrupts
+05b1  3e 47         ld    a,#47                  ; ctc control word
+05b3  d3 c8         out   (#c8),a                ; ctc channel 0
+05b5  3e ff         ld    a,#ff                  ; timer value
+05b7  d3 c8         out   (#c8),a                ; set timer
+05b9  3e c7         ld    a,#c7                  ; another control value
+05bb  d3 c9         out   (#c9),a                ; ctc channel 1
+05bd  3e 50         ld    a,#50                  ; timer count (80)
+05bf  d3 c9         out   (#c9),a                ; set timer
+05c1  fb            ei                           ; enable interrupts
+05c2  cd fc 05      call  hd_status_check_05fc   ; check hd status
+05c5  21 55 07      ld    hl,#0755               ; point to hd config block
+05c8  cd 3d 06      call  hd_send_config_063d    ; send config to hd
+05cb  cd 62 06      call  hd_check_response_0662 ; verify response
+05ce  c2 c5 05      jp    nz,hd_init_loop_05c5   ; retry if failed
+05d1  3e 03         ld    a,#03                  ; ctc mode
+05d3  d3 c9         out   (#c9),a                ; set ctc channel 1
+05d5  c9            ret                          ; return
+
+; --------------------------------------------------
+; 05d6: ctc interrupt handler
+; handles ctc interrupts
+05d6  3e 03         ld    a,#03                  ; ctc mode
+05d8  d3 c9         out   (#c9),a                ; reset ctc channel 1
+05da  cd e4 05      call  execute_reti_05e4      ; perform reti
+05dd  fb            ei                           ; enable interrupts
+05de  21 e6 05      ld    hl,#05e6               ; point to "hd not ready" msg
+05e1  c3 da 06      jp    error_handler_06da     ; display error
+
+; --------------------------------------------------
+; 05e4: execute reti
+; standalone reti routine
+05e4  ed 4d         reti                         ; return from interrupt
+
+; --------------------------------------------------
+; 05e6: hard disk not ready message
+; displayed if hd fails to respond
+05e6  21 00         .db   #21, #00               ; '!' followed by null
+05e8              dz    "HARD DISK NOT READY"   ; error message
+; bytes: 21 00 48 41 52 44 20 44 49 53 4b 20 4e 4f 54 20 52 45 41 44 59 00
+
+; --------------------------------------------------
+; 05fc: hard disk status check
+; verifies hd readiness
+05fc  21 47 07      ld    hl,#0747               ; point to hd config block
+05ff  cd 52 06      call  hd_send_simple_config_0652 ; send config
+0602  cd 62 06      call  hd_check_response_0662 ; check response
+0605  c8            ret   z                      ; return if success
+0606  3e 34         ld    a,#34                  ; error code 0x34
+0608  c3 d7 06      jp    hd_error_handler_06d7  ; handle error
+
+; --------------------------------------------------
+; 060b: load cp/m loader from hard disk
+; manages hd boot process
+060b  cd ad 05      call  hd_init_05ad           ; initialize hd
+060e  3e c3         ld    a,#c3                  ; jp opcode (dma command?)
+0610  d3 c0         out   (#c0),a                ; send to dma port
+0612  21 5b 07      ld    hl,#075b               ; point to hd config block
+0615  cd 3d 06      call  hd_send_config_063d    ; send config
+0618  db 10         in    a,(#10)                ; read hd status
+061a  e6 40         and   #40                    ; check bit 6 (ready?)
+061c  ca 18 06      jp    z,hd_wait_ready_0618   ; loop until ready
+061f  db 10         in    a,(#10)                ; re-read status
+0621  e6 10         and   #10                    ; check bit 4 (error?)
+0623  c2 34 06      jp    nz,hd_check_status_0634 ; if error, skip
+0626  3e 22         ld    a,#22                  ; hd command (seek?)
+0628  d3 10         out   (#10),a                ; send to hd
+062a  cd a9 06      call  hd_send_dma_config_06a9 ; send dma config
+062d  db 10         in    a,(#10)                ; read status
+062f  e6 10         and   #10                    ; check error bit
+0631  ca 2d 06      jp    z,hd_wait_error_clear_062d ; loop until cleared
+0634  cd 62 06      call  hd_check_response_0662 ; final status check
+0637  c8            ret   z                      ; return if success
+0638  3e 32         ld    a,#32                  ; error code 0x32
+063a  c3 d7 06      jp    hd_error_handler_06d7  ; handle error
+
+; --------------------------------------------------
+; 063d: send hd config with checks
+; outputs config block to hd with status checks
+063d  cd 7f 06      call  hd_prepare_067f        ; prepare hd controller
+0640  cd 9b 06      call  hd_read_status_069b    ; read status
+0643  47            ld    b,a                    ; save status
+0644  e6 10         and   #10                    ; check bit 4 (error)
+0646  c8            ret   z                      ; return if no error
+0647  78            ld    a,b                    ; restore status
+0648  e6 40         and   #40                    ; check bit 6 (ready)
+064a  c0            ret   nz                     ; return if ready
+064b  7e            ld    a,(hl)                 ; load config byte
+064c  d3 11         out   (#11),a                ; send to hd data port
+064e  23            inc   hl                     ; next byte
+064f  c3 40 06      jp    hd_config_loop_0640    ; continue
+
+; --------------------------------------------------
+; 0652: send hd config (simplified)
+; outputs config block without full checks
+0652  cd 7f 06      call  hd_prepare_067f        ; prepare hd controller
+0655  cd 9b 06      call  hd_read_status_069b    ; read status
+0658  e6 40         and   #40                    ; check bit 6 (ready)
+065a  c0            ret   nz                     ; return if ready
+065b  7e            ld    a,(hl)                 ; load config byte
+065c  d3 11         out   (#11),a                ; send to hd data port
+065e  23            inc   hl                     ; next byte
+065f  c3 55 06      jp    hd_simple_config_loop_0655 ; continue
+
+; --------------------------------------------------
+; 0662: check hd response
+; verifies hd status and reads response
+0662  cd 9b 06      call  hd_read_status_069b    ; read hd status
+0665  e6 10         and   #10                    ; check bit 4 (error)
+0667  c2 6f 06      jp    nz,hd_response_ok_066f ; if error, handle response
+066a  3e 42         ld    a,#42                  ; error code 0x42 (no response)
+066c  c3 d7 06      jp    hd_error_handler_06d7  ; handle error
+066f  db 11         in    a,(#11)                ; read response byte
+0671  47            ld    b,a                    ; save response
+0672  23            inc   hl                     ; advance hl (unused?)
+0673  cd 9b 06      call  hd_read_status_069b    ; re-check status
+0676  db 11         in    a,(#11)                ; read second byte
+0678  af            xor   a                      ; clear a
+0679  d3 10         out   (#10),a                ; reset hd controller
+067b  78            ld    a,b                    ; restore response
+067c  e6 03         and   #03                    ; mask lower 2 bits
+067e  c9            ret                          ; return status
+
+; --------------------------------------------------
+; 067f: prepare hd controller
+; resets and sets hd mode
+067f  db 10         in    a,(#10)                ; read hd status
+0681  e6 08         and   #08                    ; check bit 3 (busy)
+0683  ca 8b 06      jp    z,hd_ready_068b        ; if not busy, proceed
+0686  3e 41         ld    a,#41                  ; error code 0x41 (busy)
+0688  c3 d7 06      jp    hd_error_handler_06d7  ; handle error
+068b  3e 01         ld    a,#01                  ; reset value
+068d  d3 10         out   (#10),a                ; send to hd control
+068f  db 10         in    a,(#10)                ; read status
+0691  e6 08         and   #08                    ; check busy bit
+0693  ca 8f 06      jp    z,hd_wait_busy_068f    ; wait until not busy
+0696  3e 02         ld    a,#02                  ; set mode 2
+0698  d3 10         out   (#10),a                ; send to hd
+069a  c9            ret                          ; return
+
+; --------------------------------------------------
+; 069b: read hd status with wait
+; waits for hd readiness
+069b  db 10         in    a,(#10)                ; read hd status
+069d  17            rla                          ; shift bit 7 to carry
+069e  da 9b 06      jp    nc,hd_wait_ready_069b  ; loop if not ready
+06a1  1f            rra                          ; restore original value
+06a2  c9            ret                          ; return status
+
+; --------------------------------------------------
+; 06a3: send alternate dma config
+; wrapper for dma config at 0x06c2
+06a3  21 c2 06      ld    hl,#06c2               ; point to dma config 2
+06a6  c3 ac 06      jp    hd_dma_output_06ac     ; jump to output routine
+
+; --------------------------------------------------
+; 06a9: send main dma config
+; sends dma config from 0x06b3
+06a9  21 b3 06      ld    hl,#06b3               ; point to dma config 1
+06ac  0e c0         ld    c,#c0                  ; dma port
+06ae  06 0f         ld    b,#0f                  ; 15 bytes
+06b0  ed b3         otir                         ; output config block
+06b2  c9            ret                          ; return
+
+; --------------------------------------------------
+; 06b3: dma config block 1
+; 15-byte config for hd dma
+06b3  79 00 e0 ff   .db   #79, #00, #e0, #ff     ; drive 1, track 0, sector 0xe0
+06b7  1e 14 28 95   .db   #1e, #14, #28, #95     ; buffer 0x2814, flags
+06bb  11 00 8a cf   .db   #11, #00, #8a, #cf     ; command, gap
+06bf  01 cf 87      .db   #01, #cf, #87          ; parameter, control, end
+
+; --------------------------------------------------
+; 06c2: dma config block 2
+; alternate 15-byte config
+06c2  79 00 e0 ff   .db   #79, #00, #e0, #ff     ; same drive, track, sector
+06c6  1e 14 28 95   .db   #1e, #14, #28, #95     ; same buffer, flags
+06ca  11 00 8a cf   .db   #11, #00, #8a, #cf     ; same command, gap
+06ce  05 cf 87      .db   #05, #cf, #87          ; alternate parameter
+
+; --------------------------------------------------
+; 06d1: floppy error handler
+; displays floppy error message
+06d1  21 e0 06      ld    hl,#06e0               ; point to floppy error msg
+06d4  c3 da 06      jp    error_handler_06da     ; display error
+
+; 06d7: hd error handler
+; displays hd error message
+06d7  21 14 07      ld    hl,#0714               ; point to hd error msg
+06da  cd 43 02      call  print_newline_string_0243 ; print error message
+06dd  c3 03 00      jp    command_line_0003      ; return to command line
+
+; --------------------------------------------------
+; 06e0: floppy malfunction message
+; prompts retry with 'f'
+06e0  21 00         .db   #21, #00               ; '!' followed by null
+06e2              dz    "FLOPPY DISK MALFUNCTION !!!RETRY WITH COMMAND  F "
+; bytes: 21 00 46 4c 4f 50 50 59 20 44 49 53 4b 20 4d 41 4c 46 55 4e 43 54 49 4f 4e 20 21 21 21 52 45 54 52 59 20 57 49 54 48 20 43 4f 4d 4d 41 4e 44 20 20 46 20 00
+
+; --------------------------------------------------
+; 0714: hd malfunction message
+; prompts retry with 'a'
+0714  21 00         .db   #21, #00               ; '!' followed by null
+0716              dz    "HARD DISK MALFUNCTION >>> RETRY WITH COMMAND  A "
+; bytes: 21 00 48 41 52 44 20 44 49 53 4b 20 4d 41 4c 46 55 4e 43 54 49 4f 4e 20 3e 3e 3e 20 52 45 54 52 59 20 57 49 54 48 20 43 4f 4d 4d 41 4e 44 20 20 41 20 00
+
+; --------------------------------------------------
+; 0747: hd parameter block
+; configuration or status data for hd operations
+0747  0c 00 00 00   .db   #0c, #00, #00, #00     ; unknown command/offset
+074b  00 00 01 32   .db   #00, #00, #01, #32     ; flags and value (sector?)
+074f  04 00 80 00   .db   #04, #00, #80, #00     ; additional params (size?)
+0753  40 0b 01 00   .db   #40, #0b, #01, #00     ; more flags/offsets
+0757  00 00 00 00   .db   #00, #00, #00, #00     ; padding/reserved
+075b  08 00 00 00   .db   #08, #00, #00, #00     ; alternate block start
+075f  1f 00         .db   #1f, #00               ; end marker or size?
+
+; --------------------------------------------------
+; 0761: hd interrupt vector table fragment
+; two entries pointing to relocated handler
+0761  04 c0 04 c0   dw    #c004, #c004           ; ivt for hd handler at 0xc004
+
+; --------------------------------------------------
+; 0765: hd boot handler
+; relocates code and sets up interrupts for hd boot
+0765  f3            di                           ; disable interrupts
+0766  3e 03         ld    a,#03                  ; ctc mode
+0768  d3 c8         out   (#c8),a                ; set ctc channel 0
+076a  d3 c9         out   (#c9),a                ; set ctc channel 1
+076c  d3 88         out   (#88),a                ; set status port (led?)
+076e  21 00 20      ld    hl,#2000               ; source: hd data buffer
+0771  11 00 00      ld    de,#0000               ; dest: ram start
+0774  01 00 08      ld    bc,#0800               ; length: 2kb
+0777  ed b0         ldir                         ; copy hd loader to 0x0000
+0779  21 e8 02      ld    hl,#02e8               ; ivt base (0x02e8)
+077c  7d            ld    a,l                    ; low byte (0xe8)
+077d  d3 e8         out   (#e8),a                ; set fdc vector low
+077f  d3 c8         out   (#c8),a                ; set ctc vector base
+0781  7c            ld    a,h                    ; high byte (0x02)
+0782  ed 47         ld    i,a                    ; set i for im2 (0x0200-0x02ff)
+0784  fb            ei                           ; enable interrupts
+0785  cd e4 05      call  execute_reti_05e4      ; perform reti
+0788  21 8e 07      ld    hl,#078e               ; point to hd load error msg
+078b  c3 43 02      jp    print_newline_string_0243 ; print error (unused?)
+
+; --------------------------------------------------
+; 078e: hd loading error message
+; suggests fallback to floppy (never displayed?)
+078e  11 00         .db   #11, #00               ; dc1 control code, null
+0790              dz    "LOADING ERROR FROM HARD DISK TRY TO LOAD SYSTEM FROM FLOPPY "
+; bytes: 11 00 4c 4f 41 44 49 4e 47 20 45 52 52 4f 52 20 46 52 4f 4d 20 48 41 52 44 20 44 49 53 4b 20 54 52 59 20 54 4f 20 4c 4f 41 44 20 53 59 53 54 45 4d 20 46 52 4f 4d 20 46 4c 4f 50 50 59 20 00
+
+; --------------------------------------------------
+; 07cd: rom end marker and padding
+; marks end of active code
+07cd  ff            .db   #ff                    ; rst 38h trap or filler
+07ce              ds    50, #1a                ; 50 bytes of 0x1a (sub char)
+; bytes: ff 1a 1a 1a ... (50 times 0x1a, ends at 0x0800)
+
+; --------------------------------------------------
+; additional address notes
+; memory-mapped locations and variables
+;; f600: trampoline                    ; jump table or bootstrap entry
+;; e000: cpml                          ; cp/m loader entry point
+;; ffeb: scroll                        ; gdp scroll position variable
+;; ffd0: drvselsts                     ; drive select or status flag
+;; ffd1: fdcsts                        ; fdc status flag
+;; ffd2: dmaaddr                       ; dma buffer address (16-bit)
+;; ffd4: secrty                        ; sector/retry counter
+;; ffd5: rtyfdd                        ; retry counter for floppy load
+;; ffd7: fsts                          ; final status flag
+;; ffd8: maxrty                        ; max retry limit
