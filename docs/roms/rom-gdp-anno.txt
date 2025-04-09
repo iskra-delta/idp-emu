@@ -518,8 +518,8 @@
 0363  cd 45 03      call  fdc_read_result_0345   ; read response byte 1
 0366  cd 45 03      call  fdc_read_result_0345   ; read response byte 2
 0369  af            xor   a                      ; clear a
-036a  32 d1 ff      ld    (unknown2_ffd1),a      ; clear status flag
-036d  32 d7 ff      ld    (unknown6_ffd7),a      ; clear another flag
+036a  32 d1 ff      ld    (fdcsts_ffd1),a      ; clear status flag
+036d  32 d7 ff      ld    (fsts_ffd7),a      ; clear another flag
 0370  c9            ret                          ; return
 
 ; --------------------------------------------------
@@ -528,7 +528,7 @@
 0371  cd ed 03      call  fdc_force_interrupt_03ed ; force fdc interrupt
 0374  c0            ret   nz                     ; return if failed
 0375  3e 0a         ld    a,#0a                  ; retry counter = 10
-0377  32 d5 ff      ld    (unknown5_ffd5),a      ; store retry count
+0377  32 d5 ff      ld    (rtyfdd_ffd5),a      ; store retry count
 037a  3e 05         ld    a,#05                  ; dma control value
 037c  d3 c0         out   (#c0),a                ; send to dma port
 037e  3e cf         ld    a,#cf                  ; enable dma?
@@ -562,22 +562,22 @@
 03bf  f1            pop   af                     ; restore initial status
 03c0  fe 80         cp    #80                    ; check for success (0x80)
 03c2  c8            ret   z                      ; return if successful
-03c3  3a d5 ff      ld    a,(unknown5_ffd5)      ; load retry counter
+03c3  3a d5 ff      ld    a,(rtyfdd_ffd5)      ; load retry counter
 03c6  b7            or    a                      ; test if zero
 03c7  ca eb 03      jp    z,fdc_load_fail_03eb   ; if zero, fail
 03ca  3d            dec   a                      ; decrement retry count
-03cb  32 d5 ff      ld    (unknown5_ffd5),a      ; update counter
-03ce  3a d1 ff      ld    a,(unknown2_ffd1)      ; load status flag
+03cb  32 d5 ff      ld    (rtyfdd_ffd5),a      ; update counter
+03ce  3a d1 ff      ld    a,(fdcsts_ffd1)      ; load status flag
 03d1  f5            push  af                     ; save it
 03d2  3c            inc   a                      ; increment flag
-03d3  32 d1 ff      ld    (unknown2_ffd1),a      ; store updated flag
-03d6  3a d7 ff      ld    a,(unknown6_ffd7)      ; load another flag
+03d3  32 d1 ff      ld    (fdcsts_ffd1),a      ; store updated flag
+03d6  3a d7 ff      ld    a,(fsts_ffd7)      ; load another flag
 03d9  f5            push  af                     ; save it
 03da  cd ed 03      call  fdc_force_interrupt_03ed ; force interrupt and check
 03dd  f1            pop   af                     ; restore second flag
-03de  32 d7 ff      ld    (unknown6_ffd7),a      ; restore it
+03de  32 d7 ff      ld    (fsts_ffd7),a      ; restore it
 03e1  f1            pop   af                     ; restore first flag
-03e2  32 d1 ff      ld    (unknown2_ffd1),a      ; restore it
+03e2  32 d1 ff      ld    (fdcsts_ffd1),a      ; restore it
 03e5  cd ed 03      call  fdc_force_interrupt_03ed ; retry interrupt
 03e8  c3 7a 03      jp    fdc_load_retry_037a    ; retry dma operation
 03eb  3c            inc   a                      ; set nz flag (failure)
@@ -591,7 +591,7 @@
 03f2  cd 37 03      call  fdc_send_cmd_0337      ; send to fdc
 03f5  cd 1b 04      call  fdc_merge_flags_041b   ; merge status flags
 03f8  cd 37 03      call  fdc_send_cmd_0337      ; send merged value
-03fb  3a d1 ff      ld    a,(unknown2_ffd1)      ; load status flag
+03fb  3a d1 ff      ld    a,(fdcsts_ffd1)      ; load status flag
 03fe  cd 37 03      call  fdc_send_cmd_0337      ; send as parameter
 0401  fb            ei                           ; enable interrupts
 0402  76            halt                         ; wait for interrupt
@@ -600,7 +600,7 @@
 0408  cd 45 03      call  fdc_read_result_0345   ; read result byte 1
 040b  cd 45 03      call  fdc_read_result_0345   ; read result byte 2
 040e  47            ld    b,a                    ; save result in b
-040f  3a d1 ff      ld    a,(unknown2_ffd1)      ; reload status flag
+040f  3a d1 ff      ld    a,(fdcsts_ffd1)      ; reload status flag
 0412  b8            cp    b                      ; compare with result
 0413  ca 19 04      jp    z,fdc_int_match_0419   ; if match, success
 0416  af            xor   a                      ; clear a
@@ -612,7 +612,7 @@
 ; --------------------------------------------------
 ; 041b: merge fdc flags
 ; combines status flags for fdc command
-041b  3a d7 ff      ld    a,(unknown6_ffd7)      ; load flag
+041b  3a d7 ff      ld    a,(fsts_ffd7)      ; load flag
 041e  07            rlca                         ; shift left twice
 041f  07            rlca                         ; bit 0 → bit 2
 0420  e6 04         and   #04                    ; isolate bit 2
@@ -629,11 +629,11 @@
 042a  cd 37 03      call  fdc_send_cmd_0337      ; send initial command
 042d  cd 1b 04      call  fdc_merge_flags_041b   ; merge flags
 0430  cd 37 03      call  fdc_send_cmd_0337      ; send merged value
-0433  3a d1 ff      ld    a,(unknown2_ffd1)      ; load status flag
+0433  3a d1 ff      ld    a,(fdcsts_ffd1)      ; load status flag
 0436  cd 37 03      call  fdc_send_cmd_0337      ; send as parameter
-0439  3a d7 ff      ld    a,(unknown6_ffd7)      ; load another flag
+0439  3a d7 ff      ld    a,(fsts_ffd7)      ; load another flag
 043c  cd 37 03      call  fdc_send_cmd_0337      ; send it
-043f  3a d4 ff      ld    a,(unknown4_ffd4)      ; load retry counter
+043f  3a d4 ff      ld    a,(secrty_ffd4)      ; load retry counter
 0442  cd 37 03      call  fdc_send_cmd_0337      ; send final parameter
 0445  c9            ret                          ; return
 
@@ -642,7 +642,7 @@
 ; configures additional fdc parameters
 0446  3e 01         ld    a,#01                  ; control byte
 0448  cd 37 03      call  fdc_send_cmd_0337      ; send to fdc
-044b  3a d4 ff      ld    a,(unknown4_ffd4)      ; load retry counter
+044b  3a d4 ff      ld    a,(secrty_ffd4)      ; load retry counter
 044e  cd 37 03      call  fdc_send_cmd_0337      ; send as parameter
 0451  3e 0a         ld    a,#0a                  ; retry limit?
 0453  cd 37 03      call  fdc_send_cmd_0337      ; send
@@ -655,7 +655,7 @@
 ; prepares dma for floppy operation
 045c  3e 79         ld    a,#79                  ; drive/head flags (drive 1?)
 045e  d3 c0         out   (#c0),a                ; send to dma port
-0460  2a d2 ff      ld    hl,(unknown3_ffd2)     ; load buffer address
+0460  2a d2 ff      ld    hl,(dmaaddr_ffd2)     ; load buffer address
 0463  7d            ld    a,l                    ; low byte
 0464  d3 c0         out   (#c0),a                ; send to dma
 0466  7c            ld    a,h                    ; high byte
@@ -678,34 +678,34 @@
 ; 0484: load cp/m loader from floppy
 ; manages floppy boot process
 0484  3e 13         ld    a,#13                  ; initial retry count?
-0486  32 d8 ff      ld    (unknown7_ffd8),a      ; store in ram
+0486  32 d8 ff      ld    (maxrty_ffd8),a      ; store in ram
 0489  af            xor   a                      ; clear a
 048a  32 d0 ff      ld    (drvselsts_ffd0),a      ; clear drive flag
 048d  cd 51 03      call  fdc_recalibrate_0351   ; recalibrate drive
 0490  21 00 e0      ld    hl,#e000               ; initial buffer address
-0493  22 d2 ff      ld    (unknown3_ffd2),hl     ; store buffer addr
+0493  22 d2 ff      ld    (dmaaddr_ffd2),hl     ; store buffer addr
 0496  af            xor   a                      ; clear a
 0497  3c            inc   a                      ; set to 1
-0498  32 d4 ff      ld    (unknown4_ffd4),a      ; initialize retry counter
+0498  32 d4 ff      ld    (secrty_ffd4),a      ; initialize retry counter
 049b  cd 71 03      call  fdc_load_attempt_0371  ; attempt to load sector
 049e  c2 d1 06      jp    nz,floppy_error_06d1   ; if failed, handle error
 04a1  11 00 01      ld    de,#0100               ; increment by 256 bytes
-04a4  2a d2 ff      ld    hl,(unknown3_ffd2)     ; load current buffer addr
+04a4  2a d2 ff      ld    hl,(dmaaddr_ffd2)     ; load current buffer addr
 04a7  19            add   hl,de                  ; advance buffer
-04a8  22 d2 ff      ld    (unknown3_ffd2),hl     ; store new addr
-04ab  3a d4 ff      ld    a,(unknown4_ffd4)      ; load retry counter
+04a8  22 d2 ff      ld    (dmaaddr_ffd2),hl     ; store new addr
+04ab  3a d4 ff      ld    a,(secrty_ffd4)      ; load retry counter
 04ae  3c            inc   a                      ; increment sector count
-04af  32 d4 ff      ld    (unknown4_ffd4),a      ; update counter
-04b2  21 d8 ff      ld    hl,#ffd8               ; point to unknown7_ffd8
+04af  32 d4 ff      ld    (secrty_ffd4),a      ; update counter
+04b2  21 d8 ff      ld    hl,#ffd8               ; point to maxrty_ffd8
 04b5  be            cp    (hl)                   ; compare with max retries
 04b6  c2 9b 04      jp    nz,load_next_sector_049b ; if not done, continue
-04b9  3a d7 ff      ld    a,(unknown6_ffd7)      ; check final status
+04b9  3a d7 ff      ld    a,(fsts_ffd7)      ; check final status
 04bc  b7            or    a                      ; test if zero
 04bd  c0            ret   nz                     ; return if error
 04be  3c            inc   a                      ; set to 1
-04bf  32 d7 ff      ld    (unknown6_ffd7),a      ; mark completion
+04bf  32 d7 ff      ld    (fsts_ffd7),a      ; mark completion
 04c2  3e 0e         ld    a,#0e                  ; adjust retry count?
-04c4  32 d8 ff      ld    (unknown7_ffd8),a      ; update ram
+04c4  32 d8 ff      ld    (maxrty_ffd8),a      ; update ram
 04c7  c3 96 04      jp    fd_load_init_0496      ; restart load process
 
 ; --------------------------------------------------
@@ -1114,13 +1114,13 @@
 ; --------------------------------------------------
 ; additional address notes
 ; memory-mapped locations and variables
-;; f600: trampoline                    ; jump table or bootstrap entry
-;; e000: cpml                          ; cp/m loader entry point
-;; ffeb: scroll                        ; gdp scroll position variable
-;; ffd0: drvselsts                     ; drive select or status flag
-;; ffd1: fdcsts                        ; fdc status flag
-;; ffd2: dmaaddr                       ; dma buffer address (16-bit)
-;; ffd4: secrty                        ; sector/retry counter
-;; ffd5: rtyfdd                        ; retry counter for floppy load
-;; ffd7: fsts                          ; final status flag
-;; ffd8: maxrty                        ; max retry limit
+;; f600: trampoline_f600               ; jump table or bootstrap entry
+;; e000: cpml_0e000                    ; cp/m loader entry point
+;; ffeb: scroll_ffeb                   ; gdp scroll position variable
+;; ffd0: drvselsts_ffd0                ; drive select or status flag
+;; ffd1: fdcsts_ffd1                   ; fdc status flag
+;; ffd2: dmaaddr_ffd2                  ; dma buffer address (16-bit)
+;; ffd4: secrty_ffd4                   ; sector/retry counter
+;; ffd5: rtyfdd_ffd5                   ; retry counter for floppy load
+;; ffd7: fsts_ffd7                     ; final status flag
+;; ffd8: maxrty_ffd8                   ; max retry limit
