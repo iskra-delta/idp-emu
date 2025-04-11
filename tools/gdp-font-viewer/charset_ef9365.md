@@ -1,6 +1,6 @@
 # Thomson EF9367 Font Charset
 
-This document explains the 480-byte font file for the Thomson EF9367 chip. It has 96 ASCII characters, each a 5x7 pixel bitmap.
+This document explains the 480-byte font file (see: `roms/charset_ef9365.rom`) for the Thomson EF9367 chip. It has 96 ASCII characters, each a 5x7 pixel bitmap.
 
 ## File Format
 
@@ -84,6 +84,10 @@ for char_idx in range(0, len(data), bytes_per_char):
         print(row_bits.replace("1", "█").replace("0", " "))
     print()
 ```
+
+## The Font
+
+![EF9365 font grid](ef9365_font_grid.png)
 
 ## Notes
 
