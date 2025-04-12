@@ -50,6 +50,10 @@ cmake --build build
 
 ...todo...
 
+## Acknowledgments
+
+This emulator wouldn't exist without the inspiration and deep technical insight provided by the amazing [floooh/chips](https://github.com/floooh/chips) project. Huge thanks to @floooh for making such a clean and educational codebase available. Much of the structure, ideas, and even some of the wording were directly influenced by studying `chips` — thank you!
+
 [language.url]: https://isocpp.org/
 [language.badge]: https://img.shields.io/badge/language-C++-blue.svg
 [standard.url]: https://en.wikipedia.org/wiki/C%2B%2B#Standardization
