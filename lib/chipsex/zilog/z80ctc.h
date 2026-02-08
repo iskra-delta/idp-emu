@@ -1,10 +1,8 @@
 #pragma once
 /*#
-    FIXME FIXME FIXME
-
     # z80ctc.h
 
-    Header-only emulator for the Z80 CTC (Counter/Timer Channels)
+    Header-only pin-perfect emulator for the Z80 CTC (Counter/Timer Channels)
     written in C.
 
     Do this:

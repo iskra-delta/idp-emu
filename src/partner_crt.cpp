@@ -2,38 +2,23 @@
 
 uint8_t partner_crt::io_read(uint16_t port)
 {
-    if (port == 0xD9)
-        pins |= Z80SIO_CS_A;
-    if (port == 0xE1)
-        pins |= Z80SIO_CS_B;
-
-    pins |= Z80SIO_CE | Z80SIO_IORQ | Z80SIO_RD;
-    pins &= ~Z80SIO_WR;
-
-    pins = z80sio_tick(&sio, pins);
-    uint8_t data = Z80SIO_GET_DATA(pins);
-
-    pins &= ~(Z80SIO_CE | Z80SIO_IORQ | Z80SIO_RD | Z80SIO_CS_A | Z80SIO_CS_B);
-    return data;
+    // CRT-specific I/O handling can go here
+    // For now, just call the base class which handles all chips
+    return partner::io_read(port);
 }
 
 void partner_crt::io_write(uint16_t port, uint8_t data)
 {
-    if (port == 0xD8 || port == 0xD9)
-        pins |= Z80SIO_CS_A;
-    if (port == 0xE0 || port == 0xE1)
-        pins |= Z80SIO_CS_B;
+    port &= 0xFF;
 
+    // Special handling for CRT text output on SIO port 0xD8 (data register)
     if (port == 0xD8)
     {
+        // Echo characters to console for debugging
         std::cout << static_cast<char>(data);
         std::cout.flush();
     }
 
-    Z80SIO_SET_DATA(pins, data);
-    pins |= Z80SIO_CE | Z80SIO_IORQ | Z80SIO_WR;
-    pins &= ~Z80SIO_RD;
-
-    pins = z80sio_tick(&sio, pins);
-    pins &= ~(Z80SIO_CE | Z80SIO_IORQ | Z80SIO_WR | Z80SIO_CS_A | Z80SIO_CS_B);
+    // Let base class handle the actual chip I/O
+    partner::io_write(port, data);
 }

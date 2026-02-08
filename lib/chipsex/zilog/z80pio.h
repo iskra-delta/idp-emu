@@ -262,15 +262,17 @@ typedef struct {
     uint8_t input;          /* 8-bit data input register */
     uint8_t output;         /* 8-bit data output register */
     uint8_t mode;           /* 2-bit mode control register (Z80PIO_MODE_*) */
-    uint8_t io_select;      /* 8-bit input/output select register */
+    uint8_t io_select;      /* 8-bit input/output select register (bidirectional mode only) */
     uint8_t int_vector;     /* 8-bit interrupt vector */
     uint8_t int_control;    /* interrupt control word (Z80PIO_INTCTRL_*) */
     uint8_t int_mask;       /* 8-bit interrupt control mask */
     uint8_t int_state;      /* current interrupt handling state */
     bool int_enabled;       /* definitive interrupt enabled flag */
     bool expect_io_select;  /* next control word will be io_select */
-    bool expect_int_mask;   /* next control word will be  mask */
+    bool expect_int_mask;   /* next control word will be mask */
     bool bctrl_match;       /* bitcontrol logic equation result */
+    bool ready;             /* ready signal state (ARDY/BRDY output) */
+    bool strobe_prev;       /* previous strobe state for edge detection */
 } z80pio_port_t;
 
 /* Z80 PIO state. */
@@ -343,6 +345,8 @@ void z80pio_reset(z80pio_t* pio) {
         pio->port[p].expect_io_select = false;
         pio->port[p].bctrl_match = false;
         pio->port[p].int_state = 0;
+        pio->port[p].ready = false;
+        pio->port[p].strobe_prev = false;
     }
     pio->reset_active = true;
 }
@@ -424,18 +428,25 @@ uint8_t _z80pio_read_ctrl(z80pio_t* pio) {
 
 /* new data word received from CPU */
 void _z80pio_write_data(z80pio_t* pio, int port_id, uint8_t data) {
-    // FIXME: in OUTPUT mode, the ARDY/BRDY pins must be set here
     CHIPS_ASSERT((port_id >= 0) && (port_id < Z80PIO_NUM_PORTS));
     z80pio_port_t* p = &pio->port[port_id];
     switch (p->mode) {
         case Z80PIO_MODE_OUTPUT:
             p->output = data;
+            // Set ready signal - peripheral must acknowledge by toggling strobe
+            p->ready = true;
             break;
         case Z80PIO_MODE_INPUT:
+            // Writing to input port has no effect (some implementations latch it)
             p->output = data;
             break;
         case Z80PIO_MODE_BIDIRECTIONAL:
-            // FIXME
+            // Port A only: write to output register
+            // In bidirectional mode, port A is output, port B is input
+            if (port_id == Z80PIO_PORT_A) {
+                p->output = data;
+                p->ready = true;
+            }
             break;
         case Z80PIO_MODE_BITCONTROL:
             p->output = data;
@@ -454,18 +465,26 @@ uint8_t _z80pio_read_data(z80pio_t* pio, int port_id) {
         case Z80PIO_MODE_OUTPUT:
             return p->output;
         case Z80PIO_MODE_INPUT:
+            // Reading input data clears ready signal
+            p->ready = false;
             return p->input;
         case Z80PIO_MODE_BIDIRECTIONAL:
-            return 0xFF;
+            // Port A is output, Port B is input
+            if (port_id == Z80PIO_PORT_A) {
+                return p->output;
+            } else {
+                p->ready = false;
+                return p->input;
+            }
         case Z80PIO_MODE_BITCONTROL:
             return (p->input & p->io_select) | (p->output & ~p->io_select);
         default:
             _Z80PIO_UNREACHABLE;
-            break;
+            return 0xFF;
     }
 }
 
-// set the PA and PB bits into the pin mask
+// set the PA and PB bits into the pin mask and handle ready signals
 uint64_t _z80pio_set_port_output_pins(z80pio_t* pio, uint64_t pins) {
     for (int port_id = 0; port_id < Z80PIO_NUM_PORTS; port_id++) {
         z80pio_port_t* p = &pio->port[port_id];
@@ -475,25 +494,44 @@ uint64_t _z80pio_set_port_output_pins(z80pio_t* pio, uint64_t pins) {
                 data = p->output;
                 break;
             case Z80PIO_MODE_INPUT:
-                data = 0xFF;
+                data = 0xFF;  // Input mode - pins are high impedance (read as 0xFF)
                 break;
             case Z80PIO_MODE_BIDIRECTIONAL:
-                // FIXME!
-                data = 0xFF;
+                // Port A is output, Port B is input
+                if (port_id == Z80PIO_PORT_A) {
+                    data = p->output;
+                } else {
+                    data = 0xFF;
+                }
                 break;
             case Z80PIO_MODE_BITCONTROL:
-                // set input bits to 1
+                // set input bits to 1, output bits from output register
                 data = p->io_select | (p->output & ~p->io_select);
                 break;
             default:
                 _Z80PIO_UNREACHABLE;
+                data = 0xFF;
                 break;
         }
+
+        // Set port data
         if (port_id == 0) {
             Z80PIO_SET_PA(pins, data);
+            // Set/clear ARDY signal
+            if (p->ready) {
+                pins |= Z80PIO_ARDY;
+            } else {
+                pins &= ~Z80PIO_ARDY;
+            }
         }
         else {
             Z80PIO_SET_PB(pins, data);
+            // Set/clear BRDY signal
+            if (p->ready) {
+                pins |= Z80PIO_BRDY;
+            } else {
+                pins &= ~Z80PIO_BRDY;
+            }
         }
     }
     return pins;
@@ -588,32 +626,78 @@ void _z80pio_read_port_inputs(z80pio_t* pio, uint64_t pins) {
         z80pio_port_t* p = &pio->port[i];
         uint8_t data = (i == 0) ? Z80PIO_GET_PA(pins) : Z80PIO_GET_PB(pins);
 
-        // this only needs to be evaluated if either the port input
-        // or port state might have changed
-        if ((data != p->input) || (pins & Z80PIO_CE)) {
-            if (Z80PIO_MODE_INPUT == p->mode) {
-                // FIXME: strobe/ready handshake and interrupt!
+        // Handle strobe input for handshake modes
+        uint64_t strobe_pin = (i == 0) ? Z80PIO_ASTB : Z80PIO_BSTB;
+        bool strobe = (pins & strobe_pin) != 0;
+        bool strobe_falling = p->strobe_prev && !strobe;
+        p->strobe_prev = strobe;
+
+        // Handle input modes
+        if (Z80PIO_MODE_INPUT == p->mode) {
+            // In input mode, data is latched on strobe active
+            if (strobe) {
                 p->input = data;
             }
-            else if (Z80PIO_MODE_BITCONTROL == p->mode) {
-                p->input = data;
-                uint8_t val = (p->input & p->io_select) | (p->output & ~p->io_select);
 
-                // check interrupt condition (FIXME: this is very expensive)
-                uint8_t mask = ~p->int_mask;
-                bool match = false;
-                val &= mask;
-
-                const uint8_t ictrl = p->int_control & 0x60;
-                if ((ictrl == 0) && (val != mask)) match = true;
-                else if ((ictrl == 0x20) && (val != 0)) match = true;
-                else if ((ictrl == 0x40) && (val == 0)) match = true;
-                else if ((ictrl == 0x60) && (val == mask)) match = true;
-                if (!p->bctrl_match && match && p->int_enabled) {
+            // On strobe falling edge, set ready and generate interrupt
+            if (strobe_falling) {
+                p->ready = true;  // Ready goes active
+                if (p->int_enabled) {
                     p->int_state |= Z80PIO_INT_NEEDED;
                 }
-                p->bctrl_match = match;
             }
+        }
+        else if (Z80PIO_MODE_OUTPUT == p->mode) {
+            // In output mode, strobe falling edge clears ready
+            if (strobe_falling) {
+                p->ready = false;
+                // Generate interrupt if enabled
+                if (p->int_enabled) {
+                    p->int_state |= Z80PIO_INT_NEEDED;
+                }
+            }
+        }
+        else if (Z80PIO_MODE_BIDIRECTIONAL == p->mode) {
+            // Port A is output (handled like output mode)
+            // Port B is input (handled like input mode)
+            if (i == Z80PIO_PORT_A) {
+                if (strobe_falling) {
+                    p->ready = false;
+                    if (p->int_enabled) {
+                        p->int_state |= Z80PIO_INT_NEEDED;
+                    }
+                }
+            } else {
+                if (strobe) {
+                    p->input = data;
+                }
+                if (strobe_falling) {
+                    p->ready = true;
+                    if (p->int_enabled) {
+                        p->int_state |= Z80PIO_INT_NEEDED;
+                    }
+                }
+            }
+        }
+        else if (Z80PIO_MODE_BITCONTROL == p->mode) {
+            // Bit control mode - no handshake, just track input
+            p->input = data;
+            uint8_t val = (p->input & p->io_select) | (p->output & ~p->io_select);
+
+            // check interrupt condition
+            uint8_t mask = ~p->int_mask;
+            bool match = false;
+            val &= mask;
+
+            const uint8_t ictrl = p->int_control & 0x60;
+            if ((ictrl == 0) && (val != mask)) match = true;
+            else if ((ictrl == 0x20) && (val != 0)) match = true;
+            else if ((ictrl == 0x40) && (val == 0)) match = true;
+            else if ((ictrl == 0x60) && (val == mask)) match = true;
+            if (!p->bctrl_match && match && p->int_enabled) {
+                p->int_state |= Z80PIO_INT_NEEDED;
+            }
+            p->bctrl_match = match;
         }
     }
 }
