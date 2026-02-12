@@ -3,6 +3,10 @@
 #include "panel_disasm.hpp"
 #include "panel_regs.hpp"
 #include "panel_fdc.hpp"
+#include "panel_sio.hpp"
+#include "panel_pio.hpp"
+#include "panel_dma.hpp"
+#include "panel_rtc.hpp"
 #include "../partner.hpp"
 
 #include <imgui.h>
@@ -142,10 +146,14 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
     SDL_GetWindowSize(window_, &win_w, &win_h);
 
     float menu_h = ImGui::GetFrameHeight();
-    float panel_w = 420.0f;
+    float panel_w = 620.0f;
     float main_w = (float)win_w - panel_w;
     float main_h = (float)win_h - menu_h;
     float reg_h = 280.0f;
+    float sio_h = 240.0f;
+    float pio_h = 220.0f;
+    float dma_h = 220.0f;
+    float rtc_h = 200.0f;
     float fdc_h = 200.0f;
 
     // Menu bar
@@ -171,6 +179,10 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             ImGui::MenuItem("Registers", nullptr, &show_registers_);
             ImGui::MenuItem("Disassembly", nullptr, &show_disasm_);
             ImGui::MenuItem("Floppy Disk Controller", nullptr, &show_fdc_);
+            ImGui::MenuItem("Z80 SIO", nullptr, &show_sio_);
+            ImGui::MenuItem("Z80 PIO", nullptr, &show_pio_);
+            ImGui::MenuItem("Z80 DMA", nullptr, &show_dma_);
+            ImGui::MenuItem("MM58167 RTC", nullptr, &show_rtc_);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -181,31 +193,65 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
     ImGui::SetNextWindowSize({main_w, main_h});
     panels::render_display(display_);
 
+    float right_y = menu_h;
+
     // Registers panel
     if (show_registers_)
     {
-        ImGui::SetNextWindowPos({main_w, menu_h});
+        ImGui::SetNextWindowPos({main_w, right_y});
         ImGui::SetNextWindowSize({panel_w, reg_h});
         panels::render_registers(emu);
+        right_y += reg_h;
     }
 
-    // Calculate remaining height for disassembly
-    float used_h = 0.0f;
-    if (show_registers_) used_h += reg_h;
-    if (show_fdc_) used_h += fdc_h;
+    if (show_sio_)
+    {
+        ImGui::SetNextWindowPos({main_w, right_y});
+        ImGui::SetNextWindowSize({panel_w, sio_h});
+        panels::render_sio(emu);
+        right_y += sio_h;
+    }
+
+    if (show_pio_)
+    {
+        ImGui::SetNextWindowPos({main_w, right_y});
+        ImGui::SetNextWindowSize({panel_w, pio_h});
+        panels::render_pio(emu);
+        right_y += pio_h;
+    }
+
+    if (show_dma_)
+    {
+        ImGui::SetNextWindowPos({main_w, right_y});
+        ImGui::SetNextWindowSize({panel_w, dma_h});
+        panels::render_dma(emu);
+        right_y += dma_h;
+    }
+
+    if (show_rtc_)
+    {
+        ImGui::SetNextWindowPos({main_w, right_y});
+        ImGui::SetNextWindowSize({panel_w, rtc_h});
+        panels::render_rtc(emu);
+        right_y += rtc_h;
+    }
+
+    float disasm_h = main_h - (right_y - menu_h);
+    if (show_fdc_)
+    {
+        disasm_h -= fdc_h;
+    }
 
     // Disassembly panel
     if (show_disasm_)
     {
-        float disasm_y = menu_h + (show_registers_ ? reg_h : 0.0f);
-        float disasm_h = main_h - used_h;
         if (disasm_h < 100.0f) disasm_h = 100.0f;
-        ImGui::SetNextWindowPos({main_w, disasm_y});
+        ImGui::SetNextWindowPos({main_w, right_y});
         ImGui::SetNextWindowSize({panel_w, disasm_h});
         panels::render_disasm(emu, paused, action);
     }
 
-    // FDC panel
+    // FDC panel (always at bottom when visible)
     if (show_fdc_)
     {
         float fdc_y = menu_h + main_h - fdc_h;

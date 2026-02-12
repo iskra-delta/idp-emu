@@ -199,13 +199,16 @@ void mm58167a_sync_time(mm58167a_t *chip)
 
     struct tm *t = localtime(&now);
 
-    chip->regs[0x00] = ((t->tm_sec % 10) | ((t->tm_sec / 10) << 4));           // sec
-    chip->regs[0x01] = ((t->tm_min % 10) | ((t->tm_min / 10) << 4));           // min
-    chip->regs[0x02] = ((t->tm_hour % 10) | ((t->tm_hour / 10) << 4));         // hour
-    chip->regs[0x03] = (t->tm_wday & 0x07);                                    // day of week
-    chip->regs[0x04] = ((t->tm_mday % 10) | ((t->tm_mday / 10) << 4));         // day
-    chip->regs[0x05] = ((t->tm_mon + 1) % 10) | (((t->tm_mon + 1) / 10) << 4); // month
-    chip->regs[0x06] = ((t->tm_year % 10) | (((t->tm_year / 10) % 10) << 4));  // year
+    // Partner port map uses:
+    // A0: 1/1000s, A1: sec, A2: min, A3: hour, A4: wday, A5: day, A6: year, A7: month.
+    chip->regs[0x00] = 0x00;                                                     // 1/1000s (not modeled)
+    chip->regs[0x01] = ((t->tm_sec % 10) | ((t->tm_sec / 10) << 4));            // sec
+    chip->regs[0x02] = ((t->tm_min % 10) | ((t->tm_min / 10) << 4));            // min
+    chip->regs[0x03] = ((t->tm_hour % 10) | ((t->tm_hour / 10) << 4));          // hour
+    chip->regs[0x04] = (t->tm_wday & 0x07);                                      // day of week
+    chip->regs[0x05] = ((t->tm_mday % 10) | ((t->tm_mday / 10) << 4));          // day
+    chip->regs[0x06] = ((t->tm_year % 10) | (((t->tm_year / 10) % 10) << 4));   // year
+    chip->regs[0x07] = ((t->tm_mon + 1) % 10) | (((t->tm_mon + 1) / 10) << 4);  // month
 }
 
 uint64_t mm58167a_tick(mm58167a_t *chip, uint64_t pins)

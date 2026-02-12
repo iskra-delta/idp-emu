@@ -24,20 +24,16 @@ static constexpr uint32_t TICKS_PER_FRAME = CPU_CLOCK_HZ / TARGET_FPS;
 
 void print_usage(const char *prog)
 {
-    std::cerr << "Usage: " << prog << " <rom_file> [options]\n";
+    std::cerr << "Usage: " << prog << " [rom_file] [options]\n";
     std::cerr << "Options:\n";
     std::cerr << "  --help           Show this help\n";
+    std::cerr << "Default ROM: roms/partner_crt.rom\n";
 }
 
 int main(int argc, char **argv)
 {
-    if (argc < 2)
-    {
-        print_usage(argv[0]);
-        return 1;
-    }
-
-    std::string rom_file;
+    std::string rom_file = "roms/partner_crt.rom";
+    bool rom_set_from_cli = false;
 
     for (int i = 1; i < argc; i++)
     {
@@ -46,9 +42,10 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 0;
         }
-        else if (rom_file.empty())
+        else if (!rom_set_from_cli)
         {
             rom_file = argv[i];
+            rom_set_from_cli = true;
         }
         else
         {
@@ -56,13 +53,6 @@ int main(int argc, char **argv)
             print_usage(argv[0]);
             return 1;
         }
-    }
-
-    if (rom_file.empty())
-    {
-        std::cerr << "Error: No ROM file specified\n";
-        print_usage(argv[0]);
-        return 1;
     }
 
     try

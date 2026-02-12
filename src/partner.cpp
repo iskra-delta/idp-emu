@@ -10,6 +10,7 @@ partner::partner()
     z80sio_init(&sio);
     z80pio_init(&pio);
     i8272_init(&fdc);
+    mm58167a_init(&rtc);
 
     reset();
 }
@@ -33,6 +34,7 @@ void partner::reset()
     z80sio_reset(&sio);
     z80pio_reset(&pio);
     i8272_reset(&fdc);
+    mm58167a_reset(&rtc);
 
     rom_enabled = true;
     ram_bank = 1;
@@ -44,6 +46,7 @@ void partner::reset()
 void partner::tick()
 {
     tick_count++;
+    mm58167a_sync_time(&rtc);
 
     // Tick the CPU
     pins = z80_tick(&cpu, pins);
@@ -134,6 +137,12 @@ uint8_t partner::io_read(uint16_t port)
 {
     port &= 0xFF;
 
+    // MM58167 RTC: 0xA0-0xBF
+    if ((port >= 0xA0 && port <= 0xB6) || port == 0xBF)
+    {
+        return rtc.regs[port - 0xA0];
+    }
+
     // Z80 PIO: 0xD0-0xD3
     if (port >= 0xD0 && port <= 0xD3)
     {
@@ -186,6 +195,16 @@ uint8_t partner::io_read(uint16_t port)
 void partner::io_write(uint16_t port, uint8_t data)
 {
     port &= 0xFF;
+
+    // MM58167 RTC: 0xA0-0xBF
+    if ((port >= 0xA0 && port <= 0xB6) || port == 0xBF)
+    {
+        rtc.regs[port - 0xA0] = data;
+        // Writing reset-counter register refreshes visible time registers.
+        if (port == 0xB2)
+            mm58167a_sync_time(&rtc);
+        return;
+    }
 
     // Z80 PIO: 0xD0-0xD3
     if (port >= 0xD0 && port <= 0xD3)
@@ -249,4 +268,3 @@ void partner::io_write(uint16_t port, uint8_t data)
         return;
     }
 }
-

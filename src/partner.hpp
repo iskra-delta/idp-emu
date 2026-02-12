@@ -5,6 +5,7 @@
 #include "z80ctc.h"
 #include "z80dma.h"
 #include "i8272.h"
+#include "mm58167.h"
 #include <array>
 #include <string>
 #include <cstdint>
@@ -29,6 +30,7 @@ public:
     const z80sio_t& get_sio() const { return sio; }
     const z80pio_t& get_pio() const { return pio; }
     const i8272_t& get_fdc() const { return fdc; }
+    const mm58167a_t& get_rtc() const { return rtc; }
     uint8_t get_fdc_motor() const { return fdc_motor; }
     uint8_t get_fdc_int_vector() const { return fdc_int_vector; }
     uint8_t peek_mem(uint16_t addr) const {
@@ -57,6 +59,7 @@ protected:
 
     // Intel 8272 FDC (not on Zilog daisy chain)
     i8272_t fdc{};
+    mm58167a_t rtc{};
     uint8_t fdc_int_vector = 0;  // Port 0xE8
     uint8_t fdc_motor = 0;       // Port 0x98
 

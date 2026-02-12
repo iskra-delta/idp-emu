@@ -32,6 +32,10 @@ private:
     bool show_registers_ = true;
     bool show_disasm_ = true;
     bool show_fdc_ = true;
+    bool show_sio_ = false;
+    bool show_pio_ = false;
+    bool show_dma_ = false;
+    bool show_rtc_ = false;
 
     std::vector<uint8_t> key_buf_;
 };

@@ -6,7 +6,7 @@
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/bin/idp-emu",
-      "args": ["${workspaceFolder}/roms/partner.rom"], // replace with path to ROM binary
+      "args": ["${workspaceFolder}/roms/partner_crt.rom"], // replace with path to ROM binary
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
       "environment": [],
