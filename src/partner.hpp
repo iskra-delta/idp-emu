@@ -4,6 +4,7 @@
 #include "z80pio.h"
 #include "z80ctc.h"
 #include "z80dma.h"
+#include "i8272.h"
 #include <array>
 #include <string>
 #include <cstdint>
@@ -27,6 +28,9 @@ public:
     const z80ctc_t& get_ctc() const { return ctc; }
     const z80sio_t& get_sio() const { return sio; }
     const z80pio_t& get_pio() const { return pio; }
+    const i8272_t& get_fdc() const { return fdc; }
+    uint8_t get_fdc_motor() const { return fdc_motor; }
+    uint8_t get_fdc_int_vector() const { return fdc_int_vector; }
     uint8_t peek_mem(uint16_t addr) const {
         if (rom_enabled && addr < rom_size) return rom[addr];
         return ram[addr];
@@ -34,6 +38,14 @@ public:
     uint64_t get_tick_count() const { return tick_count; }
     bool is_rom_enabled() const { return rom_enabled; }
     uint8_t get_ram_bank() const { return ram_bank; }
+    bool is_opdone() const {
+        return ((pins & (Z80_M1|Z80_RD)) == (Z80_M1|Z80_RD)) && !cpu.prefix_active;
+    }
+    // During M1 fetch, cpu.pc has already been incremented past the opcode byte.
+    // This returns the actual instruction address.
+    uint16_t get_current_pc() const {
+        return is_opdone() ? (uint16_t)(cpu.pc - 1) : cpu.pc;
+    }
 
 protected:
     // All Zilog chips in Partner system
@@ -42,6 +54,11 @@ protected:
     z80ctc_t ctc{};    // Second priority
     z80sio_t sio{};    // Third priority
     z80pio_t pio{};    // Lowest priority
+
+    // Intel 8272 FDC (not on Zilog daisy chain)
+    i8272_t fdc{};
+    uint8_t fdc_int_vector = 0;  // Port 0xE8
+    uint8_t fdc_motor = 0;       // Port 0x98
 
     uint64_t pins = 0;
     uint64_t tick_count = 0;

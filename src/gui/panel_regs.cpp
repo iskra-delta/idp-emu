@@ -10,7 +10,7 @@ void panels::render_registers(partner &emu)
 
     const z80_t &cpu = emu.get_cpu();
 
-    ImGui::Text("PC: %04X   SP: %04X", cpu.pc, cpu.sp);
+    ImGui::Text("PC: %04X   SP: %04X", emu.get_current_pc(), cpu.sp);
     ImGui::Text("AF: %04X   AF': %04X", cpu.af, cpu.af2);
     ImGui::Text("BC: %04X   BC': %04X", cpu.bc, cpu.bc2);
     ImGui::Text("DE: %04X   DE': %04X", cpu.de, cpu.de2);

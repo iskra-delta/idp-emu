@@ -4,11 +4,12 @@
 
 partner::partner()
 {
-    // Initialize all Zilog chips
+    // Initialize all chips
     z80dma_init(&dma);
     z80ctc_init(&ctc);
     z80sio_init(&sio);
     z80pio_init(&pio);
+    i8272_init(&fdc);
 
     reset();
 }
@@ -31,9 +32,12 @@ void partner::reset()
     z80ctc_reset(&ctc);
     z80sio_reset(&sio);
     z80pio_reset(&pio);
+    i8272_reset(&fdc);
 
     rom_enabled = true;
     ram_bank = 1;
+    fdc_int_vector = 0;
+    fdc_motor = 0;
     tick_count = 0;
 }
 
@@ -151,6 +155,24 @@ uint8_t partner::io_read(uint16_t port)
         return z80dma_read(&dma);
     }
 
+    // Intel 8272 FDC Status: 0xF0
+    if (port == 0xF0)
+    {
+        return i8272_read_status(&fdc);
+    }
+
+    // Intel 8272 FDC Data: 0xF1
+    if (port == 0xF1)
+    {
+        return i8272_read_data(&fdc);
+    }
+
+    // FDC Motor Status: 0x98
+    if (port == 0x98)
+    {
+        return fdc_motor;
+    }
+
     // Banking and control: 0x80, 0x88, 0x90
     if (port == 0x80)
     {
@@ -184,6 +206,27 @@ void partner::io_write(uint16_t port, uint8_t data)
     if (port == 0xC0)
     {
         z80dma_write(&dma, data);
+        return;
+    }
+
+    // Intel 8272 FDC Data: 0xF1
+    if (port == 0xF1)
+    {
+        i8272_write_data(&fdc, data);
+        return;
+    }
+
+    // FDC Motor Control: 0x98
+    if (port == 0x98)
+    {
+        fdc_motor = data;
+        return;
+    }
+
+    // FDC Interrupt Vector: 0xE8
+    if (port == 0xE8)
+    {
+        fdc_int_vector = data;
         return;
     }
 

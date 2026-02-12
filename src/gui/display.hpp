@@ -4,43 +4,36 @@
 #endif
 #include <SDL_opengl.h>
 #include <cstdint>
+#include <string>
 
 class display
 {
 public:
-    static constexpr int TEXT_W = 1056;
-    static constexpr int TEXT_H = 312;
-    static constexpr int GFX_W = 1024;
-    static constexpr int GFX_H = 512;
-    static constexpr int COMP_W = 1056;
-    static constexpr int COMP_H = 624; // TEXT_H * 2
-    static constexpr int GFX_X_OFF = (COMP_W - GFX_W) / 2;  // 16
-    static constexpr int GFX_Y_OFF = (COMP_H - GFX_H) / 2;  // 56
+    static constexpr int FB_W = 800;
+    static constexpr int FB_H = 350;
+    static constexpr int COLS = 80;
+    static constexpr int ROWS = 25;
+    static constexpr int CHAR_W = 10; // 5 * 2 (2x scale)
+    static constexpr int CHAR_H = 14; // 7 * 2 (2x scale)
 
     void init();
     void shutdown();
     void update();
 
-    void set_text_pixel(int x, int y, bool on);
-    void set_gfx_pixel(int x, int y, bool on);
-    void clear_text();
-    void clear_gfx();
+    bool load_font(const std::string &path);
+    void set_pixel(int x, int y, bool on);
+    void clear();
 
-    // Text rendering (132 cols x 24 rows, 8x13 cells)
-    static constexpr int COLS = 132;
-    static constexpr int ROWS = 24;
-    static constexpr int CHAR_W = 8;
-    static constexpr int CHAR_H = 13;
     void draw_char(int col, int row, char c);
     void draw_text(int col, int row, const char *text);
 
     GLuint get_texture() const { return crt_tex_; }
-    static constexpr float aspect_ratio() { return (float)COMP_W / (float)COMP_H; }
+    float aspect_ratio() const { return (float)FB_W / (float)FB_H; }
 
 private:
-    uint8_t text_fb_[TEXT_W * TEXT_H]{};
-    uint8_t gfx_fb_[GFX_W * GFX_H]{};
-    uint8_t comp_[COMP_W * COMP_H]{};
+    uint8_t fb_[FB_W * FB_H]{};
+    uint8_t font_5x7_[96][7]{}; // 96 chars, 7 rows, 5 bits per row
+    bool font_loaded_ = false;
 
     GLuint source_tex_ = 0;
     GLuint crt_tex_ = 0;
@@ -49,7 +42,6 @@ private:
     GLuint vao_ = 0;
     GLuint vbo_ = 0;
 
-    void composite();
     void apply_crt();
     GLuint compile_shader(const char *vert_src, const char *frag_src);
 };

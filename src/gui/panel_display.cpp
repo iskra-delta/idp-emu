@@ -10,7 +10,7 @@ void panels::render_display(display &disp)
                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    float aspect = display::aspect_ratio();
+    float aspect = disp.aspect_ratio();
 
     // Fit image maintaining aspect ratio
     float img_w, img_h;

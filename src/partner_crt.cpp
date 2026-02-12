@@ -1,9 +1,77 @@
 #include "partner_crt.hpp"
+#include "gui/display.hpp"
+
+void partner_crt::put_char(uint8_t ch)
+{
+    switch (ch)
+    {
+    case 0x0D: // CR
+        cursor_col_ = 0;
+        break;
+    case 0x0A: // LF
+        cursor_row_++;
+        if (cursor_row_ >= TERM_ROWS)
+        {
+            scroll_up();
+            cursor_row_ = TERM_ROWS - 1;
+        }
+        break;
+    case 0x08: // BS
+        if (cursor_col_ > 0)
+            cursor_col_--;
+        break;
+    case 0x07: // BEL
+        break;
+    default:
+        if (ch >= 32 && ch < 127)
+        {
+            screen_[cursor_row_ * TERM_COLS + cursor_col_] = ch;
+            cursor_col_++;
+            if (cursor_col_ >= TERM_COLS)
+            {
+                cursor_col_ = 0;
+                cursor_row_++;
+                if (cursor_row_ >= TERM_ROWS)
+                {
+                    scroll_up();
+                    cursor_row_ = TERM_ROWS - 1;
+                }
+            }
+        }
+        break;
+    }
+}
+
+void partner_crt::scroll_up()
+{
+    memmove(screen_, screen_ + TERM_COLS, TERM_COLS * (TERM_ROWS - 1));
+    memset(screen_ + TERM_COLS * (TERM_ROWS - 1), ' ', TERM_COLS);
+}
+
+void partner_crt::render_to(display &disp)
+{
+    disp.clear();
+    for (int row = 0; row < TERM_ROWS; row++)
+    {
+        for (int col = 0; col < TERM_COLS; col++)
+        {
+            uint8_t ch = screen_[row * TERM_COLS + col];
+            if (ch > 32 && ch < 127)
+                disp.draw_char(col, row, (char)ch);
+        }
+    }
+
+    // Draw cursor as a block
+    disp.draw_char(cursor_col_, cursor_row_, '_');
+}
+
+void partner_crt::key_input(uint8_t ch)
+{
+    z80sio_rx_data(&sio, 0, ch);
+}
 
 uint8_t partner_crt::io_read(uint16_t port)
 {
-    // CRT-specific I/O handling can go here
-    // For now, just call the base class which handles all chips
     return partner::io_read(port);
 }
 
@@ -11,13 +79,9 @@ void partner_crt::io_write(uint16_t port, uint8_t data)
 {
     port &= 0xFF;
 
-    // Special handling for CRT text output on SIO port 0xD8 (data register)
+    // Intercept SIO channel 0 data writes for terminal output
     if (port == 0xD8)
-    {
-        // Echo characters to console for debugging
-        std::cout << static_cast<char>(data);
-        std::cout.flush();
-    }
+        put_char(data);
 
     // Let base class handle the actual chip I/O
     partner::io_write(port, data);

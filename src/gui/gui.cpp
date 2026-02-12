@@ -2,6 +2,7 @@
 #include "panel_display.hpp"
 #include "panel_disasm.hpp"
 #include "panel_regs.hpp"
+#include "panel_fdc.hpp"
 #include "../partner.hpp"
 
 #include <imgui.h>
@@ -70,7 +71,7 @@ void gui::shutdown()
     SDL_Quit();
 }
 
-bool gui::process_events(bool &paused)
+bool gui::process_events(bool &paused, dbg_action &action)
 {
     SDL_Event event;
     while (SDL_PollEvent(&event))
@@ -86,9 +87,40 @@ bool gui::process_events(bool &paused)
             {
             case SDLK_ESCAPE:
                 return false;
-            case SDLK_SPACE:
+            case SDLK_F5:
                 paused = !paused;
                 break;
+            case SDLK_F11:
+                if (paused)
+                    action = dbg_action::STEP_INTO;
+                break;
+            case SDLK_F10:
+                if (paused)
+                    action = dbg_action::STEP_OVER;
+                break;
+            case SDLK_RETURN:
+                if (!paused)
+                    key_buf_.push_back(0x0D);
+                break;
+            case SDLK_BACKSPACE:
+                if (!paused)
+                    key_buf_.push_back(0x08);
+                break;
+            case SDLK_TAB:
+                if (!paused)
+                    key_buf_.push_back(0x09);
+                break;
+            }
+        }
+
+        // Text input for printable characters (when emulation is running)
+        if (event.type == SDL_TEXTINPUT && !paused && !ImGui::GetIO().WantCaptureKeyboard)
+        {
+            for (const char *p = event.text.text; *p; p++)
+            {
+                uint8_t ch = (uint8_t)*p;
+                if (ch >= 32 && ch < 127)
+                    key_buf_.push_back(ch);
             }
         }
     }
@@ -102,7 +134,7 @@ void gui::begin_frame()
     ImGui::NewFrame();
 }
 
-void gui::render_panels(partner &emu, bool &paused)
+void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 {
     display_.update();
 
@@ -110,10 +142,11 @@ void gui::render_panels(partner &emu, bool &paused)
     SDL_GetWindowSize(window_, &win_w, &win_h);
 
     float menu_h = ImGui::GetFrameHeight();
-    float panel_w = 350.0f;
+    float panel_w = 420.0f;
     float main_w = (float)win_w - panel_w;
     float main_h = (float)win_h - menu_h;
     float reg_h = 280.0f;
+    float fdc_h = 200.0f;
 
     // Menu bar
     if (ImGui::BeginMainMenuBar())
@@ -137,6 +170,7 @@ void gui::render_panels(partner &emu, bool &paused)
         {
             ImGui::MenuItem("Registers", nullptr, &show_registers_);
             ImGui::MenuItem("Disassembly", nullptr, &show_disasm_);
+            ImGui::MenuItem("Floppy Disk Controller", nullptr, &show_fdc_);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -155,15 +189,37 @@ void gui::render_panels(partner &emu, bool &paused)
         panels::render_registers(emu);
     }
 
+    // Calculate remaining height for disassembly
+    float used_h = 0.0f;
+    if (show_registers_) used_h += reg_h;
+    if (show_fdc_) used_h += fdc_h;
+
     // Disassembly panel
     if (show_disasm_)
     {
-        float disasm_y = show_registers_ ? menu_h + reg_h : menu_h;
-        float disasm_h = show_registers_ ? main_h - reg_h : main_h;
+        float disasm_y = menu_h + (show_registers_ ? reg_h : 0.0f);
+        float disasm_h = main_h - used_h;
+        if (disasm_h < 100.0f) disasm_h = 100.0f;
         ImGui::SetNextWindowPos({main_w, disasm_y});
         ImGui::SetNextWindowSize({panel_w, disasm_h});
-        panels::render_disasm(emu);
+        panels::render_disasm(emu, paused, action);
     }
+
+    // FDC panel
+    if (show_fdc_)
+    {
+        float fdc_y = menu_h + main_h - fdc_h;
+        ImGui::SetNextWindowPos({main_w, fdc_y});
+        ImGui::SetNextWindowSize({panel_w, fdc_h});
+        panels::render_fdc(emu);
+    }
+}
+
+std::vector<uint8_t> gui::drain_keys()
+{
+    auto keys = std::move(key_buf_);
+    key_buf_.clear();
+    return keys;
 }
 
 void gui::end_frame()

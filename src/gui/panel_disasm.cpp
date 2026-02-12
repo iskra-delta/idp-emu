@@ -30,13 +30,40 @@ void dasm_output(char c, void *user_data)
 
 } // anonymous namespace
 
-void panels::render_disasm(partner &emu)
+void panels::render_disasm(partner &emu, bool &paused, dbg_action &action)
 {
     ImGui::Begin("Disassembly", nullptr,
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoCollapse);
 
-    uint16_t pc = emu.get_cpu().pc;
+    // Debug toolbar
+    if (paused)
+    {
+        if (ImGui::Button("Run (F5)"))
+            paused = false;
+        ImGui::SameLine();
+        if (ImGui::Button("Step Into (F11)"))
+            action = dbg_action::STEP_INTO;
+        ImGui::SameLine();
+        if (ImGui::Button("Step Over (F10)"))
+            action = dbg_action::STEP_OVER;
+    }
+    else
+    {
+        if (ImGui::Button("Pause (F5)"))
+            paused = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Reset"))
+    {
+        emu.reset();
+        paused = true;
+    }
+
+    ImGui::Separator();
+
+    // Disassembly listing
+    uint16_t pc = emu.get_current_pc();
     uint16_t addr = pc;
 
     for (int i = 0; i < 32; i++)
