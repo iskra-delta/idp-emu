@@ -67,7 +67,18 @@ void partner_crt::render_to(display &disp)
 
 void partner_crt::key_input(uint8_t ch)
 {
+    bool was_ready = sio.chn[0].rx_ready;
     z80sio_rx_data(&sio, 0, ch);
+
+    // Debugger/host injection fallback:
+    // if channel A RX is not enabled yet, force one byte into RX so ROM
+    // polling on SIO status can still observe incoming input.
+    if (!sio.chn[0].rx_ready && !was_ready)
+    {
+        sio.chn[0].rx_data = ch;
+        sio.chn[0].rx_ready = true;
+        sio.chn[0].int_state |= Z80SIO_INT_NEEDED;
+    }
 }
 
 uint8_t partner_crt::io_read(uint16_t port)

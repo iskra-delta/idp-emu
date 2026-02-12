@@ -1,6 +1,7 @@
 #include "panel_sio.hpp"
 #include "../partner.hpp"
 #include <imgui.h>
+#include <cstdio>
 
 namespace {
 
@@ -36,7 +37,7 @@ void render_channel(const char *name, const z80sio_channel_t &ch)
 
 } // namespace
 
-void panels::render_sio(partner &emu)
+void panels::render_sio(partner &emu, std::vector<uint8_t> &inject_buf)
 {
     ImGui::Begin("Z80 SIO", nullptr,
                  ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
@@ -45,6 +46,33 @@ void panels::render_sio(partner &emu)
     const z80sio_t &sio = emu.get_sio();
 
     ImGui::Text("Pins: %016llX", (unsigned long long)sio.pins);
+
+    ImGui::SeparatorText("Inject RX (Ch A)");
+    static char ascii_in[2] = "";
+    static char hex_in[3] = "";
+
+    ImGui::SetNextItemWidth(40.0f);
+    ImGui::InputText("ASCII", ascii_in, sizeof(ascii_in));
+    ImGui::SameLine();
+    if (ImGui::Button("Send ASCII") && ascii_in[0] != '\0')
+    {
+        inject_buf.push_back((uint8_t)ascii_in[0]);
+        ascii_in[0] = '\0';
+    }
+
+    ImGui::SetNextItemWidth(40.0f);
+    ImGui::InputText("Hex", hex_in, sizeof(hex_in), ImGuiInputTextFlags_CharsHexadecimal);
+    ImGui::SameLine();
+    if (ImGui::Button("Send Hex"))
+    {
+        unsigned value = 0;
+        if (sscanf(hex_in, "%2x", &value) == 1)
+        {
+            inject_buf.push_back((uint8_t)(value & 0xFF));
+            hex_in[0] = '\0';
+        }
+    }
+
     render_channel("Channel A", sio.chn[Z80SIO_CHANNEL_A]);
     render_channel("Channel B", sio.chn[Z80SIO_CHANNEL_B]);
 

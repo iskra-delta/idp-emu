@@ -50,7 +50,7 @@ bool gui::init(const std::string &title, int width, int height)
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    ImGui::StyleColorsDark();
+    ImGui::StyleColorsClassic();
 
     ImGui_ImplSDL2_InitForOpenGL(window_, gl_context_);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -103,22 +103,19 @@ bool gui::process_events(bool &paused, dbg_action &action)
                     action = dbg_action::STEP_OVER;
                 break;
             case SDLK_RETURN:
-                if (!paused)
-                    key_buf_.push_back(0x0D);
+                key_buf_.push_back(0x0D);
                 break;
             case SDLK_BACKSPACE:
-                if (!paused)
-                    key_buf_.push_back(0x08);
+                key_buf_.push_back(0x08);
                 break;
             case SDLK_TAB:
-                if (!paused)
-                    key_buf_.push_back(0x09);
+                key_buf_.push_back(0x09);
                 break;
             }
         }
 
-        // Text input for printable characters (when emulation is running)
-        if (event.type == SDL_TEXTINPUT && !paused && !ImGui::GetIO().WantCaptureKeyboard)
+        // Text input for printable characters (also while paused for debugger injection)
+        if (event.type == SDL_TEXTINPUT && !ImGui::GetIO().WantCaptureKeyboard)
         {
             for (const char *p = event.text.text; *p; p++)
             {
@@ -208,7 +205,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
     {
         ImGui::SetNextWindowPos({main_w, right_y});
         ImGui::SetNextWindowSize({panel_w, sio_h});
-        panels::render_sio(emu);
+        panels::render_sio(emu, key_buf_);
         right_y += sio_h;
     }
 

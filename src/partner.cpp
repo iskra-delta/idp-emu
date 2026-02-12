@@ -94,22 +94,28 @@ void partner::tick()
     pins = z80ctc_tick(&ctc, pins);
 
     // Third priority: SIO (ports 0xD8-0xDB for Ch1, 0xE0-0xE4 for Ch2)
-    // Note: The SIO uses CE pin to know when it's being addressed
+    // Drive SIO port-select pins from low address bits:
+    // bit0: data/control, bit1: channel A/B.
     uint8_t port = addr & 0xFF;
-    if ((port >= 0xD8 && port <= 0xDB) || (port >= 0xE0 && port <= 0xE4))
+    if ((pins & Z80_IORQ) && !(pins & Z80_M1) &&
+        ((port >= 0xD8 && port <= 0xDB) || (port >= 0xE0 && port <= 0xE4)))
     {
         pins |= Z80SIO_CE;
+        if (port & 0x01) pins |= Z80SIO_CS_A;  // control register select
+        if (port & 0x02) pins |= Z80SIO_CS_B;  // channel B select
     }
     pins = z80sio_tick(&sio, pins);
-    pins &= ~Z80SIO_CE;
+    pins &= ~(Z80SIO_CE | Z80SIO_CS_A | Z80SIO_CS_B);
 
     // Lowest priority: PIO (ports 0xD0-0xD3)
-    if (port >= 0xD0 && port <= 0xD3)
+    if ((pins & Z80_IORQ) && !(pins & Z80_M1) && (port >= 0xD0 && port <= 0xD3))
     {
         pins |= Z80PIO_CE;
+        if (port & 0x01) pins |= Z80PIO_CDSEL; // control
+        if (port & 0x02) pins |= Z80PIO_BASEL; // port B
     }
     pins = z80pio_tick(&pio, pins);
-    pins &= ~Z80PIO_CE;
+    pins &= ~(Z80PIO_CE | Z80PIO_CDSEL | Z80PIO_BASEL);
 }
 
 uint8_t partner::read_mem(uint16_t addr)
