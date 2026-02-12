@@ -1,7 +1,6 @@
 #include "partner.hpp"
 #include <fstream>
 #include <iostream>
-#include <iomanip>
 
 partner::partner()
 {
@@ -36,18 +35,11 @@ void partner::reset()
     rom_enabled = true;
     ram_bank = 1;
     tick_count = 0;
-    last_pc = 0;
 }
 
 void partner::tick()
 {
     tick_count++;
-
-    // Trace instruction if enabled (on M1 cycle)
-    if ((trace_enabled || disasm_enabled) && (pins & Z80_M1))
-    {
-        trace_instruction();
-    }
 
     // Tick the CPU
     pins = z80_tick(&cpu, pins);
@@ -198,132 +190,20 @@ void partner::io_write(uint16_t port, uint8_t data)
     // Memory banking and ROM control
     if (port == 0x80)
     {
-        // Disable ROM (enable RAM at 0x0000-0x07FF)
         rom_enabled = false;
-        if (trace_enabled)
-            std::cout << "[bank] ROM disabled, RAM visible at 0x0000\n";
         return;
     }
 
     if (port == 0x88)
     {
-        // Select RAM Bank 1 (default)
         ram_bank = 1;
-        if (trace_enabled)
-            std::cout << "[bank] RAM Bank 1 selected\n";
         return;
     }
 
     if (port == 0x90)
     {
-        // Select RAM Bank 2
         ram_bank = 2;
-        if (trace_enabled)
-            std::cout << "[bank] RAM Bank 2 selected\n";
         return;
     }
 }
 
-void partner::trace_instruction()
-{
-    uint16_t pc = cpu.pc;
-
-    // Only trace on new instruction (PC changed)
-    if (pc == last_pc)
-        return;
-
-    last_pc = pc;
-
-    if (trace_enabled)
-    {
-        std::cout << "[" << std::dec << std::setw(10) << tick_count << "] "
-                  << "PC=" << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << pc
-                  << " A=" << std::setw(2) << (int)cpu.a
-                  << " BC=" << std::setw(4) << cpu.bc
-                  << " DE=" << std::setw(4) << cpu.de
-                  << " HL=" << std::setw(4) << cpu.hl
-                  << " SP=" << std::setw(4) << cpu.sp
-                  << " F=" << std::setw(2) << (int)cpu.f;
-
-        if (disasm_enabled)
-        {
-            std::cout << " | ";
-            disassemble_instruction(pc);
-        }
-
-        std::cout << "\n" << std::dec;
-    }
-    else if (disasm_enabled)
-    {
-        std::cout << std::hex << std::uppercase << std::setw(4) << std::setfill('0') << pc << ": ";
-        disassemble_instruction(pc);
-        std::cout << "\n" << std::dec;
-    }
-}
-
-void partner::disassemble_instruction(uint16_t pc)
-{
-    // Read opcode from memory
-    uint8_t op = read_mem(pc);
-
-    // Simple disassembler for common opcodes
-    std::cout << std::hex << std::uppercase << std::setw(2) << std::setfill('0') << (int)op << " ";
-
-    switch (op)
-    {
-    case 0x00: std::cout << "NOP"; break;
-    case 0x76: std::cout << "HALT"; break;
-    case 0xC3:
-        std::cout << "JP " << std::setw(4) << (read_mem(pc+2) << 8 | read_mem(pc+1));
-        break;
-    case 0xCD:
-        std::cout << "CALL " << std::setw(4) << (read_mem(pc+2) << 8 | read_mem(pc+1));
-        break;
-    case 0xC9: std::cout << "RET"; break;
-    case 0x3E:
-        std::cout << "LD A," << std::setw(2) << (int)read_mem(pc+1);
-        break;
-    case 0x06:
-        std::cout << "LD B," << std::setw(2) << (int)read_mem(pc+1);
-        break;
-    case 0x0E:
-        std::cout << "LD C," << std::setw(2) << (int)read_mem(pc+1);
-        break;
-    case 0x16:
-        std::cout << "LD D," << std::setw(2) << (int)read_mem(pc+1);
-        break;
-    case 0x1E:
-        std::cout << "LD E," << std::setw(2) << (int)read_mem(pc+1);
-        break;
-    case 0x26:
-        std::cout << "LD H," << std::setw(2) << (int)read_mem(pc+1);
-        break;
-    case 0x2E:
-        std::cout << "LD L," << std::setw(2) << (int)read_mem(pc+1);
-        break;
-    case 0x21:
-        std::cout << "LD HL," << std::setw(4) << (read_mem(pc+2) << 8 | read_mem(pc+1));
-        break;
-    case 0x31:
-        std::cout << "LD SP," << std::setw(4) << (read_mem(pc+2) << 8 | read_mem(pc+1));
-        break;
-    case 0xD3:
-        std::cout << "OUT (" << std::setw(2) << (int)read_mem(pc+1) << "),A";
-        break;
-    case 0xDB:
-        std::cout << "IN A,(" << std::setw(2) << (int)read_mem(pc+1) << ")";
-        break;
-    case 0xED:
-    {
-        uint8_t op2 = read_mem(pc+1);
-        std::cout << std::setw(2) << (int)op2 << " ";
-        if (op2 == 0xB0) std::cout << "LDIR";
-        else if (op2 == 0xA0) std::cout << "LDI";
-        else std::cout << "[ED prefix]";
-        break;
-    }
-    default:
-        std::cout << "[...]";
-        break;
-    }
-}

@@ -21,9 +21,19 @@ public:
     virtual void reset();
     virtual void tick();
 
-    // Debug control
-    void enable_trace(bool enable) { trace_enabled = enable; }
-    void enable_disassembly(bool enable) { disasm_enabled = enable; }
+    // State accessors for GUI panels (read-only)
+    const z80_t& get_cpu() const { return cpu; }
+    const z80dma_t& get_dma() const { return dma; }
+    const z80ctc_t& get_ctc() const { return ctc; }
+    const z80sio_t& get_sio() const { return sio; }
+    const z80pio_t& get_pio() const { return pio; }
+    uint8_t peek_mem(uint16_t addr) const {
+        if (rom_enabled && addr < rom_size) return rom[addr];
+        return ram[addr];
+    }
+    uint64_t get_tick_count() const { return tick_count; }
+    bool is_rom_enabled() const { return rom_enabled; }
+    uint8_t get_ram_bank() const { return ram_bank; }
 
 protected:
     // All Zilog chips in Partner system
@@ -43,17 +53,8 @@ protected:
     bool rom_enabled = true;
     uint8_t ram_bank = 1;  // Bank 1 is default
 
-    // Debug control
-    bool trace_enabled = false;
-    bool disasm_enabled = false;
-    uint16_t last_pc = 0;
-
     virtual uint8_t read_mem(uint16_t addr);
     virtual void write_mem(uint16_t addr, uint8_t data);
     virtual uint8_t io_read(uint16_t port);
     virtual void io_write(uint16_t port, uint8_t data);
-
-    // Debug helpers
-    void trace_instruction();
-    void disassemble_instruction(uint16_t pc);
 };

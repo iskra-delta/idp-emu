@@ -2,7 +2,7 @@ file(GLOB_RECURSE SOURCES CONFIGURE_DEPENDS *.cpp)
 
 add_executable(idp-emu ${SOURCES})
 
-target_link_libraries(idp-emu PRIVATE chipsex)
+target_link_libraries(idp-emu PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
 
 # Optional: define your own debug macro if needed
-target_compile_definitions(idp-emu PRIVATE $<$<CONFIG:Debug>:IDP_DEBUG>)
+target_compile_definitions(idp-emu PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)
