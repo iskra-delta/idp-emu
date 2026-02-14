@@ -27,6 +27,7 @@ void print_usage(const char *prog)
     std::cerr << "Usage: " << prog << " [rom_file] [options]\n";
     std::cerr << "Options:\n";
     std::cerr << "  --help           Show this help\n";
+    std::cerr << "  --terminal TYPE  Terminal profile: vt52|vt100\n";
     std::cerr << "Default ROM: roms/partner_crt.rom\n";
 }
 
@@ -34,6 +35,7 @@ int main(int argc, char **argv)
 {
     std::string rom_file = "roms/partner_crt.rom";
     bool rom_set_from_cli = false;
+    terminal_profile term_profile = terminal_profile::vt52;
 
     for (int i = 1; i < argc; i++)
     {
@@ -41,6 +43,25 @@ int main(int argc, char **argv)
         {
             print_usage(argv[0]);
             return 0;
+        }
+        else if (strcmp(argv[i], "--terminal") == 0)
+        {
+            if ((i + 1) >= argc)
+            {
+                std::cerr << "Error: --terminal requires a value: vt52|vt100\n";
+                return 1;
+            }
+            const char *value = argv[++i];
+            if (strcmp(value, "vt52") == 0)
+                term_profile = terminal_profile::vt52;
+            else if (strcmp(value, "vt100") == 0 || strcmp(value, "ansi") == 0)
+                term_profile = terminal_profile::vt100_ansi;
+            else
+            {
+                std::cerr << "Error: Unknown terminal profile: " << value << "\n";
+                std::cerr << "Valid values: vt52, vt100\n";
+                return 1;
+            }
         }
         else if (!rom_set_from_cli)
         {
@@ -57,7 +78,7 @@ int main(int argc, char **argv)
 
     try
     {
-        partner_crt idp;
+        partner_crt idp(term_profile);
         idp.load_rom(rom_file);
         idp.reset();
 

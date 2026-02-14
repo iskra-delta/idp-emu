@@ -1,6 +1,8 @@
 #pragma once
 #include "partner.hpp"
-#include <cstring>
+#include "terminal/terminal_emulator.hpp"
+#include "terminal/terminal_factory.hpp"
+#include <memory>
 
 class display;
 
@@ -10,10 +12,10 @@ public:
     static constexpr int TERM_COLS = 80;
     static constexpr int TERM_ROWS = 25;
 
-    partner_crt() { memset(screen_, ' ', sizeof(screen_)); }
+    explicit partner_crt(terminal_profile profile = terminal_profile::vt52);
 
-    void put_char(uint8_t ch);
-    void scroll_up();
+    void reset() override;
+    void tick() override;
     void render_to(display &disp);
     void key_input(uint8_t ch);
 
@@ -22,7 +24,6 @@ protected:
     void io_write(uint16_t port, uint8_t data) override;
 
 private:
-    uint8_t screen_[TERM_COLS * TERM_ROWS]{};
-    int cursor_col_ = 0;
-    int cursor_row_ = 0;
+    terminal_profile terminal_profile_ = terminal_profile::vt52;
+    std::unique_ptr<terminal_emulator> terminal_;
 };

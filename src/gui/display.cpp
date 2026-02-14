@@ -25,6 +25,10 @@ uniform vec2 resolution;
 void main() {
     vec2 uv = TexCoord;
 
+    // Underscan: map screen edges slightly outside source so content fits inside
+    // the visible CRT area even with barrel distortion.
+    uv = (uv - 0.5) * 1.12 + 0.5;
+
     // Barrel distortion (CRT curvature)
     vec2 cc = uv - 0.5;
     float r2 = dot(cc, cc);
@@ -50,19 +54,19 @@ void main() {
     bloom /= 25.0;
 
     // Green phosphor (Matsushita P1-style)
-    vec3 color = vec3(0.10, 0.90, 0.20) * pixel;
-    color += vec3(0.05, 0.30, 0.10) * bloom * 0.4;
+    vec3 color = vec3(0.14, 1.00, 0.26) * pixel;
+    color += vec3(0.09, 0.50, 0.16) * bloom * 0.55;
 
     // Scanlines
     float scanline = sin(uv.y * resolution.y * 3.14159265) * 0.5 + 0.5;
-    color *= 0.80 + 0.20 * scanline;
+    color *= 0.86 + 0.20 * scanline;
 
     // Vignette (darker edges)
     vec2 vig = uv * (1.0 - uv);
     color *= clamp(pow(vig.x * vig.y * 15.0, 0.20), 0.0, 1.0);
 
     // Ambient CRT glass glow
-    color += vec3(0.003, 0.008, 0.003);
+    color += vec3(0.005, 0.012, 0.005);
 
     FragColor = vec4(color, 1.0);
 }

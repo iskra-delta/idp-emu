@@ -55,6 +55,9 @@ bool gui::init(const std::string &title, int width, int height)
     ImGui_ImplSDL2_InitForOpenGL(window_, gl_context_);
     ImGui_ImplOpenGL3_Init("#version 330");
 
+    // Enable SDL text input events for terminal key injection.
+    SDL_StartTextInput();
+
     display_.init();
 
     return true;
@@ -63,6 +66,7 @@ bool gui::init(const std::string &title, int width, int height)
 void gui::shutdown()
 {
     display_.shutdown();
+    SDL_StopTextInput();
 
     ImGui_ImplOpenGL3_Shutdown();
     ImGui_ImplSDL2_Shutdown();
@@ -85,12 +89,11 @@ bool gui::process_events(bool &paused, dbg_action &action)
         if (event.type == SDL_QUIT)
             return false;
 
-        if (event.type == SDL_KEYDOWN && !ImGui::GetIO().WantCaptureKeyboard)
+        if (event.type == SDL_KEYDOWN)
         {
+            // Always allow debugger hotkeys even when ImGui has keyboard navigation focus.
             switch (event.key.keysym.sym)
             {
-            case SDLK_ESCAPE:
-                return false;
             case SDLK_F5:
                 paused = !paused;
                 break;
@@ -102,21 +105,38 @@ bool gui::process_events(bool &paused, dbg_action &action)
                 if (paused)
                     action = dbg_action::STEP_OVER;
                 break;
-            case SDLK_RETURN:
-                key_buf_.push_back(0x0D);
+            default:
                 break;
-            case SDLK_BACKSPACE:
-                key_buf_.push_back(0x08);
-                break;
-            case SDLK_TAB:
-                key_buf_.push_back(0x09);
-                break;
+            }
+
+            // Route terminal keys unless user is actively editing an ImGui text field.
+            if (!ImGui::GetIO().WantTextInput)
+            {
+                switch (event.key.keysym.sym)
+                {
+                case SDLK_ESCAPE:
+                    return false;
+                case SDLK_RETURN:
+                    key_buf_.push_back(0x0D);
+                    break;
+                case SDLK_BACKSPACE:
+                    key_buf_.push_back(0x08);
+                    break;
+                case SDLK_TAB:
+                    key_buf_.push_back(0x09);
+                    break;
+                default:
+                    break;
+                }
             }
         }
 
         // Text input for printable characters (also while paused for debugger injection)
-        if (event.type == SDL_TEXTINPUT && !ImGui::GetIO().WantCaptureKeyboard)
+        if (event.type == SDL_TEXTINPUT)
         {
+            if (ImGui::GetIO().WantTextInput)
+                continue;
+
             for (const char *p = event.text.text; *p; p++)
             {
                 uint8_t ch = (uint8_t)*p;

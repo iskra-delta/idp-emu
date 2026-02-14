@@ -1,68 +1,39 @@
 #include "partner_crt.hpp"
 #include "gui/display.hpp"
+#include "terminal/terminal_emulator.hpp"
 
-void partner_crt::put_char(uint8_t ch)
+partner_crt::partner_crt(terminal_profile profile) : terminal_profile_(profile)
 {
-    switch (ch)
-    {
-    case 0x0D: // CR
-        cursor_col_ = 0;
-        break;
-    case 0x0A: // LF
-        cursor_row_++;
-        if (cursor_row_ >= TERM_ROWS)
-        {
-            scroll_up();
-            cursor_row_ = TERM_ROWS - 1;
-        }
-        break;
-    case 0x08: // BS
-        if (cursor_col_ > 0)
-            cursor_col_--;
-        break;
-    case 0x07: // BEL
-        break;
-    default:
-        if (ch >= 32 && ch < 127)
-        {
-            screen_[cursor_row_ * TERM_COLS + cursor_col_] = ch;
-            cursor_col_++;
-            if (cursor_col_ >= TERM_COLS)
-            {
-                cursor_col_ = 0;
-                cursor_row_++;
-                if (cursor_row_ >= TERM_ROWS)
-                {
-                    scroll_up();
-                    cursor_row_ = TERM_ROWS - 1;
-                }
-            }
-        }
-        break;
-    }
+    terminal_ = make_terminal_emulator(terminal_profile_);
 }
 
-void partner_crt::scroll_up()
+void partner_crt::reset()
 {
-    memmove(screen_, screen_ + TERM_COLS, TERM_COLS * (TERM_ROWS - 1));
-    memset(screen_ + TERM_COLS * (TERM_ROWS - 1), ' ', TERM_COLS);
+    partner::reset();
+    if (terminal_)
+        terminal_->reset();
+}
+
+void partner_crt::tick()
+{
+    partner::tick();
+
+    // Consume bytes written to SIO channel A TX so the ROM sees TX-ready again,
+    // and forward those bytes into the active terminal emulator.
+    if (z80sio_tx_ready(&sio, Z80SIO_CHANNEL_A))
+        return;
+
+    const uint8_t ch = z80sio_tx_data(&sio, Z80SIO_CHANNEL_A);
+    if (terminal_)
+        terminal_->put_char(ch);
 }
 
 void partner_crt::render_to(display &disp)
 {
-    disp.clear();
-    for (int row = 0; row < TERM_ROWS; row++)
-    {
-        for (int col = 0; col < TERM_COLS; col++)
-        {
-            uint8_t ch = screen_[row * TERM_COLS + col];
-            if (ch > 32 && ch < 127)
-                disp.draw_char(col, row, (char)ch);
-        }
-    }
-
-    // Draw cursor as a block
-    disp.draw_char(cursor_col_, cursor_row_, '_');
+    if (terminal_)
+        terminal_->render_to(disp);
+    else
+        disp.clear();
 }
 
 void partner_crt::key_input(uint8_t ch)
@@ -88,12 +59,6 @@ uint8_t partner_crt::io_read(uint16_t port)
 
 void partner_crt::io_write(uint16_t port, uint8_t data)
 {
-    port &= 0xFF;
-
-    // Intercept SIO channel 0 data writes for terminal output
-    if (port == 0xD8)
-        put_char(data);
-
-    // Let base class handle the actual chip I/O
+    // CRT text output is consumed in tick() from SIO TX channel A.
     partner::io_write(port, data);
 }
