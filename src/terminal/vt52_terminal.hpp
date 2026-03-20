@@ -13,6 +13,7 @@ public:
     void reset() override;
     void put_char(uint8_t ch) override;
     void render_to(display &disp) const override;
+    std::string dump_text() const override;
 
 private:
     enum class esc_state_t : uint8_t

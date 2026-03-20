@@ -52,7 +52,6 @@ void render_port(const char *name, const z80dma_port_t &p)
 void panels::render_dma(partner &emu)
 {
     ImGui::Begin("Z80 DMA", nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoCollapse);
 
     const z80dma_t &dma = emu.get_dma();

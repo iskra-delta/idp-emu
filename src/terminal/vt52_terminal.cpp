@@ -1,6 +1,8 @@
 #include "vt52_terminal.hpp"
 #include "../gui/display.hpp"
+#include <chrono>
 #include <cstring>
+#include <string>
 
 vt52_terminal::vt52_terminal(bool start_at_bottom) : start_at_bottom_(start_at_bottom)
 {
@@ -266,5 +268,27 @@ void vt52_terminal::render_to(display &disp) const
         }
     }
     if (cursor_visible_)
-        disp.draw_char(cursor_col_, cursor_row_, '_');
+    {
+        using namespace std::chrono;
+        const auto now = steady_clock::now().time_since_epoch();
+        const bool blink_on = ((duration_cast<milliseconds>(now).count() / 500) % 2) == 0;
+        if (blink_on)
+            disp.fill_char_cell(cursor_col_, cursor_row_);
+    }
+}
+
+std::string vt52_terminal::dump_text() const
+{
+    std::string out;
+    out.reserve(rows * (cols + 1));
+    for (int row = 0; row < rows; row++)
+    {
+        const char *line = reinterpret_cast<const char *>(&screen_[row * cols]);
+        int end = cols;
+        while (end > 0 && line[end - 1] == ' ')
+            end--;
+        out.append(line, line + end);
+        out.push_back('\n');
+    }
+    return out;
 }

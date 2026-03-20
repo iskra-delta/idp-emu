@@ -185,8 +185,14 @@ typedef struct {
     /* drives */
     i8272_drive_t drive[I8272_MAX_DRIVES];
 
-    /* interrupt */
+    /* interrupt/result bookkeeping */
     bool int_pending;
+    bool irq_request;
+    uint32_t irq_delay;
+    bool irq_sets_sense;
+    bool irq_enters_result;
+    uint32_t exec_delay;
+    bool exec_pending;
 
     /* sector data buffer for execution phase */
     uint8_t data_buf[I8272_SECTOR_SIZE];
@@ -202,6 +208,8 @@ typedef struct {
 void i8272_init(i8272_t *fdc);
 /* Reset FDC */
 void i8272_reset(i8272_t *fdc);
+/* Advance delayed interrupt bookkeeping */
+void i8272_tick(i8272_t *fdc);
 /* Read Main Status Register (port 0xF0) */
 uint8_t i8272_read_status(i8272_t *fdc);
 /* Read Data Register (port 0xF1) */
@@ -215,6 +223,7 @@ void i8272_write_data(i8272_t *fdc, uint8_t data);
 
 /*-- IMPLEMENTATION ----------------------------------------------------------*/
 #ifdef CHIPS_IMPL
+#include <stdio.h>
 #include <string.h>
 #ifndef CHIPS_ASSERT
     #include <assert.h>
@@ -262,6 +271,20 @@ static void _i8272_enter_idle(i8272_t *fdc) {
     fdc->msr = I8272_MSR_RQM;
 }
 
+static void _i8272_schedule_irq(i8272_t *fdc, uint32_t delay_ticks,
+                                bool set_sense_pending, bool enter_result) {
+    fdc->int_pending = false;
+    fdc->irq_request = false;
+    fdc->irq_delay = delay_ticks;
+    fdc->irq_sets_sense = set_sense_pending;
+    fdc->irq_enters_result = enter_result;
+}
+
+static void _i8272_schedule_execute(i8272_t *fdc, uint32_t delay_ticks) {
+    fdc->exec_delay = delay_ticks;
+    fdc->exec_pending = true;
+}
+
 /*
     _i8272_enter_result
 
@@ -298,8 +321,12 @@ static void _i8272_exec_recalibrate(i8272_t *fdc) {
     uint8_t us = fdc->cmd[1] & 0x03;
     fdc->drive[us].track = 0;
     fdc->st0 = I8272_ST0_SE | (us & 0x03);
-    fdc->int_pending = true;
     _i8272_enter_idle(fdc);
+    /*
+        Delay completion slightly so the ROM reaches its EI/HALT wait point
+        before INTRQ appears.
+    */
+    _i8272_schedule_irq(fdc, 64, true, false);
 }
 
 /*
@@ -355,8 +382,8 @@ static void _i8272_exec_seek(i8272_t *fdc) {
     uint8_t ncn = fdc->cmd[2]; /* new cylinder number */
     fdc->drive[us].track = ncn;
     fdc->st0 = I8272_ST0_SE | (us & 0x03);
-    fdc->int_pending = true;
     _i8272_enter_idle(fdc);
+    _i8272_schedule_irq(fdc, 64, true, false);
 }
 
 /*
@@ -389,7 +416,6 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
     if (fdc->read_sector) {
         ok = fdc->read_sector(us, c, h, r, n, fdc->data_buf, fdc->user_data);
     }
-
     if (ok) {
         /* Success */
         fdc->data_len = sector_size;
@@ -414,13 +440,23 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
     fdc->result_len = 7;
 
     if (ok && fdc->data_len > 0) {
-        /* Enter execution phase for data transfer */
-        fdc->phase = I8272_PHASE_EXECUTE;
-        fdc->msr = I8272_MSR_RQM | I8272_MSR_DIO | I8272_MSR_EXM | I8272_MSR_CB;
+        /*
+            Delay entry into EXECUTE just long enough for the Partner ROM to
+            finish issuing the READ DATA parameter bytes and reach its EI/HALT
+            wait point before the DMA-driven data stream begins.
+        */
+        fdc->phase = I8272_PHASE_IDLE;
+        fdc->msr = I8272_MSR_CB;
+        _i8272_schedule_execute(fdc, 1024);
     } else {
-        /* No data, go straight to result */
-        fdc->int_pending = true;
-        _i8272_enter_result(fdc);
+        /*
+            READ DATA completes by raising an interrupt and then presenting
+            the result bytes. Exposing RESULT too early can leave the ROM
+            polling F0h/F1h out of sequence.
+        */
+        fdc->phase = I8272_PHASE_IDLE;
+        fdc->msr = I8272_MSR_CB;
+        _i8272_schedule_irq(fdc, 1024, false, true);
     }
 }
 
@@ -501,14 +537,27 @@ void i8272_reset(i8272_t *fdc) {
     fdc->cmd_code = 0;
     fdc->result_idx = 0;
     fdc->result_len = 0;
-    fdc->st0 = 0;
+    fdc->st0 = I8272_ST0_SE;
     fdc->st1 = 0;
     fdc->st2 = 0;
     fdc->srt = 0;
     fdc->hut = 0;
     fdc->hlt = 0;
     fdc->ndma = false;
+    /*
+        The board-level emulator schedules the power-on reset-complete
+        interrupt when firmware actually programs the FDC interrupt vector
+        during fdc_init. Keeping it pending globally from machine reset makes
+        prompt-mode startup paths see a stale interrupt long before the ROM is
+        ready to acknowledge it.
+    */
     fdc->int_pending = false;
+    fdc->irq_request = false;
+    fdc->irq_delay = 0;
+    fdc->irq_sets_sense = false;
+    fdc->irq_enters_result = false;
+    fdc->exec_delay = 0;
+    fdc->exec_pending = false;
     fdc->data_len = 0;
     fdc->data_idx = 0;
 
@@ -527,6 +576,35 @@ void i8272_reset(i8272_t *fdc) {
     fdc->user_data = ud;
 }
 
+void i8272_tick(i8272_t *fdc) {
+    CHIPS_ASSERT(fdc);
+    if (fdc->exec_pending) {
+        if (fdc->exec_delay > 0) {
+            --fdc->exec_delay;
+        }
+        if (fdc->exec_delay == 0) {
+            fdc->exec_pending = false;
+            fdc->phase = I8272_PHASE_EXECUTE;
+            fdc->msr = I8272_MSR_RQM | I8272_MSR_DIO | I8272_MSR_EXM | I8272_MSR_CB;
+        }
+    }
+    if (fdc->irq_request || (fdc->irq_delay == 0)) {
+        return;
+    }
+    if (--fdc->irq_delay != 0) {
+        return;
+    }
+    if (fdc->irq_sets_sense) {
+        fdc->int_pending = true;
+    }
+    if (fdc->irq_enters_result) {
+        _i8272_enter_result(fdc);
+    }
+    fdc->irq_sets_sense = false;
+    fdc->irq_enters_result = false;
+    fdc->irq_request = true;
+}
+
 uint8_t i8272_read_status(i8272_t *fdc) {
     CHIPS_ASSERT(fdc);
     return fdc->msr;
@@ -540,9 +618,14 @@ uint8_t i8272_read_data(i8272_t *fdc) {
         if (fdc->data_idx < fdc->data_len) {
             uint8_t data = fdc->data_buf[fdc->data_idx++];
             if (fdc->data_idx >= fdc->data_len) {
-                /* All data transferred, move to result phase */
-                fdc->int_pending = true;
-                _i8272_enter_result(fdc);
+                /*
+                    On real hardware the terminal interrupt announces the
+                    switch into RESULT phase; don't present result bytes until
+                    that interrupt has actually been generated.
+                */
+                fdc->phase = I8272_PHASE_IDLE;
+                fdc->msr = I8272_MSR_CB;
+                _i8272_schedule_irq(fdc, 1024, false, true);
             }
             return data;
         }

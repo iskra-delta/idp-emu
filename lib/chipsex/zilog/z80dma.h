@@ -129,6 +129,7 @@ extern "C"
 #define Z80DMA_PIN_BUSREQ   (41)  // Bus request output
 #define Z80DMA_PIN_BUSACK   (42)  // Bus acknowledge input
 #define Z80DMA_PIN_BAO      (43)  // Bus acknowledge output (for daisy)
+#define Z80DMA_PIN_RDY      (44)  // External source/destination ready
 
 /* Pin masks */
 #define Z80DMA_M1           (1ULL << Z80DMA_PIN_M1)
@@ -143,6 +144,7 @@ extern "C"
 #define Z80DMA_BUSREQ       (1ULL << Z80DMA_PIN_BUSREQ)
 #define Z80DMA_BUSACK       (1ULL << Z80DMA_PIN_BUSACK)
 #define Z80DMA_BAO          (1ULL << Z80DMA_PIN_BAO)
+#define Z80DMA_RDY          (1ULL << Z80DMA_PIN_RDY)
 
 /* Also support old MREQ */
 #define Z80DMA_MREQ         (1ULL << 34)
@@ -218,6 +220,7 @@ typedef struct {
     uint8_t cmd_buffer[6];      // Multi-byte command buffer
     uint8_t cmd_bytes_needed;   // Bytes still needed for current command
     uint8_t cmd_bytes_received; // Bytes received so far
+    uint8_t compat_state;       // Boot-ROM compatibility parser state
 
     uint64_t pins;              // Last pin state
 } z80dma_t;
@@ -281,6 +284,7 @@ void z80dma_reset(z80dma_t *dma)
 
     dma->cmd_bytes_needed = 0;
     dma->cmd_bytes_received = 0;
+    dma->compat_state = 0;
 }
 
 /* Decode WR0 - Base register */
@@ -518,6 +522,160 @@ uint64_t z80dma_write(z80dma_t *dma, uint8_t data)
 {
     CHIPS_ASSERT(dma);
 
+    /*
+        Compatibility parser for the Partner boot ROM DMA sequences.
+
+        The ROM programs the Z80 DMA with a small subset of commands using the
+        byte stream:
+
+            79 <A-addr lo> <A-addr hi> <len lo> <len hi>
+            14 28
+            95 <B-port>
+            ...
+            87
+
+        The generic decoder below doesn't currently classify those bytes
+        correctly, which leaves the DMA idle while the FDC waits in EXECUTE.
+        Handle the boot-time subset explicitly so the DMA can move sector bytes
+        from a fixed I/O port into RAM.
+    */
+    if (dma->compat_state != 0) {
+        switch (dma->compat_state) {
+            case 1:
+                dma->cmd_buffer[1] = data;
+                dma->compat_state = 2;
+                return dma->pins;
+            case 2:
+                dma->cmd_buffer[2] = data;
+                dma->compat_state = 3;
+                return dma->pins;
+            case 3:
+                dma->cmd_buffer[3] = data;
+                dma->compat_state = 4;
+                return dma->pins;
+            case 4: {
+                dma->cmd_buffer[4] = data;
+                dma->port_a.start_address = (uint16_t)(dma->cmd_buffer[1] | (dma->cmd_buffer[2] << 8));
+                dma->port_a.address = dma->port_a.start_address;
+                /*
+                    The ROM programs the transfer count as N-1, so convert it to
+                    an actual byte count for the simplified transfer loop.
+                */
+                uint16_t raw_len = (uint16_t)(dma->cmd_buffer[3] | (dma->cmd_buffer[4] << 8));
+                dma->port_a.start_length = (uint16_t)(raw_len + 1);
+                dma->port_a.block_length = dma->port_a.start_length;
+                /*
+                    The simplified transfer loop decrements the source port's
+                    counter. Mirror the programmed block length into both ports
+                    so B->A Partner boot transfers don't terminate immediately
+                    with port B length still at zero.
+                */
+                dma->port_b.start_length = dma->port_a.start_length;
+                dma->port_b.block_length = dma->port_b.start_length;
+                dma->compat_state = 0;
+                return dma->pins;
+            }
+            case 5:
+                dma->port_b.start_address = data;
+                dma->port_b.address = dma->port_b.start_address;
+                dma->compat_state = 6;
+                return dma->pins;
+            case 6:
+                /*
+                    Partner boot blocks include a filler byte after the fixed
+                    I/O port number before the port timing byte.
+                */
+                dma->compat_state = 7;
+                return dma->pins;
+            case 7:
+                /*
+                    The next byte is the fixed-I/O timing/control value (0x8A
+                    in the ROM tables). Swallow it here so the generic decoder
+                    doesn't reinterpret it as WR2 and accidentally switch port
+                    B back to memory mode.
+                */
+                dma->port_b.timing = data;
+                dma->port_b.is_memory = false;
+                dma->compat_state = 0;
+                return dma->pins;
+            case 8:
+                /*
+                    Later Partner floppy loader code uses a shorter variant:
+
+                        ... 28 85 <B-port> 8A CF 01 CF 87
+
+                    so after the 0x85 marker the next byte is still the fixed
+                    I/O port number, and the byte after that is already the
+                    timing/control value.
+                */
+                dma->port_b.start_address = data;
+                dma->port_b.address = dma->port_b.start_address;
+                dma->compat_state = 9;
+                return dma->pins;
+            case 9:
+                dma->port_b.timing = data;
+                dma->port_b.is_memory = false;
+                dma->compat_state = 0;
+                return dma->pins;
+            default:
+                dma->compat_state = 0;
+                break;
+        }
+    }
+
+    switch (data) {
+        case 0x05:
+            z80dma_reset(dma);
+            return dma->pins;
+        case 0x79:
+            dma->direction_ab = false;     // Port B (I/O) -> Port A (memory)
+            dma->compat_state = 1;         // Expect A address + count
+            return dma->pins;
+        case 0x14:
+            dma->wr[1] = data;
+            dma->port_a.is_memory = true;
+            dma->port_a.increment = true;
+            dma->port_a.decrement = false;
+            return dma->pins;
+        case 0x28:
+            dma->wr[2] = data;
+            return dma->pins;
+        case 0x95:
+            dma->wr[2] = data;
+            dma->port_b.is_memory = false;
+            dma->port_b.increment = false;
+            dma->port_b.decrement = false;
+            dma->compat_state = 5;         // Expect fixed I/O port + filler + timing
+            return dma->pins;
+        case 0x85:
+            dma->wr[2] = data;
+            dma->port_b.is_memory = false;
+            dma->port_b.increment = false;
+            dma->port_b.decrement = false;
+            dma->compat_state = (data == 0x85) ? 8 : 5;
+            return dma->pins;
+        case 0xCF:
+            dma->wr[4] = data;
+            dma->mode = Z80DMA_MODE_CONTINUOUS;
+            return dma->pins;
+        case 0x87:
+            dma->wr[6] = data;
+            dma->port_a.address = dma->port_a.start_address;
+            dma->port_a.block_length = dma->port_a.start_length;
+            dma->port_b.address = dma->port_b.start_address;
+            dma->enabled = true;
+            dma->status |= Z80DMA_STATUS_BUSY;
+            return dma->pins;
+        case 0x8A:
+            /* WR5 (wait/ready control) — swallow without corrupting port_b.is_memory.
+               The generic decoder would mis-classify this as a WR2 byte and set
+               port_b.is_memory=true, redirecting DMA reads from FDC I/O port 0xF1
+               to RAM address 0xF1 instead. */
+            return dma->pins;
+        default:
+            break;
+    }
+
     // Handle multi-byte commands
     if (dma->cmd_bytes_needed > 0) {
         dma->cmd_buffer[dma->cmd_bytes_received++] = data;
@@ -641,6 +799,7 @@ static uint64_t _z80dma_transfer_byte(z80dma_t *dma, uint64_t pins)
             } else {
                 dma->enabled = false;
                 dma->status &= ~Z80DMA_STATUS_BUSY;
+                pins &= ~Z80DMA_BUSREQ;
             }
 
             // Trigger interrupt if enabled
@@ -690,6 +849,11 @@ uint64_t z80dma_tick(z80dma_t *dma, uint64_t pins)
 {
     CHIPS_ASSERT(dma);
 
+    /* Clear stale DMA bus strobes unless a transfer phase asserts them again
+       below. Without this, the host can keep seeing old RD/WR cycles after the
+       DMA has already gone idle, which in turn causes repeated phantom writes. */
+    pins &= ~(Z80DMA_MREQ | Z80DMA_IORQ | Z80DMA_RD | Z80DMA_WR);
+
     // Handle reset
     if (pins & Z80DMA_RESET) {
         z80dma_reset(dma);
@@ -716,9 +880,13 @@ uint64_t z80dma_tick(z80dma_t *dma, uint64_t pins)
         return pins;
     }
 
-    // Request bus if we need it
+    // When idle, don't hold the system bus hostage between transfers. The
+    // Partner loader programs the DMA in continuous mode, but the FDC source
+    // only becomes ready intermittently, so BUSREQ must be released while we
+    // wait for the next byte/sector handshake.
     if (dma->state == Z80DMA_STATE_IDLE) {
-        if (dma->port_a.block_length > 0 || dma->port_b.block_length > 0) {
+        pins &= ~Z80DMA_BUSREQ;
+        if ((pins & Z80DMA_RDY) && (dma->port_a.block_length > 0 || dma->port_b.block_length > 0)) {
             // Need to transfer, request bus
             pins |= Z80DMA_BUSREQ;
             dma->state = Z80DMA_STATE_WAIT_BUS;
@@ -727,14 +895,24 @@ uint64_t z80dma_tick(z80dma_t *dma, uint64_t pins)
 
     // Wait for bus grant
     if (dma->state == Z80DMA_STATE_WAIT_BUS) {
-        if (pins & Z80DMA_BUSACK) {
+        if (!(pins & Z80DMA_RDY)) {
+            dma->state = Z80DMA_STATE_IDLE;
+            pins &= ~Z80DMA_BUSREQ;
+            dma->pins = pins;
+            return pins;
+        }
+        if ((pins & Z80DMA_BUSACK) && (pins & Z80DMA_RDY)) {
             // Bus granted, start transfer
             dma->state = Z80DMA_STATE_READ;
+            dma->pins = pins;
+            return pins;
         }
     }
 
     // Perform transfer if bus is granted
-    if ((pins & Z80DMA_BUSACK) && (dma->state == Z80DMA_STATE_READ || dma->state == Z80DMA_STATE_WRITE)) {
+    if ((pins & Z80DMA_BUSACK) &&
+        (((dma->state == Z80DMA_STATE_READ) && (pins & Z80DMA_RDY)) ||
+         (dma->state == Z80DMA_STATE_WRITE))) {
         pins = _z80dma_transfer_byte(dma, pins);
 
         // In byte mode, release bus after each byte

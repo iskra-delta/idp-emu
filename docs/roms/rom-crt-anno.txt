@@ -1,0 +1,1294 @@
+;; ISKRA DELTA PARTNER (CRT MODEL) ROM DISASSEMBLY
+;; Source: partner_crt.rom (2048 bytes)
+;; Replaces incorrect rom-p-anno.txt/rom-p-anno-alt.txt (different ROM variant)
+;;
+;; KEY BOOT FLOW:
+;;   RESET -> 0x0137 (init_sio) -> 0x00C1 (mem_test) -> 0x015B (print banner)
+;;         -> CALL 0x0200 (fdc_init: IM2 setup, EI, HALT)
+;;   FDC power-on reset IRQ fires -> ISR at 0x03EB (EI;SCF;RETI) -> returns to 0x022E
+;;   0x022E: SENSE INT STATUS, SPECIFY, RECALIBRATE(seek), READ DATA 19+14 sectors -> E000h
+;;   JP F600h to CP/M boot loader in loaded code
+;;
+;; INTERRUPT MODE 2 (I=02h, table at 0x0218):
+;;   INT vector 0x18 -> [0x0218] = 0x03EB  (FDC ISR: EI;SCF;RETI)
+;;   INT vector 0x1A -> [0x021A] = 0x0509  (HDD path ISR)
+;;   INT vector 0x1C -> [0x021C] = 0x0445  (CTC/SIO ISR: EI;SCF;CCF;RETI)
+;;
+;; RAM VARIABLES (top of RAM, 0xFF--):
+;;   FFD0h: drive number (0 = A:)
+;;   FFD1h: track / cylinder number
+;;   FFD2h: DMA destination address (word)
+;;   FFD4h: sector number (1-based)
+;;   FFD5h: retry counter
+;;   FFD7h: head / side number
+;;   FFD8h: total sectors remaining to read
+;;
+;; I/O PORTS:
+;;   D8h/D9h : Z80 SIO channel A data/status
+;;   DAh/DBh : Z80 SIO channel A control (WR)
+;;   E1h     : Z80 SIO channel B control (WR)
+;;   C8h-CBh : Z80 CTC channels 0-3
+;;   C0h     : Z80 DMA
+;;   E8h     : FDC interrupt vector latch
+;;   F0h     : i8272 FDC MSR (main status register)
+;;   F1h     : i8272 FDC data register
+;;   98h     : FDC motor control / drive select
+;;   88h/90h : banking / RAM page control
+;;   10h/11h : Xebec S1410 SASI controller (status/data)
+;;   12h     : SASI reset/control
+
+; --------------------------------------------------
+; 0000: reset
+; ROM entry point — jump straight to SIO initialisation
+0000: C3 37 01     JP 0137h               ; jump to init_sio
+
+; --------------------------------------------------
+; 0003: main_prompt
+; Print newline and '*' prompt, then wait for boot key (A or F)
+0003: 31 C0 FF     LD SP,FFC0h            ; set stack pointer near top of RAM
+0006: CD B8 00     CALL 00B8h             ; print CR+LF (newline)
+0009: 3E 2A        LD A,2Ah               ; '*' character
+000B: CD A9 00     CALL 00A9h             ; transmit '*' via SIO
+
+; --------------------------------------------------
+; 000E: read_key
+; Poll SIO for a keypress; force uppercase; accept 'A' (HDD) or 'F' (FDD)
+000E: CD 9F 00     CALL 009Fh             ; wait for RX char, strip parity -> A
+0011: E6 DF        AND DFh                ; force uppercase (bit 5 = 0)
+0013: FE 41        CP 41h                 ; 'A' — hard disk boot?
+0015: CA 09 02     JP Z,0209h             ; yes -> boot_from_A (JP 0479h)
+0018: FE 46        CP 46h                 ; 'F' — floppy boot?
+001A: CA 0F 02     JP Z,020Fh             ; yes -> boot_from_F (JP 03F5h)
+001D: 3E 3F        LD A,3Fh               ; '?' — unknown key
+001F: CD A9 00     CALL 00A9h             ; transmit '?' via SIO
+0022: 18 DF        JR 0003h               ; loop back to prompt
+
+; --------------------------------------------------
+; 0024: padding_0024
+; Unused NOP sled
+0024: 00           NOP
+0025: 00           NOP
+0026: 00           NOP
+0027: 00           NOP
+0028: 00           NOP
+0029: 00           NOP
+002A: 00           NOP
+002B: 00           NOP
+002C: 00           NOP
+002D: 00           NOP
+002E: 00           NOP
+002F: 00           NOP
+0030: 00           NOP
+0031: 00           NOP
+0032: 00           NOP
+0033: 00           NOP
+0034: 00           NOP
+0035: 00           NOP
+0036: 00           NOP
+0037: 00           NOP
+0038: 00           NOP
+0039: 00           NOP
+003A: 00           NOP
+003B: 00           NOP
+003C: 00           NOP
+003D: 00           NOP
+003E: 00           NOP
+003F: 00           NOP
+0040: 00           NOP
+0041: 00           NOP
+0042: 00           NOP
+0043: 00           NOP
+0044: 00           NOP
+0045: 00           NOP
+0046: 00           NOP
+0047: 00           NOP
+0048: 00           NOP
+0049: 00           NOP
+004A: 00           NOP
+004B: 00           NOP
+004C: 00           NOP
+004D: 00           NOP
+004E: 00           NOP
+004F: 00           NOP
+0050: 00           NOP
+0051: 00           NOP
+0052: 00           NOP
+0053: 00           NOP
+0054: 00           NOP
+0055: 00           NOP
+0056: 00           NOP
+0057: 00           NOP
+0058: 00           NOP
+0059: 00           NOP
+005A: 00           NOP
+005B: 00           NOP
+005C: 00           NOP
+005D: 00           NOP
+005E: 00           NOP
+005F: 00           NOP
+0060: 00           NOP
+0061: 00           NOP
+0062: 00           NOP
+0063: 00           NOP
+0064: 00           NOP
+0065: 00           NOP
+
+; --------------------------------------------------
+; 0066: dead_jp
+; Jump to print '?' — error/fallthrough guard
+0066: C3 1D 00     JP 001Dh               ; -> print '?' and reprompt
+
+; --------------------------------------------------
+; 0069: print_hex_hl
+; Print HL as 4 hex digits with preceding newline then trailing space
+0069: CD B8 00     CALL 00B8h             ; print CR+LF
+006C: 7C           LD A,H                 ; A = high byte of HL
+006D: CD 79 00     CALL 0079h             ; print A as 2 hex digits
+0070: 7D           LD A,L                 ; A = low byte of HL
+0071: CD 79 00     CALL 0079h             ; print A as 2 hex digits
+0074: 3E 20        LD A,20h               ; space character
+0076: C3 A9 00     JP 00A9h               ; transmit space (tail call)
+
+; --------------------------------------------------
+; 0079: put_hex
+; Print A as two ASCII hex digits (high nibble first)
+put_hex_0x0079:
+0079: C5           PUSH BC                ; save BC
+007A: 47           LD B,A                 ; save original A in B
+007B: CB 2F        SRA A                  ; shift right by 1 (4x = shift right 4)
+007D: CB 2F        SRA A                  ; ...
+007F: CB 2F        SRA A                  ; ...
+0081: CB 2F        SRA A                  ; A = high nibble (0..F)
+0083: E6 0F        AND 0Fh                ; mask to 4 bits
+0085: CD 90 00     CALL 0090h             ; print high nibble as ASCII
+0088: 78           LD A,B                 ; restore original A
+0089: E6 0F        AND 0Fh                ; isolate low nibble
+008B: CD 90 00     CALL 0090h             ; print low nibble as ASCII
+008E: C1           POP BC                 ; restore BC
+008F: C9           RET
+
+; --------------------------------------------------
+; 0090: nibble_to_ascii
+; Convert nibble 0..F in A to ASCII '0'..'9'/'A'..'F', then print it
+nibble_to_ascii_0x0090:
+0090: FE 0A        CP 0Ah                 ; is nibble >= 10?
+0092: FA 99 00     JP M,0099h             ; no -> add '0' (0x30)
+0095: C6 37        ADD A,37h              ; A-F: add 0x37 -> 'A'..'F'
+0097: 18 02        JR 009Bh               ; -> print_nibble
+
+; --------------------------------------------------
+; 0099: add_digit_base
+0099: C6 30        ADD A,30h              ; 0-9: add '0' (0x30) -> '0'..'9'
+
+; --------------------------------------------------
+; 009B: print_nibble
+; Send character in A via SIO and return
+009B: CD A9 00     CALL 00A9h             ; transmit character
+009E: C9           RET
+
+; --------------------------------------------------
+; 009F: wait_key
+; Block until SIO RX has data; strip parity bit 7; return char in A
+wait_key_0x009F:
+009F: DB D9        IN A,(D9h)             ; read SIO channel A status
+00A1: CB 47        BIT 0,A                ; test RX data available (bit 0)
+00A3: 28 FA        JR Z,009Fh             ; not ready -> keep polling
+00A5: DB D8        IN A,(D8h)             ; read received byte from SIO
+00A7: CB BF        RES 7,A                ; strip parity bit 7
+
+; --------------------------------------------------
+; 00A9: putchar
+; Transmit character in A via SIO (waits for TX buffer empty)
+putchar_0x00A9:
+00A9: F5           PUSH AF                ; save character
+00AA: DB D9        IN A,(D9h)             ; read SIO channel A status
+00AC: CB 57        BIT 2,A                ; test TX buffer empty (bit 2)
+00AE: 28 FA        JR Z,00AAh             ; not ready -> keep polling
+00B0: F1           POP AF                 ; restore character
+00B1: D3 D8        OUT (D8h),A            ; transmit byte via SIO data port
+00B3: C9           RET
+
+; --------------------------------------------------
+; 00B4: put_space
+; Load space character and fall through to putchar
+00B4: 3E 20        LD A,20h               ; space (0x20)
+00B6: 18 F1        JR 00A9h               ; -> putchar (tail call)
+
+; --------------------------------------------------
+; 00B8: newline
+; Transmit LF (0x0A) then CR (0x0D) via SIO
+newline_0x00B8:
+00B8: 3E 0A        LD A,0Ah               ; LF character
+00BA: CD A9 00     CALL 00A9h             ; transmit LF
+00BD: 3E 0D        LD A,0Dh               ; CR character
+00BF: 18 E8        JR 00A9h               ; transmit CR (tail call)
+
+; --------------------------------------------------
+; 00C1: mem_test
+; RAM test: print "TESTING MEMORY..." then write/verify 0x2000..0xFFFF
+; Two passes with patterns 0x00 and 0x55 (complement pairs)
+mem_test_0x00C1:
+00C1: 21 9F 01     LD HL,019Fh            ; HL -> str_testing_mem
+00C4: CD 7D 01     CALL 017Dh             ; print "TESTING MEMORY ..."
+00C7: 21 00 20     LD HL,2000h            ; start of test region (below ROM/stack)
+00CA: 01 80 FF     LD BC,FF80h            ; length = 0xFF80 bytes (to 0xFFFF)
+00CD: 16 02        LD D,02h               ; D = 2 passes
+00CF: 3E 00        LD A,00h               ; first pattern byte = 0x00
+
+; --------------------------------------------------
+; 00D1: mem_test_loop
+; Outer loop: write + verify each pattern, add 0x55, decrement pass counter
+mem_test_loop_0x00D1:
+00D1: D5           PUSH DE                ; save pass counter and pattern
+00D2: F5           PUSH AF                ; save pattern byte A
+00D3: CD DE 00     CALL 00DEh             ; write then verify current pattern
+00D6: F1           POP AF                 ; restore pattern byte
+00D7: D1           POP DE                 ; restore pass counter
+00D8: C6 55        ADD A,55h              ; next pattern: 0x00 -> 0x55
+00DA: 15           DEC D                  ; decrement pass counter
+00DB: 20 F4        JR NZ,00D1h            ; not done -> next pass
+00DD: C9           RET                    ; all passes complete
+
+; --------------------------------------------------
+; 00DE: write_verify
+; Write pattern to RAM (two copies), output bank-select bytes, then verify
+write_verify_0x00DE:
+00DE: CD EF 00     CALL 00EFh             ; write pattern/complement to RAM
+00E1: D3 90        OUT (90h),A            ; toggle bank select (port 0x90)
+00E3: CD EF 00     CALL 00EFh             ; write again (second pass)
+00E6: CD 02 01     CALL 0102h             ; verify pattern in RAM
+00E9: D3 88        OUT (88h),A            ; toggle bank select (port 0x88)
+00EB: CD 02 01     CALL 0102h             ; verify again
+00EE: C9           RET
+
+; --------------------------------------------------
+; 00EF: write_pattern
+; Fill RAM[HL..HL+BC] with alternating A / ~A byte pairs
+write_pattern_0x00EF:
+00EF: F5           PUSH AF                ; save A
+00F0: E5           PUSH HL                ; save HL (start address)
+00F1: 57           LD D,A                 ; D = pattern byte
+00F2: 2F           CPL                    ; A = ~pattern
+00F3: 5F           LD E,A                 ; E = complement byte
+
+; --------------------------------------------------
+; 00F4: write_loop
+; Inner loop: store D then E alternately, advance HL, stop when HL >= BC end
+write_loop_0x00F4:
+00F4: 72           LD (HL),D              ; store pattern byte
+00F5: 23           INC HL                 ; advance pointer
+00F6: 73           LD (HL),E              ; store complement byte
+00F7: 23           INC HL                 ; advance pointer
+00F8: E5           PUSH HL                ; save HL for comparison
+00F9: B7           OR A                   ; clear carry before SBC
+00FA: ED 42        SBC HL,BC              ; HL - BC: have we reached the end?
+00FC: E1           POP HL                 ; restore HL
+00FD: 38 F5        JR C,00F4h             ; still before end -> continue
+00FF: E1           POP HL                 ; restore original start address
+0100: F1           POP AF                 ; restore A
+0101: C9           RET
+
+; --------------------------------------------------
+; 0102: verify_pattern
+; Check RAM[HL..HL+BC] against alternating D/E pattern; JP to verify_fail on mismatch
+verify_pattern_0x0102:
+0102: E5           PUSH HL                ; save HL
+0103: F5           PUSH AF                ; save A
+0104: 57           LD D,A                 ; D = expected pattern byte
+0105: 2F           CPL                    ; A = complement
+0106: 5F           LD E,A                 ; E = expected complement
+
+; --------------------------------------------------
+; 0107: verify_loop
+; Inner verify loop: compare each byte; branch to error on mismatch
+verify_loop_0x0107:
+0107: 7E           LD A,(HL)              ; read RAM byte
+0108: BA           CP D                   ; compare with pattern
+0109: 20 10        JR NZ,011Bh            ; mismatch -> verify_fail
+010B: 23           INC HL                 ; advance
+010C: 7E           LD A,(HL)              ; read next byte
+010D: BB           CP E                   ; compare with complement
+010E: 20 0B        JR NZ,011Bh            ; mismatch -> verify_fail
+0110: 23           INC HL                 ; advance
+0111: E5           PUSH HL                ; save for bounds check
+0112: B7           OR A                   ; clear carry
+0113: ED 42        SBC HL,BC              ; HL - BC: at end?
+0115: E1           POP HL                 ; restore
+0116: 38 EF        JR C,0107h             ; not done -> continue
+0118: F1           POP AF                 ; restore A
+0119: E1           POP HL                 ; restore HL
+011A: C9           RET                    ; verification passed
+
+; --------------------------------------------------
+; 011B: verify_fail
+; Print "MEMORY ERROR !!!" and jump back to prompt (fatal)
+verify_fail_0x011B:
+011B: 21 24 01     LD HL,0124h            ; HL -> str_memory_error
+011E: CD 7D 01     CALL 017Dh             ; print error string
+0121: C3 03 00     JP 0003h               ; restart from prompt
+
+; --------------------------------------------------
+; 0124: str_memory_error
+; String: CR LF 'MEMORY ERROR !!!' NUL
+0124: 0D 0A 4D 45 4D 4F 52 59  .db  ; |..MEMORY|
+012C: 20 45 52 52 4F 52 20 21  .db  ; | ERROR !|
+0134: 21 21 00                 .db  ; |!!.|
+
+; --------------------------------------------------
+; 0137: init_sio
+; Configure all four Z80 SIO A/B channel ports via OTIR from sio_init_data
+; Three OTIR calls: channel A ctrl (D9h), channel A WR (DBh), channel B (E1h)
+init_sio_0x0137:
+0137: 0E D9        LD C,D9h               ; C = SIO channel A status/ctrl port
+0139: 21 86 01     LD HL,0186h            ; HL -> sio_init_data (7 bytes)
+013C: 06 07        LD B,07h               ; B = 7 bytes to send
+013E: ED B3        OTIR                   ; send 7 bytes to SIO channel A ctrl
+0140: 0E DB        LD C,DBh               ; C = SIO channel A WR port
+0142: 21 86 01     LD HL,0186h            ; HL -> sio_init_data again
+0145: 06 07        LD B,07h               ; B = 7
+0147: ED B3        OTIR                   ; send 7 bytes to SIO channel A WR
+0149: 0E E1        LD C,E1h               ; C = SIO channel B ctrl port
+014B: 21 86 01     LD HL,0186h            ; HL -> sio_init_data
+014E: 06 07        LD B,07h               ; B = 7
+0150: ED B3        OTIR                   ; send 7 bytes to SIO channel B
+0152: 31 C0 FF     LD SP,FFC0h            ; initialise stack pointer
+0155: CD C1 00     CALL 00C1h             ; run RAM test (prints "TESTING MEMORY...")
+0158: 21 8D 01     LD HL,018Dh            ; HL -> banner_string
+
+; --------------------------------------------------
+; 015B: post_sio_init
+; Print boot banner then configure CRT/display parameters
+015B: CD 7D 01     CALL 017Dh             ; print "DELTA PARTNER  #" banner
+015E: 2A FE 07     LD HL,(07FEh)          ; load word from end of ROM (config?)
+
+; --------------------------------------------------
+; 0161: print_banner
+; Output CRT control byte, read config from ROM tail, program CRT ports, start FDC
+0161: 3E 04        LD A,04h               ; CRT control code 04h
+0163: CD A9 00     CALL 00A9h             ; send to SIO (CRT channel)
+0166: DD 2A FC 07  LD IX,(07FCh)          ; IX = word at ROM[07FCh] (display config)
+016A: 3A FC 07     LD A,(07FCh)           ; A = low byte of config word
+016D: D3 AE        OUT (AEh),A            ; program display port AEh
+016F: 3A FD 07     LD A,(07FDh)           ; A = high byte of config word
+0172: D3 AF        OUT (AFh),A            ; program display port AFh
+0174: CD 00 02     CALL 0200h             ; call fdc_init (via JP stub at 0x0200)
+0177: CD 03 02     CALL 0203h             ; call ret_stub (NOP call, placeholder)
+017A: C3 09 02     JP 0209h               ; JP boot_from_A (hard disk boot path)
+
+; --------------------------------------------------
+; 017D: print_string
+; Print null-terminated string pointed to by HL via SIO, then return
+print_string_0x017D:
+017D: 7E           LD A,(HL)              ; load next character from string
+017E: B7           OR A                   ; test for NUL terminator
+017F: C8           RET Z                  ; NUL -> return
+0180: CD A9 00     CALL 00A9h             ; transmit character via SIO
+0183: 23           INC HL                 ; advance string pointer
+0184: 18 F7        JR 017Dh               ; loop
+
+; --------------------------------------------------
+; 0186: sio_init_data
+; 7-byte SIO init block sent via OTIR to all 4 Z80 SIO channel WR registers
+; Values: WR0 reset (18), WR0 ext-int-enable (04), WR1 (44), WR2 (03),
+;         WR4 async 8N1 x16 (C1), WR3 rx-enable (05), WR5 tx-enable (68)
+0186: 18 04 44 03 C1 05 68     .db  ; |..D..|
+
+; --------------------------------------------------
+; 018D: banner_string
+; String: 0x1C 'DELTA PARTNER  #' NUL  (0x1C = VT52/CRT cursor-home command)
+018D: 1C 44 45 4C 54 41 20 50  .db  ; |.DELTA P|
+0195: 41 52 54 4E 45 52 20 20  .db  ; |ARTNER  |
+019D: 23 00                    .db  ; |#.|
+
+; --------------------------------------------------
+; 019F: str_testing_mem
+; String: CR LF LF 'TESTING MEMORY ...' NUL
+019F: 0D 0A 0A 54 45 53 54 49  .db  ; |...TESTI|
+01A7: 4E 47 20 4D 45 4D 4F 52  .db  ; |NG MEMOR|
+01AF: 59 20 2E 2E 2E 20 00     .db  ; |Y ... .|
+
+; --------------------------------------------------
+; 01B6: data_01B6
+; Filler bytes between string area and AA/55 test pattern
+01B6: 48 00 00 00 00 00 00 00  .db  ; |H.......|
+01BE: 00                       .db  ; |.|
+
+; --------------------------------------------------
+; 01BF: mem_test_pattern
+; AA/55 alternating pattern used as ROM signature / stack guard
+01BF: AA 55 AA 55 AA 55 AA 55  .db  ; |.U.U.U.U|
+01C7: AA 55 AA 55 AA 55 AA 55  .db  ; |.U.U.U.U|
+01CF: AA 55 AA 55 AA 55 AA 55  .db  ; |.U.U.U.U|
+01D7: AA 55 AA 55 AA 55 AA 55  .db  ; |.U.U.U.U|
+01DF: AA 55 AA 55 AA 55 AA 55  .db  ; |.U.U.U.U|
+01E7: AA 55 AA 55 AA 55 AA 55  .db  ; |.U.U.U.U|
+01EF: AA 55 AA 55 AA 55 AA 55  .db  ; |.U.U.U.U|
+01F7: AA 55 AA 55 AA 55 AA 55  .db  ; |.U.U.U.U|
+01FF: AA                       .db  ; |.|
+
+; --------------------------------------------------
+; 0200: call_fdc_init
+; Dispatch stub: JP to fdc_init at 0x021E
+0200: C3 1E 02     JP 021Eh               ; -> fdc_init
+
+; --------------------------------------------------
+; 0203: ret_stub
+; Simple RET stub (placeholder for unused vector call)
+0203: C9           RET
+0204: 00           NOP
+0205: 00           NOP
+
+; --------------------------------------------------
+; 0206: jp_after_isr
+; Jump to after_isr code (called when boot finishes without ISR path)
+0206: C3 EF 03     JP 03EFh               ; -> after_isr (CALL fdc_load; JP 0003)
+
+; --------------------------------------------------
+; 0209: boot_from_A
+; Dispatch stub: JP to hdd_boot_entry
+0209: C3 79 04     JP 0479h               ; -> hdd_boot_entry
+
+; --------------------------------------------------
+; 020C: jp_hdd_retry
+; Dispatch stub: JP to hdd_retry
+020C: C3 DA 04     JP 04DAh               ; -> hdd_retry
+
+; --------------------------------------------------
+; 020F: boot_from_F
+; Dispatch stub: JP to floppy boot path
+020F: C3 F5 03     JP 03F5h               ; -> boot_floppy
+
+; --------------------------------------------------
+; 0212: padding_0212
+; Filler bytes (55/AA alternating) before IM2 vector table
+0212: 55           .db  ; |U|
+0213: AA           .db  ; |.|
+0214: 55           .db  ; |U|
+0215: AA           .db  ; |.|
+0216: 55           .db  ; |U|
+0217: AA           .db  ; |.|
+
+; --------------------------------------------------
+; 0218: im2_vectors
+; IM2 interrupt vector table (I=02h -> table base 0x0200; offset = vector byte)
+; [0218] = 03EBh  FDC ISR (vector 0x18)
+; [021A] = 0509h  HDD/SIO path ISR (vector 0x1A)
+; [021C] = 0445h  CTC ISR (vector 0x1C)
+0218: EB 03 09 05 45 04        .db  ; |....E.|
+
+; --------------------------------------------------
+; 021E: fdc_init
+; Set up IM 2 interrupt mode, program FDC and CTC interrupt vectors,
+; enable interrupts, then HALT to await the FDC power-on reset interrupt
+fdc_init_0x021E:
+021E: F3           DI                     ; disable interrupts during setup
+021F: ED 5E        IM 2                   ; switch to interrupt mode 2 (vectored)
+0221: 21 18 02     LD HL,0218h            ; HL = IM2 table address (L=18h=FDC vector)
+0224: 7D           LD A,L                 ; A = 0x18 (FDC interrupt vector offset)
+0225: D3 E8        OUT (E8h),A            ; latch FDC interrupt vector into port E8h
+0227: D3 C8        OUT (C8h),A            ; CTC channel 0: write 0x18 (mode/vector)
+0229: 7C           LD A,H                 ; A = 0x02 (high byte = interrupt page I)
+022A: ED 47        LD I,A                 ; I = 02h -> IM2 table at 0x0200
+022C: FB           EI                     ; enable interrupts
+022D: 76           HALT                   ; HALT: wait for FDC power-on reset IRQ
+
+; --------------------------------------------------
+; 022E: after_fdc_reset
+; Execution resumes here after FDC ISR returns (RETI from 0x03EB)
+; Send SENSE INT STATUS to clear the FDC reset condition
+022E: 3E 08        LD A,08h               ; FDC command: SENSE INTERRUPT STATUS
+0230: CD 58 02     CALL 0258h             ; send command byte to FDC
+0233: CD 66 02     CALL 0266h             ; read result byte 1 (ST0)
+0236: CD 66 02     CALL 0266h             ; read result byte 2 (PCN - present cylinder)
+
+; --------------------------------------------------
+; 0239: specify_cmd
+; Send SPECIFY command to set step rate, head load/unload, DMA mode
+0239: 3E 03        LD A,03h               ; FDC command: SPECIFY
+023B: CD 58 02     CALL 0258h             ; send SPECIFY command byte
+023E: 3E 0D        LD A,0Dh               ; SRT/HUT source nibble (0x0D)
+0240: E6 0F        AND 0Fh                ; mask to 4 bits
+0242: 07           RLCA                   ; shift left 1
+0243: 07           RLCA                   ; shift left 2
+0244: 07           RLCA                   ; shift left 3
+0245: 07           RLCA                   ; shift left 4 -> SRT in high nibble
+0246: 47           LD B,A                 ; save SRT nibble in B
+0247: 3E 0E        LD A,0Eh               ; HUT nibble = 0x0E
+0249: E6 0F        AND 0Fh                ; mask to 4 bits
+024B: B0           OR B                   ; combine SRT | HUT -> byte 1 of SPECIFY
+024C: CD 58 02     CALL 0258h             ; send SRT/HUT byte
+024F: 3E 04        LD A,04h               ; HLT source = 0x04
+0251: 07           RLCA                   ; shift left 1
+0252: E6 FE        AND FEh                ; clear ND bit (bit 0 = 0: use DMA mode)
+0254: CD 58 02     CALL 0258h             ; send HLT/ND byte
+0257: C9           RET
+
+; --------------------------------------------------
+; 0258: send_fdc_cmd
+; Wait for FDC MSR to show RQM=1, DIO=0 (ready to accept), then write A to FDC
+send_fdc_cmd_0x0258:
+0258: F5           PUSH AF                ; save byte to send
+wait_fdc_rqm_0x0259:
+0259: DB F0        IN A,(F0h)             ; read FDC MSR (main status register)
+025B: E6 C0        AND C0h                ; mask bits 7:6 (RQM, DIO)
+025D: FE 80        CP 80h                 ; 80h = RQM=1, DIO=0 (ready for command)
+025F: C2 59 02     JP NZ,0259h            ; not ready -> keep polling
+0262: F1           POP AF                 ; restore byte to send
+0263: D3 F1        OUT (F1h),A            ; write byte to FDC data register
+0265: C9           RET
+
+; --------------------------------------------------
+; 0266: read_fdc_result
+; Wait for FDC MSR to show RQM=1, DIO=1 (result ready), then read result byte
+read_fdc_result_0x0266:
+0266: DB F0        IN A,(F0h)             ; read FDC MSR
+0268: E6 C0        AND C0h                ; mask bits 7:6 (RQM, DIO)
+026A: FE C0        CP C0h                 ; C0h = RQM=1, DIO=1 (result available)
+026C: C2 66 02     JP NZ,0266h            ; not ready -> keep polling
+026F: DB F1        IN A,(F1h)             ; read result byte from FDC data register
+0271: C9           RET
+
+; --------------------------------------------------
+; 0272: fdc_seek
+; Send SEEK command: drive (FFD0h) to cylinder (FFD1h); EI; HALT for seek IRQ
+fdc_seek_0x0272:
+0272: 3E 07        LD A,07h               ; FDC command: SEEK
+0274: CD 58 02     CALL 0258h             ; send SEEK command byte
+0277: 3A D0 FF     LD A,(FFD0h)           ; A = drive number
+027A: CD 58 02     CALL 0258h             ; send drive/head byte
+027D: FB           EI                     ; enable interrupts (FDC seek IRQ will fire)
+027E: 76           HALT                   ; wait for SEEK complete interrupt
+027F: 3E 08        LD A,08h               ; FDC command: SENSE INTERRUPT STATUS
+0281: CD 58 02     CALL 0258h             ; send command
+0284: CD 66 02     CALL 0266h             ; read ST0 (status byte 0)
+0287: CD 66 02     CALL 0266h             ; read PCN (present cylinder number)
+028A: AF           XOR A                  ; A = 0
+028B: 32 D1 FF     LD (FFD1h),A           ; reset track variable to 0
+028E: 32 D7 FF     LD (FFD7h),A           ; reset side/head variable to 0
+0291: C9           RET
+
+; --------------------------------------------------
+; 0292: read_sector
+; Check motor, issue READ DATA, wait for FDC IRQ, read result, handle retries
+read_sector_0x0292:
+0292: CD 0B 03     CALL 030Bh             ; recalibrate (RECALIBRATE + SEEK to track)
+0295: C0           RET NZ                 ; error in recalibrate -> return error (NZ)
+0296: 3E 0A        LD A,0Ah               ; retry count = 10
+0298: 32 D5 FF     LD (FFD5h),A           ; store retry counter
+
+; --------------------------------------------------
+; 029B: read_data_setup
+; Program DMA and issue READ DATA command; HALT for data-transfer IRQ
+read_data_setup_0x029B:
+029B: 3E 05        LD A,05h               ; DMA reset/enable command
+029D: D3 C0        OUT (C0h),A            ; write to Z80 DMA
+029F: 3E CF        LD A,CFh               ; DMA: continuous transfer mode
+02A1: D3 C0        OUT (C0h),A            ; write to Z80 DMA
+02A3: CD 79 03     CALL 0379h             ; setup DMA destination + load B=0Dh, C=C0h
+02A6: 21 8B 03     LD HL,038Bh            ; HL -> rest of DMA command block (13 bytes)
+02A9: ED B3        OTIR                   ; send 13 bytes to Z80 DMA (port C0h)
+02AB: 3E 06        LD A,06h               ; FDC command: READ DATA (base)
+02AD: F6 40        OR 40h                 ; set MFM bit -> 46h
+02AF: CD 48 03     CALL 0348h             ; send READ DATA command + CHS parameters
+02B2: CD 64 03     CALL 0364h             ; send EOT, GPL, DTL parameters
+02B5: FB           EI                     ; enable interrupts
+02B6: 76           HALT                   ; wait for FDC read-complete IRQ
+02B7: DA CC 02     JP C,02CCh             ; carry set (ISR set SCF) -> read done
+02BA: DB 98        IN A,(98h)             ; read motor/status latch (port 98h)
+02BC: E6 01        AND 01h                ; test busy bit 0
+02BE: C2 B5 02     JP NZ,02B5h            ; still busy -> wait again
+02C1: 21 4A 04     LD HL,044Ah            ; HL -> str_floppy_not_ready
+02C4: CD 67 04     CALL 0467h             ; print "FLOPPY DISK NOT READY" via SIO
+02C7: D3 98        OUT (98h),A            ; write status to motor port
+02C9: C3 B5 02     JP 02B5h               ; retry wait
+
+; --------------------------------------------------
+; 02CC: read_result
+; ISR returned with carry set: read 7 result bytes from FDC, check ST0/ST1/ST2
+read_result_0x02CC:
+02CC: 3E 03        LD A,03h               ; result phase: read 3 status + 4 address bytes
+02CE: D3 CA        OUT (CAh),A            ; write to CTC channel 2 (acknowledge?)
+02D0: CD 66 02     CALL 0266h             ; read ST0 (status register 0)
+02D3: F5           PUSH AF                ; save ST0
+02D4: 06 06        LD B,06h               ; B = 6 more result bytes
+read_result_loop_0x02D6:
+02D6: CD 66 02     CALL 0266h             ; read next result byte (ST1,ST2,C,H,R,N)
+02D9: 05           DEC B                  ; decrement count
+02DA: C2 D6 02     JP NZ,02D6h            ; not done -> read another
+02DD: F1           POP AF                 ; restore ST0
+02DE: E6 C0        AND C0h                ; mask IC field (bits 7:6 of ST0)
+02E0: C8           RET Z                  ; IC=00 (normal termination) -> success
+02E1: 3A D5 FF     LD A,(FFD5h)           ; load retry counter
+02E4: B7           OR A                   ; test zero
+02E5: CA 09 03     JP Z,0309h             ; retries exhausted -> return error
+02E8: 3D           DEC A                  ; decrement retry counter
+02E9: 32 D5 FF     LD (FFD5h),A           ; save decremented counter
+02EC: 3A D1 FF     LD A,(FFD1h)           ; load current track
+02EF: F5           PUSH AF                ; save track
+02F0: 3C           INC A                  ; advance track by 1 (force re-seek)
+02F1: 32 D1 FF     LD (FFD1h),A           ; store modified track
+02F4: 3A D7 FF     LD A,(FFD7h)           ; load side/head
+02F7: F5           PUSH AF                ; save side
+02F8: CD 0B 03     CALL 030Bh             ; recalibrate with modified track
+02FB: F1           POP AF                 ; restore original side
+02FC: 32 D7 FF     LD (FFD7h),A           ; restore side
+02FF: F1           POP AF                 ; restore original track
+0300: 32 D1 FF     LD (FFD1h),A           ; restore track
+0303: CD 0B 03     CALL 030Bh             ; recalibrate again (final retry)
+0306: C3 9B 02     JP 029Bh               ; retry read from DMA setup
+error_return_0x0309:
+0309: 3C           INC A                  ; make A non-zero (error flag)
+030A: C9           RET                    ; return with NZ = error
+
+; --------------------------------------------------
+; 030B: recalibrate
+; Send RECALIBRATE then SEEK to FFD1h/FFD7h; return NZ on seek mismatch
+recalibrate_0x030B:
+030B: CD 22 04     CALL 0422h             ; ensure FDC motor is running
+030E: 3E 0F        LD A,0Fh               ; FDC command: RECALIBRATE
+0310: CD 58 02     CALL 0258h             ; send RECALIBRATE command
+0313: CD 39 03     CALL 0339h             ; build H/D byte (head select + drive)
+0316: CD 58 02     CALL 0258h             ; send H/D byte
+0319: 3A D1 FF     LD A,(FFD1h)           ; load target cylinder number
+031C: CD 58 02     CALL 0258h             ; send cylinder number
+031F: FB           EI                     ; enable interrupts
+0320: 76           HALT                   ; HALT: wait for SEEK complete IRQ
+0321: 3E 08        LD A,08h               ; FDC command: SENSE INTERRUPT STATUS
+0323: CD 58 02     CALL 0258h             ; send command
+0326: CD 66 02     CALL 0266h             ; read ST0
+0329: CD 66 02     CALL 0266h             ; read PCN (present cylinder)
+032C: 47           LD B,A                 ; B = PCN returned by FDC
+032D: 3A D1 FF     LD A,(FFD1h)           ; A = requested cylinder
+0330: B8           CP B                   ; compare requested vs actual cylinder
+0331: CA 37 03     JP Z,0337h             ; match -> return Z (success)
+0334: AF           XOR A                  ; mismatch: A = 0
+0335: 3C           INC A                  ; A = 1 (non-zero = error)
+0336: C9           RET                    ; return NZ = seek did not reach target
+seek_ok_0x0337:
+0337: AF           XOR A                  ; A = 0
+0338: C9           RET                    ; return Z = success
+
+; --------------------------------------------------
+; 0339: build_hd_byte
+; Build FDC H/D byte: head select from FFD7h (bit 2) ORed with drive (FFD0h)
+build_hd_byte_0x0339:
+0339: 3A D7 FF     LD A,(FFD7h)           ; load side/head number
+033C: 07           RLCA                   ; shift left 1
+033D: 07           RLCA                   ; shift left 2 -> head bit into bit 2
+033E: E6 04        AND 04h                ; isolate head select bit
+0340: C5           PUSH BC                ; save BC
+0341: 47           LD B,A                 ; B = head bit
+0342: 3A D0 FF     LD A,(FFD0h)           ; A = drive number (0 or 1)
+0345: B0           OR B                   ; combine drive | head bit
+0346: C1           POP BC                 ; restore BC
+0347: C9           RET                    ; A = H/D byte for FDC
+
+; --------------------------------------------------
+; 0348: send_read_cmd
+; Send READ DATA command (already in A) plus C, H, R, N parameters from RAM
+send_read_cmd_0x0348:
+0348: CD 58 02     CALL 0258h             ; send READ DATA command byte (06h|MFM)
+034B: CD 39 03     CALL 0339h             ; build H/D byte
+034E: CD 58 02     CALL 0258h             ; send H/D byte
+0351: 3A D1 FF     LD A,(FFD1h)           ; A = cylinder (C)
+0354: CD 58 02     CALL 0258h             ; send cylinder number
+0357: 3A D7 FF     LD A,(FFD7h)           ; A = head/side (H)
+035A: CD 58 02     CALL 0258h             ; send head number
+035D: 3A D4 FF     LD A,(FFD4h)           ; A = sector number (R)
+0360: CD 58 02     CALL 0258h             ; send sector number
+0363: C9           RET
+
+; --------------------------------------------------
+; 0364: send_eot_params
+; Send EOT (sectors/track=18), GPL (gap length=0x0A), DTL (data length=0xFF)
+send_eot_params_0x0364:
+0364: 3E 01        LD A,01h               ; N = 1 (sector size code: 256 bytes)
+0366: CD 58 02     CALL 0258h             ; send N byte
+0369: 3E 12        LD A,12h               ; EOT = 18 (last sector on track)
+036B: CD 58 02     CALL 0258h             ; send EOT byte
+036E: 3E 0A        LD A,0Ah               ; GPL = 0x0A (gap 3 length)
+0370: CD 58 02     CALL 0258h             ; send GPL byte
+0373: 3E FF        LD A,FFh               ; DTL = 0xFF (data length, not used for N>0)
+0375: CD 58 02     CALL 0258h             ; send DTL byte
+0378: C9           RET
+
+; --------------------------------------------------
+; 0379: setup_dma
+; Program Z80 DMA for FDC sector read: set destination from FFD2h; return B=0Dh, C=C0h
+setup_dma_0x0379:
+0379: 3E 79        LD A,79h               ; DMA WR0: port B->memory, byte mode, address inc
+037B: D3 C0        OUT (C0h),A            ; write WR0 to DMA
+037D: 2A D2 FF     LD HL,(FFD2h)          ; HL = DMA destination address
+0380: 7D           LD A,L                 ; A = destination low byte
+0381: D3 C0        OUT (C0h),A            ; write dest addr low to DMA
+0383: 7C           LD A,H                 ; A = destination high byte
+0384: D3 C0        OUT (C0h),A            ; write dest addr high to DMA
+0386: 06 0D        LD B,0Dh               ; B = 13 (remaining DMA setup bytes via OTIR)
+0388: 0E C0        LD C,C0h               ; C = DMA port (C0h)
+038A: C9           RET
+
+; --------------------------------------------------
+; 038B: dma_cmd_block
+; Z80 DMA command continuation block (13 bytes), sent via OTIR from setup_dma
+; Programs transfer count (256 bytes), port A address (FDC F1h), and enable
+038B: FF 00 14 28 95 F1 0C FF  .db  ; DMA: block length lo=FFh hi=00h, WR1 setup
+0393: 8A CF 01 CF 87           .db  ; DMA: WR2 port (F1h/FDC data), load+enable
+
+; --------------------------------------------------
+; 0398: dma_cmd_block2
+; Second DMA command block for side 2 / alternate read path
+0398: FF 00 14 28 95 F1 0C FF  .db  ; (same structure as block 1)
+03A0: 8A CF 05 CF 87           .db  ; DMA: WR2 port, force-ready, enable
+
+; --------------------------------------------------
+; 03A5: fdc_load
+; Main floppy loader: seek to track 0, read 19 sectors (side 0) then 14 sectors
+; (side 1) into RAM starting at E000h; return via RET after all sectors loaded
+fdc_load_0x03A5:
+03A5: 3E 13        LD A,13h               ; 19 (0x13) sectors to read on side 0
+03A7: 32 D8 FF     LD (FFD8h),A           ; store sector count limit
+03AA: AF           XOR A                  ; A = 0 (drive 0, side 0, cylinder 0)
+03AB: 32 D0 FF     LD (FFD0h),A           ; drive = 0
+03AE: CD 72 02     CALL 0272h             ; seek to cylinder 0, side 0 (SEEK + HALT)
+03B1: 21 00 E0     LD HL,E000h            ; load destination = E000h
+03B4: 22 D2 FF     LD (FFD2h),HL          ; store DMA destination address
+03B7: AF           XOR A                  ; A = 0
+03B8: 3C           INC A                  ; A = 1 (first sector = sector 1)
+03B9: 32 D4 FF     LD (FFD4h),A           ; store current sector number
+read_next_sector_0x03BC:
+03BC: CD 92 02     CALL 0292h             ; read one sector (DMA -> destination)
+03BF: C2 04 06     JP NZ,0604h            ; read error -> JP to print_floppy_error
+03C2: 11 00 01     LD DE,0100h            ; advance destination by 256 bytes
+03C5: 2A D2 FF     LD HL,(FFD2h)          ; load current DMA destination
+03C8: 19           ADD HL,DE              ; HL = next destination
+03C9: 22 D2 FF     LD (FFD2h),HL          ; update destination pointer
+03CC: 3A D4 FF     LD A,(FFD4h)           ; load current sector number
+03CF: 3C           INC A                  ; next sector
+03D0: 32 D4 FF     LD (FFD4h),A           ; store next sector number
+03D3: 21 D8 FF     LD HL,FFD8h            ; HL -> sector count limit
+03D6: BE           CP (HL)                ; compare sector# with limit
+03D7: C2 BC 03     JP NZ,03BCh            ; not done -> read next sector
+03DA: 3A D7 FF     LD A,(FFD7h)           ; load current side
+03DD: B7           OR A                   ; test side (0 = first pass)
+03DE: C0           RET NZ                 ; side 1 done -> return (both sides read)
+03DF: 3C           INC A                  ; A = 1 (switch to side 1)
+03E0: 32 D7 FF     LD (FFD7h),A           ; store side = 1
+03E3: 3E 0E        LD A,0Eh               ; 14 (0x0E) sectors on side 1
+03E5: 32 D8 FF     LD (FFD8h),A           ; update sector count limit
+03E8: C3 B7 03     JP 03B7h               ; continue reading from sector 1, side 1
+
+; --------------------------------------------------
+; 03EB: fdc_isr
+; FDC interrupt service routine (IM2 vector 0x18 -> 0x03EB)
+; Minimal ISR: re-enable interrupts, set Carry (normal completion), return
+fdc_isr_0x03EB:
+03EB: FB           EI                     ; re-enable interrupts (IFF1)
+03EC: 37           SCF                    ; set carry flag (signals normal FDC event)
+03ED: ED 4D        RETI                   ; return from interrupt, restore IFF1 from IFF2
+
+; --------------------------------------------------
+; 03EF: after_isr
+; Called when floppy boot path completes or fails: load sectors then back to prompt
+after_isr_0x03EF:
+03EF: CD A5 03     CALL 03A5h             ; run fdc_load (seek + read all sectors)
+03F2: C3 03 00     JP 0003h               ; return to main prompt
+
+; --------------------------------------------------
+; 03F5: boot_floppy
+; Floppy boot entry (user pressed 'F'): load sectors, check E000h, jump to boot code
+boot_floppy_0x03F5:
+03F5: CD A5 03     CALL 03A5h             ; run fdc_load (read all sectors to E000h)
+03F8: 3A 00 E0     LD A,(E000h)           ; read first byte of loaded boot code
+03FB: FE C3        CP C3h                 ; is it JP instruction (0xC3)?
+03FD: CA 0B 04     JP Z,040Bh             ; yes -> valid boot code, jump to it
+0400: FE 31        CP 31h                 ; is it LD SP,nn (0x31)?
+0402: CA 0B 04     JP Z,040Bh             ; yes -> valid boot code, jump to it
+0405: 21 C6 04     LD HL,04C6h            ; invalid: HL -> str_no_system
+0408: C3 10 06     JP 0610h               ; print "NO SYSTEM ON DISK" and halt
+040B: C3 00 F6     JP F600h               ; valid: jump to loaded boot code at F600h
+
+; --------------------------------------------------
+; 040E: fdc_check_busy
+; Read FDC motor/status latch; return bit 0 (busy flag) in A
+fdc_check_busy_0x040E:
+040E: DB 98        IN A,(98h)             ; read FDC motor/status port
+0410: E6 01        AND 01h                ; isolate busy bit 0
+0412: C9           RET                    ; Z = not busy, NZ = busy
+
+; --------------------------------------------------
+; 0413: fdc_motor_delay
+; Busy-wait delay loop (FFh * FFh iterations) to allow motor to spin up
+fdc_motor_delay_0x0413:
+0413: 3E FF        LD A,FFh               ; outer count = 255
+0415: C5           PUSH BC                ; save BC
+0416: 06 FF        LD B,FFh               ; inner count = 255
+motor_delay_inner_0x0418:
+0418: 05           DEC B                  ; decrement inner counter
+0419: C2 18 04     JP NZ,0418h            ; not zero -> inner loop
+041C: 3D           DEC A                  ; decrement outer counter
+041D: C2 16 04     JP NZ,0416h            ; not zero -> next inner loop
+0420: C1           POP BC                 ; restore BC
+0421: C9           RET
+
+; --------------------------------------------------
+; 0422: motor_enable
+; If FDC motor not running (busy bit 0 = 0), start motor and spin-up delay
+motor_enable_0x0422:
+0422: CD 0E 04     CALL 040Eh             ; check busy bit (Z = not busy)
+0425: C2 2D 04     JP NZ,042Dh            ; motor already running -> skip
+0428: D3 98        OUT (98h),A            ; write 0 to motor port (enable motor)
+042A: CD 13 04     CALL 0413h             ; wait for motor spin-up
+
+; --------------------------------------------------
+; 042D: floppy_setup_ctc
+; Configure CTC channels for FDC timing; also entered on floppy-not-ready error
+; After this RET, execution falls into isr_vec1c
+floppy_setup_ctc_0x042D:
+042D: AF           XOR A                  ; A = 0
+042E: D3 98        OUT (98h),A            ; stop FDC motor (write 0)
+0430: 3E 47        LD A,47h               ; CTC channel mode: counter, CLK/16, rising edge
+0432: D3 C8        OUT (C8h),A            ; program CTC channel 0
+0434: D3 C9        OUT (C9h),A            ; program CTC channel 1
+0436: 3E 82        LD A,82h               ; CTC channel 2 mode: timer, software trigger
+0438: D3 C8        OUT (C8h),A            ; program CTC channel 2
+043A: D3 C9        OUT (C9h),A            ; program CTC channel 3
+043C: 3E A7        LD A,A7h               ; CTC time constant select
+043E: D3 CA        OUT (CAh),A            ; write to CTC channel 2
+0440: 3E FF        LD A,FFh               ; time constant = 255
+0442: D3 CA        OUT (CAh),A            ; load CTC channel 2 time constant
+0444: C9           RET                    ; return (fall into isr_vec1c context)
+
+; --------------------------------------------------
+; 0445: isr_vec1c
+; ISR for IM2 vector 0x1C (CTC interrupt): EI; SCF; CCF; RETI
+; Returns with Carry CLEARED (unlike FDC ISR which returns Carry SET)
+isr_vec1c_0x0445:
+0445: FB           EI                     ; re-enable interrupts
+0446: 37           SCF                    ; set carry
+0447: 3F           CCF                    ; complement carry -> Carry = 0
+0448: ED 4D        RETI                   ; return from interrupt
+
+; --------------------------------------------------
+; 044A: str_floppy_not_ready
+; String: LF CR 'FLOPPY DISK NOT READY !!!!' NUL
+044A: 0A 0D 46 4C 4F 50 50 59  .db  ; |..FLOPPY|
+0452: 20 44 49 53 4B 20 4E 4F  .db  ; | DISK NO|
+045A: 54 20 52 45 41 44 59 20  .db  ; |T READY |
+0462: 21 21 21 21 00           .db  ; |!!!!.|
+
+; --------------------------------------------------
+; 0467: print_sio_string
+; Print null-terminated string from (HL) directly via SIO polling (no CALL stack)
+print_sio_string_0x0467:
+0467: 7E           LD A,(HL)              ; load character from string
+0468: 4F           LD C,A                 ; save character in C
+0469: B7           OR A                   ; test for NUL
+046A: C8           RET Z                  ; NUL -> done, return
+
+; --------------------------------------------------
+; 046B: print_sio_tx
+; Wait for SIO TX ready then send character, advance pointer, loop
+046B: DB D9        IN A,(D9h)             ; read SIO channel A status
+046D: E6 04        AND 04h                ; test TX buffer empty (bit 2)
+046F: CA 6B 04     JP Z,046Bh             ; not ready -> wait
+0472: 79           LD A,C                 ; restore character from C
+0473: D3 D8        OUT (D8h),A            ; transmit character via SIO
+0475: 23           INC HL                 ; advance string pointer
+0476: C3 67 04     JP 0467h               ; next character
+
+; --------------------------------------------------
+; 0479: hdd_boot_entry
+; Hard disk boot entry (user pressed 'A'): load sector 0, verify, copy to 0xC000
+hdd_boot_entry_0x0479:
+0479: CD 3E 05     CALL 053Eh             ; hdd_init: reset SASI, send READ command
+047C: 3A 00 E0     LD A,(E000h)           ; read first byte of loaded HDD boot block
+047F: FE 31        CP 31h                 ; is it LD SP,nn (0x31)?
+0481: CA 8A 04     JP Z,048Ah             ; valid signature -> proceed to copy
+0484: 21 C6 04     LD HL,04C6h            ; invalid: HL -> str_no_system
+0487: C3 10 06     JP 0610h               ; print "NO SYSTEM ON DISK" and halt
+048A: 21 00 00     LD HL,0000h            ; source = 0x0000 (ROM start)
+048D: 11 00 20     LD DE,2000h            ; destination = 0x2000
+0490: 01 00 08     LD BC,0800h            ; count = 0x0800 bytes (2KB ROM copy)
+0493: ED B0        LDIR                   ; copy ROM image to 0x2000
+0495: 21 A8 06     LD HL,06A8h            ; source = ROM data at 06A8h (HDD config)
+0498: 11 00 C0     LD DE,C000h            ; destination = 0xC000
+049B: 01 87 00     LD BC,0087h            ; count = 0x87 bytes
+049E: ED B0        LDIR                   ; copy HDD config table to C000h
+04A0: F3           DI                     ; disable interrupts for IM2 reprogramming
+04A1: 3E 03        LD A,03h               ; CTC reset/counter mode
+04A3: D3 C8        OUT (C8h),A            ; reset CTC channel 0
+04A5: D3 C9        OUT (C9h),A            ; reset CTC channel 1
+04A7: 21 00 C0     LD HL,C000h            ; HL = new IM2 vector page (0xC000)
+04AA: 7C           LD A,H                 ; A = 0xC0 (high byte = I register value)
+04AB: ED 47        LD I,A                 ; I = 0xC0 -> IM2 table now at 0xC000
+04AD: 7D           LD A,L                 ; A = 0x00 (new FDC vector offset)
+04AE: D3 E8        OUT (E8h),A            ; update FDC interrupt vector latch
+04B0: D3 C8        OUT (C8h),A            ; CTC channel 0: write vector 0x00
+04B2: 3E 47        LD A,47h               ; CTC channel mode byte
+04B4: D3 C8        OUT (C8h),A            ; program CTC channel 2
+04B6: 3E FF        LD A,FFh               ; time constant = 255
+04B8: D3 C8        OUT (C8h),A            ; load CTC channel 2 time constant
+04BA: 3E C7        LD A,C7h               ; CTC channel 3 mode byte
+04BC: D3 C9        OUT (C9h),A            ; program CTC channel 3
+04BE: 3E 64        LD A,64h               ; time constant = 100
+04C0: D3 C9        OUT (C9h),A            ; load CTC channel 3 time constant
+04C2: FB           EI                     ; enable interrupts
+04C3: C3 00 F6     JP F600h               ; jump to loaded HDD boot code at F600h
+
+; --------------------------------------------------
+; 04C6: str_no_system
+; String: CR LF 'NO SYSTEM ON DISK' NUL — displayed when boot sector signature invalid
+04C6: 0D 0A 4E 4F 20 53 59 53  .db  ; |..NO SYS|
+04CE: 54 45 4D 20 4F 4E 20 44  .db  ; |TEM ON D|
+04D6: 49 53 4B 00              .db  ; |ISK.|
+
+; --------------------------------------------------
+; 04DA: hdd_retry
+; Hard disk retry path: re-run hdd_init then return to prompt
+hdd_retry_0x04DA:
+04DA: CD 3E 05     CALL 053Eh             ; hdd_init (reset SASI, send READ)
+04DD: C3 03 00     JP 0003h               ; back to main prompt
+
+; --------------------------------------------------
+; 04E0: hdd_alt_path
+; Alternate HDD initialisation: reset SASI, configure CTC for SASI timing, EI
+hdd_alt_path_0x04E0:
+04E0: AF           XOR A                  ; A = 0
+04E1: D3 12        OUT (12h),A            ; reset SASI controller (port 12h)
+04E3: F3           DI                     ; disable interrupts
+04E4: 3E 47        LD A,47h               ; CTC channel mode
+04E6: D3 C8        OUT (C8h),A            ; program CTC channel 0
+04E8: 3E FF        LD A,FFh               ; time constant = 255
+04EA: D3 C8        OUT (C8h),A            ; load CTC channel 0 time constant
+04EC: 3E C7        LD A,C7h               ; CTC channel 3 mode
+04EE: D3 C9        OUT (C9h),A            ; program CTC channel 3
+04F0: 3E 50        LD A,50h               ; time constant = 80
+04F2: D3 C9        OUT (C9h),A            ; load CTC channel 3 time constant
+04F4: FB           EI                     ; enable interrupts
+04F5: CD 2F 05     CALL 052Fh             ; read HDD status / wait for ready
+04F8: 21 9C 06     LD HL,069Ch            ; HL -> SASI READ command block
+04FB: CD 70 05     CALL 0570h             ; send command block to SASI (hdd_write_cmd)
+04FE: CD 95 05     CALL 0595h             ; read SASI result byte
+0501: C2 F8 04     JP NZ,04F8h            ; result not ok -> retry from command
+0504: 3E 03        LD A,03h               ; CTC reset mode
+0506: D3 C9        OUT (C9h),A            ; reset CTC channel 3
+0508: C9           RET
+
+; --------------------------------------------------
+; 0509: hdd_isr
+; ISR for IM2 vector 0x1A (HDD/SIO interrupt path)
+hdd_isr_0x0509:
+0509: 3E 03        LD A,03h               ; CTC reset mode
+050B: D3 C9        OUT (C9h),A            ; reset CTC channel 3
+050D: CD 17 05     CALL 0517h             ; call reti_helper (clears daisy-chain IEO)
+0510: FB           EI                     ; re-enable interrupts
+0511: 21 19 05     LD HL,0519h            ; HL -> str_hard_disk_not_ready
+0514: C3 10 06     JP 0610h               ; print "HARD DISK NOT READY" and halt
+
+; --------------------------------------------------
+; 0517: reti_helper
+; RETI called as a subroutine to clear the interrupt-serviced state in the daisy chain
+reti_helper_0x0517:
+0517: ED 4D        RETI                   ; return from interrupt (clears IEO in daisy chain)
+
+; --------------------------------------------------
+; 0519: str_hard_disk_not_ready
+; String: LF CR 'HARD DISK NOT READY' NUL
+0519: 0A 0D 48 41 52 44 20 44  .db  ; |..HARD D|
+0521: 49 53 4B 20 4E 4F 54 20  .db  ; |ISK NOT |
+0529: 52 45 41 44 59 00        .db  ; |READY.|
+
+; --------------------------------------------------
+; 052F: hdd_wait_ready
+; Wait for SASI controller to assert BSY (target selected and busy)
+hdd_wait_ready_0x052F:
+052F: 21 8E 06     LD HL,068Eh            ; HL -> SASI identify command block
+0532: CD 85 05     CALL 0585h             ; send identify command to SASI
+0535: CD 95 05     CALL 0595h             ; read SASI status byte
+0538: C8           RET Z                  ; Z = ready (status 0) -> return ok
+0539: 3E 34        LD A,34h               ; error code 0x34
+053B: C3 0A 06     JP 060Ah               ; print HDD malfunction error
+
+; --------------------------------------------------
+; 053E: hdd_init
+; Full HDD initialisation: reset SASI, program DMA, send READ command, read data
+hdd_init_0x053E:
+053E: CD E0 04     CALL 04E0h             ; hdd_alt_path: reset SASI, configure CTC
+0541: 3E C3        LD A,C3h               ; DMA: reset command (C3h)
+0543: D3 C0        OUT (C0h),A            ; write to Z80 DMA (reset)
+0545: 21 A2 06     LD HL,06A2h            ; HL -> SASI READ(0) command block (6 bytes)
+0548: CD 70 05     CALL 0570h             ; send 6-byte SASI READ command
+054B: DB 10        IN A,(10h)             ; read SASI status register
+054D: E6 40        AND 40h                ; test bit 6 (BSY: target busy / data phase)
+054F: CA 4B 05     JP Z,054Bh             ; not busy -> keep waiting
+0552: DB 10        IN A,(10h)             ; read SASI status again
+0554: E6 10        AND 10h                ; test bit 4 (MSG/CD: command vs data phase)
+0556: C2 67 05     JP NZ,0567h            ; in command phase -> go read status
+0559: 3E 22        LD A,22h               ; SASI data-phase acknowledge byte
+055B: D3 10        OUT (10h),A            ; write acknowledge to SASI control
+055D: CD DC 05     CALL 05DCh             ; send SASI command block (via 05DCh)
+0560: DB 10        IN A,(10h)             ; read SASI status
+0562: E6 10        AND 10h                ; test phase-change bit
+0564: CA 60 05     JP Z,0560h             ; phase not done -> wait
+hdd_read_status_0x0567:
+0567: CD 95 05     CALL 0595h             ; read SASI result/status byte
+056A: C8           RET Z                  ; Z = success (status 0) -> return ok
+056B: 3E 32        LD A,32h               ; error code 0x32
+056D: C3 0A 06     JP 060Ah               ; print HDD malfunction error
+
+; --------------------------------------------------
+; 0570: hdd_write_cmd
+; Send null-terminated command block from (HL) to SASI: wait REQ, write each byte
+hdd_write_cmd_0x0570:
+0570: CD B2 05     CALL 05B2h             ; hdd_req_assert: assert REQ on SASI bus
+0573: CD CE 05     CALL 05CEh             ; hdd_req_wait: wait for SASI REQ (ready)
+0576: 47           LD B,A                 ; B = SASI status byte
+0577: E6 10        AND 10h                ; test bit 4 (MSG/input phase)
+0579: C8           RET Z                  ; phase ended (MSG=0) -> done sending
+057A: 78           LD A,B                 ; restore status
+057B: E6 40        AND 40h                ; test bit 6 (BSY: target still busy)
+057D: C0           RET NZ                 ; target released BSY -> done
+057E: 7E           LD A,(HL)              ; load next command byte from block
+057F: D3 11        OUT (11h),A            ; write byte to SASI data register (port 11h)
+0581: 23           INC HL                 ; advance command pointer
+0582: C3 73 05     JP 0573h               ; wait for next REQ and send next byte
+
+; --------------------------------------------------
+; 0585: hdd_write_cmd2
+; Alternate send: write bytes until SASI releases BSY (no MSG phase check)
+hdd_write_cmd2_0x0585:
+0585: CD B2 05     CALL 05B2h             ; hdd_req_assert
+0588: CD CE 05     CALL 05CEh             ; hdd_req_wait
+058B: E6 40        AND 40h                ; test BSY bit
+058D: C0           RET NZ                 ; BSY released -> done
+058E: 7E           LD A,(HL)              ; load next byte
+058F: D3 11        OUT (11h),A            ; write to SASI data port
+0591: 23           INC HL                 ; advance pointer
+0592: C3 88 05     JP 0588h               ; loop
+
+; --------------------------------------------------
+; 0595: hdd_read_data
+; Read one SASI data byte: wait REQ, read byte, check phase bits, return byte in A
+hdd_read_data_0x0595:
+0595: CD CE 05     CALL 05CEh             ; hdd_req_wait: wait for SASI REQ
+0598: E6 10        AND 10h                ; test bit 4 (MSG/input phase)
+059A: C2 A2 05     JP NZ,05A2h            ; phase active -> read byte
+059D: 3E 42        LD A,42h               ; error code 0x42
+059F: C3 0A 06     JP 060Ah               ; unexpected phase -> print error
+read_sasi_byte_0x05A2:
+05A2: DB 11        IN A,(11h)             ; read data byte from SASI data port
+05A4: 47           LD B,A                 ; save data byte in B
+05A5: 23           INC HL                 ; advance buffer pointer
+05A6: CD CE 05     CALL 05CEh             ; hdd_req_wait (wait for next REQ)
+05A9: DB 11        IN A,(11h)             ; read next data byte (status)
+05AB: AF           XOR A                  ; A = 0 (prepare ACK)
+05AC: D3 10        OUT (10h),A            ; write 0 to SASI control (acknowledge)
+05AE: 78           LD A,B                 ; restore first data byte
+05AF: E6 03        AND 03h                ; mask to status bits 1:0
+05B1: C9           RET                    ; return status in A (Z = success)
+
+; --------------------------------------------------
+; 05B2: hdd_req_assert
+; Assert REQ on SASI bus: check not busy, write 01h then 02h to SASI control
+hdd_req_assert_0x05B2:
+05B2: DB 10        IN A,(10h)             ; read SASI status register
+05B4: E6 08        AND 08h                ; test bit 3 (BSY: target busy)
+05B6: CA BE 05     JP Z,05BEh             ; not busy -> proceed to assert REQ
+05B9: 3E 41        LD A,41h               ; error code 0x41 (SASI busy timeout)
+05BB: C3 0A 06     JP 060Ah               ; print HDD malfunction error
+hdd_req_select_0x05BE:
+05BE: 3E 01        LD A,01h               ; SASI: assert SEL (select target)
+05C0: D3 10        OUT (10h),A            ; write to SASI control port
+05C2: DB 10        IN A,(10h)             ; read SASI status
+05C4: E6 08        AND 08h                ; wait for BSY (target acknowledges)
+05C6: CA C2 05     JP Z,05C2h             ; BSY not set -> keep waiting
+05C9: 3E 02        LD A,02h               ; SASI: release SEL, assert ATN
+05CB: D3 10        OUT (10h),A            ; write to SASI control port
+05CD: C9           RET
+
+; --------------------------------------------------
+; 05CE: hdd_req_wait
+; Poll SASI status until REQ is asserted (bit 7 = 1); return status byte in A
+hdd_req_wait_0x05CE:
+05CE: DB 10        IN A,(10h)             ; read SASI status register
+05D0: 17           RLA                    ; rotate left: bit 7 (REQ) -> carry
+05D1: D2 CE 05     JP NC,05CEh            ; carry clear (REQ=0) -> keep polling
+05D4: 1F           RRA                    ; rotate right: restore original bits
+05D5: C9           RET                    ; return with SASI status in A
+
+; --------------------------------------------------
+; 05D6: hdd_send_reset_cmd
+; Send SASI reset/identify command block from 05F5h (15 bytes via OTIR to C0h)
+hdd_send_reset_cmd_0x05D6:
+05D6: 21 F5 05     LD HL,05F5h            ; HL -> second SASI command block
+05D9: C3 DF 05     JP 05DFh               ; -> send_sasi_block
+
+; --------------------------------------------------
+; 05DC: hdd_send_read_cmd
+; Send SASI READ command block from 05E6h (15 bytes via OTIR to C0h)
+hdd_send_read_cmd_0x05DC:
+05DC: 21 E6 05     LD HL,05E6h            ; HL -> first SASI command block
+
+; --------------------------------------------------
+; 05DF: send_sasi_block
+; Send 15 bytes from (HL) to DMA/SASI via OTIR (port C0h)
+send_sasi_block_0x05DF:
+05DF: 0E C0        LD C,C0h               ; C = DMA/SASI port C0h
+05E1: 06 0F        LD B,0Fh               ; B = 15 bytes to send
+05E3: ED B3        OTIR                   ; send 15 bytes via OTIR
+05E5: C9           RET
+
+; --------------------------------------------------
+; 05E6: sasi_read_cmd_block
+; SASI READ command block (15 bytes, sent to DMA port C0h)
+05E6: 79 00 E0 FF 1E 14 28 95  .db  ; DMA: WR0 port-B->mem, dest=E000h, len=FF1Eh
+05EE: 11 00 8A CF 01 CF 87     .db  ; DMA: WR1 src=port 11h, WR4/5/6 enable
+
+; --------------------------------------------------
+; 05F5: sasi_reset_cmd_block
+; Second SASI command block (15 bytes, used for reset/identify)
+05F5: 79 00 E0 FF 1E 14 28 95  .db  ; DMA: identical structure
+05FD: 11 00 8A CF 05 CF 87     .db  ; DMA: WR5 force-ready variant
+
+; --------------------------------------------------
+; 0604: print_floppy_error
+; Load floppy malfunction string pointer and jump to print_string2
+print_floppy_error_0x0604:
+0604: 21 24 06     LD HL,0624h            ; HL -> str_floppy_malfunction
+0607: C3 10 06     JP 0610h               ; print error string and halt at prompt
+
+; --------------------------------------------------
+; 060A: print_hdd_error
+; Load HDD malfunction string pointer and jump to print_string2
+print_hdd_error_0x060A:
+060A: 21 5A 06     LD HL,065Ah            ; HL -> str_hdd_malfunction
+060D: C3 10 06     JP 0610h               ; print error string and halt at prompt
+
+; --------------------------------------------------
+; 0610: print_string2
+; Print null-terminated string from (HL) via SIO, then restart main prompt
+; (Identical logic to print_string_0x467 but returns to prompt on NUL)
+print_string2_0x0610:
+0610: 7E           LD A,(HL)              ; load next character
+0611: 4F           LD C,A                 ; save in C
+0612: B7           OR A                   ; test NUL
+0613: CA 03 00     JP Z,0003h             ; NUL -> jump to main_prompt (restart)
+0616: DB D9        IN A,(D9h)             ; read SIO channel A status
+0618: E6 04        AND 04h                ; test TX buffer empty (bit 2)
+061A: CA 16 06     JP Z,0616h             ; not ready -> wait
+061D: 79           LD A,C                 ; restore character
+061E: D3 D8        OUT (D8h),A            ; transmit via SIO
+0620: 23           INC HL                 ; advance pointer
+0621: C3 10 06     JP 0610h               ; next character
+
+; --------------------------------------------------
+; 0624: str_floppy_malfunction
+; String: CR LF 'FLOPPY DISK MALFUNCTION !!!' CR LF 'RETRY WITH COMMAND 'F'' NUL
+0624: 0D 0A 46 4C 4F 50 50 59  .db  ; |..FLOPPY|
+062C: 20 44 49 53 4B 20 4D 41  .db  ; | DISK MA|
+0634: 4C 46 55 4E 43 54 49 4F  .db  ; |LFUNCTIO|
+063C: 4E 20 21 21 21 0D 0A 52  .db  ; |N !!!..R|
+0644: 45 54 52 59 20 57 49 54  .db  ; |ETRY WIT|
+064C: 48 20 43 4F 4D 4D 41 4E  .db  ; |H COMMAN|
+0654: 44 20 27 46 27 00        .db  ; |D 'F'.|
+
+; --------------------------------------------------
+; 065A: str_hdd_malfunction
+; String: CR LF 'HARD DISK MALFUNCTION !!!' CR LF 'RETRY WITH COMMAND 'A'' NUL
+065A: 0D 0A 48 41 52 44 20 44  .db  ; |..HARD D|
+0662: 49 53 4B 20 4D 41 4C 46  .db  ; |ISK MALF|
+066A: 55 4E 43 54 49 4F 4E 20  .db  ; |UNCTION |
+0672: 21 21 21 0D 0A 52 45 54  .db  ; |!!!..RET|
+067A: 52 59 20 57 49 54        .db  ; |RY WIT|
+0680: 48 20 43 4F 4D 4D 41 4E  .db  ; |H COMMAN|
+0688: 44 20 27 41 27 00        .db  ; |D 'A'.|
+
+; --------------------------------------------------
+; 068E: sasi_identify_cmd
+; 6-byte SASI IDENTIFY/REQUEST SENSE command block (HL=068Eh at 052Fh)
+068E: 0C 00 00 00 00 00        .db  ; SASI cmd 0x0C (IDENTIFY / REQUEST SENSE)
+
+; --------------------------------------------------
+; 0694: config_data
+; Hardware timing and drive geometry configuration table
+0694: 01 32 04 00 80 00 40 0B  .db  ; step-rate, sectors/track, heads, config bytes
+069C: 01 00 00 00 00 00        .db  ; config continuation (count, flags)
+
+; --------------------------------------------------
+; 06A2: sasi_read_cmd
+; 6-byte SASI READ(0) command block (HL=06A2h at 0545h)
+; Reads 31 blocks (0x1F) from LBA 0 into E000h via DMA
+06A2: 08 00 00 00 1F 00        .db  ; SASI READ: cmd=08h, LBA=0, count=31 blocks
+
+; --------------------------------------------------
+; 06A8: hdd_runtime_config
+; 0x87 bytes copied to 0xC000 by hdd_boot_entry for use by the loaded HDD boot code
+; Decoded as Z80 instructions (executed after copy, when I=0xC0, table at C000h)
+06A8: 04 C0        .db          ; INC B / RET NZ — IM2 vector stubs at C000h
+06AA: 04 C0        .db          ; INC B / RET NZ — second IM2 vector entry
+06AC: F3           .db          ; DI  — disable interrupts
+06AD: 3E 03        .db          ; LD A,03h  — CTC reset value
+06AF: D3 C8        .db          ; OUT (C8h),A  — reset CTC channel 0
+06B1: D3 C9        .db          ; OUT (C9h),A  — reset CTC channel 1
+06B3: D3 88        .db          ; OUT (88h),A  — reset bank control
+06B5: 21 00 20     .db          ; LD HL,2000h  — source address for ROM copy
+06B8: 11 00 00     .db          ; LD DE,0000h  — destination address 0x0000
+06BB: 01 00 08     .db          ; LD BC,0800h  — copy 2KB (ROM image)
+06BE: ED B0        .db          ; LDIR  — copy ROM to low RAM
+06C0: 21 18 02     .db          ; LD HL,0218h  — IM2 vector table base
+06C3: 7D           .db          ; LD A,L  — A = 0x18 (FDC vector offset)
+06C4: D3 E8        .db          ; OUT (E8h),A  — latch FDC interrupt vector
+06C6: D3 C8        .db          ; OUT (C8h),A  — CTC channel 0 vector
+06C8: 7C           .db          ; LD A,H  — A = 0x02
+06C9: ED 47        .db          ; LD I,A  — I = 0x02 (IM2 page)
+06CB: FB           .db          ; EI  — enable interrupts
+06CC: CD 17 05     .db          ; CALL 0517h  — call reti_helper
+06CF: 21 D5 06     .db          ; LD HL,06D5h  — HL -> str_loading_error
+06D2: C3 10 06     .db          ; JP 0610h  — print error and restart
+
+; --------------------------------------------------
+; 06D5: str_loading_error
+; String: LF CR 'LOADING ERROR FROM HARD DISK' LF CR 'TRY TO LOAD SYSTEM FROM
+;         FLOPPY  ( READ MANUAL CAREFULLY )' NUL
+06D5: 0A 0D 4C 4F 41 44 49 4E  .db  ; |..LOADIN|
+06DD: 47 20 45 52 52 4F 52 20  .db  ; |G ERROR |
+06E5: 46 52 4F 4D 20 48 41 52  .db  ; |FROM HAR|
+06ED: 44 20 44 49 53 4B 0A 0D  .db  ; |D DISK..|
+06F5: 54 52 59 20 54 4F 20 4C  .db  ; |TRY TO L|
+06FD: 4F 41 44 20 53 59 53 54  .db  ; |OAD SYST|
+0705: 45 4D 20 46 52 4F 4D 20  .db  ; |EM FROM |
+070D: 46 4C 4F 50 50 59 20 20  .db  ; |FLOPPY  |
+0715: 28 20 52 45 41 44 20 4D  .db  ; |( READ M|
+071D: 41 4E 55 41 4C 20 43 41  .db  ; |ANUAL CA|
+0725: 52 45 46 55 4C 4C 59 20  .db  ; |REFULLY |
+072D: 29 00 FF                 .db  ; |).|
+
+; --------------------------------------------------
+; 0730: padding_0730
+; End-of-ROM padding: alternating 55h/AAh signature pattern
+0730: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0738: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0740: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0748: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0750: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0758: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0760: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0768: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0770: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0778: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0780: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0788: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0790: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+0798: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07A0: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07A8: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07B0: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07B8: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07C0: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07C8: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07D0: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07D8: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07E0: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07E8: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07F0: 55 AA 55 AA 55 AA 55 AA  .db  ; |U.U.U.U.|
+07F8: 55 AA 55 AA 90 44 FF FF  .db  ; |U.U..D..| (last 4 bytes: CRT config at 07FCh)

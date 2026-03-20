@@ -36,7 +36,6 @@ const char *cmd_name(uint8_t code)
 void panels::render_fdc(partner &emu)
 {
     ImGui::Begin("i8272 FDC", nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoCollapse);
 
     const i8272_t &fdc = emu.get_fdc();
@@ -66,8 +65,10 @@ void panels::render_fdc(partner &emu)
                 fdc.st0, fdc.st1, fdc.st2);
 
     // Interrupt
-    ImGui::Text("INT: %s  Vec: %02X",
+    ImGui::Text("INT: sense=%s irq=%s delay=%u vec=%02X",
                 fdc.int_pending ? "PEND" : "----",
+                fdc.irq_request ? "REQ" : "---",
+                fdc.irq_delay,
                 emu.get_fdc_int_vector());
 
     ImGui::Separator();

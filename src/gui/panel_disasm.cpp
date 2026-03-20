@@ -155,7 +155,6 @@ std::string io_comment(const partner &emu, uint16_t pc)
 void panels::render_disasm(partner &emu, bool &paused, dbg_action &action)
 {
     ImGui::Begin("Disassembly", nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoCollapse);
 
     // Debug toolbar

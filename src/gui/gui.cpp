@@ -7,9 +7,11 @@
 #include "panel_pio.hpp"
 #include "panel_dma.hpp"
 #include "panel_rtc.hpp"
+#include "panel_xebec.hpp"
 #include "../partner.hpp"
 
 #include <imgui.h>
+#include <imgui_internal.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
 #include <SDL.h>
@@ -49,8 +51,16 @@ bool gui::init(const std::string &title, int width, int height)
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
+    io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
+    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
-    ImGui::StyleColorsClassic();
+    ImGui::StyleColorsDark();
+    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+        ImGuiStyle &style = ImGui::GetStyle();
+        style.WindowRounding = 0.0f;
+        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
+    }
 
     ImGui_ImplSDL2_InitForOpenGL(window_, gl_context_);
     ImGui_ImplOpenGL3_Init("#version 330");
@@ -159,20 +169,6 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 {
     display_.update();
 
-    int win_w, win_h;
-    SDL_GetWindowSize(window_, &win_w, &win_h);
-
-    float menu_h = ImGui::GetFrameHeight();
-    float panel_w = 620.0f;
-    float main_w = (float)win_w - panel_w;
-    float main_h = (float)win_h - menu_h;
-    float reg_h = 280.0f;
-    float sio_h = 240.0f;
-    float pio_h = 220.0f;
-    float dma_h = 220.0f;
-    float rtc_h = 200.0f;
-    float fdc_h = 200.0f;
-
     // Menu bar
     if (ImGui::BeginMainMenuBar())
     {
@@ -199,83 +195,56 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             ImGui::MenuItem("Z80 SIO", nullptr, &show_sio_);
             ImGui::MenuItem("Z80 PIO", nullptr, &show_pio_);
             ImGui::MenuItem("Z80 DMA", nullptr, &show_dma_);
+            ImGui::MenuItem("Xebec S1410", nullptr, &show_xebec_);
             ImGui::MenuItem("MM58167 RTC", nullptr, &show_rtc_);
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
     }
 
-    // Display panel (always visible, fills main area)
-    ImGui::SetNextWindowPos({0, menu_h});
-    ImGui::SetNextWindowSize({main_w, main_h});
+    // Dockspace for dockable panels.
+    const ImGuiID dockspace_id = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_None);
+    if (!startup_layout_applied_)
+    {
+        startup_layout_applied_ = true;
+        ImGui::DockBuilderRemoveNode(dockspace_id);
+        ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
+        ImGui::DockBuilderSetNodeSize(dockspace_id, ImGui::GetMainViewport()->Size);
+
+        ImGuiID dock_main = dockspace_id;
+        ImGuiID dock_right = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Right, 0.32f, nullptr, &dock_main);
+
+        ImGui::DockBuilderDockWindow("Partner Display", dock_main);
+        ImGui::DockBuilderDockWindow("Disassembly", dock_right);
+        ImGui::DockBuilderFinish(dockspace_id);
+    }
+
+    // Panels
     panels::render_display(display_);
 
-    float right_y = menu_h;
-
-    // Registers panel
     if (show_registers_)
-    {
-        ImGui::SetNextWindowPos({main_w, right_y});
-        ImGui::SetNextWindowSize({panel_w, reg_h});
         panels::render_registers(emu);
-        right_y += reg_h;
-    }
 
     if (show_sio_)
-    {
-        ImGui::SetNextWindowPos({main_w, right_y});
-        ImGui::SetNextWindowSize({panel_w, sio_h});
         panels::render_sio(emu, key_buf_);
-        right_y += sio_h;
-    }
 
     if (show_pio_)
-    {
-        ImGui::SetNextWindowPos({main_w, right_y});
-        ImGui::SetNextWindowSize({panel_w, pio_h});
         panels::render_pio(emu);
-        right_y += pio_h;
-    }
 
     if (show_dma_)
-    {
-        ImGui::SetNextWindowPos({main_w, right_y});
-        ImGui::SetNextWindowSize({panel_w, dma_h});
         panels::render_dma(emu);
-        right_y += dma_h;
-    }
 
     if (show_rtc_)
-    {
-        ImGui::SetNextWindowPos({main_w, right_y});
-        ImGui::SetNextWindowSize({panel_w, rtc_h});
         panels::render_rtc(emu);
-        right_y += rtc_h;
-    }
 
-    float disasm_h = main_h - (right_y - menu_h);
-    if (show_fdc_)
-    {
-        disasm_h -= fdc_h;
-    }
+    if (show_xebec_)
+        panels::render_xebec(emu);
 
-    // Disassembly panel
     if (show_disasm_)
-    {
-        if (disasm_h < 100.0f) disasm_h = 100.0f;
-        ImGui::SetNextWindowPos({main_w, right_y});
-        ImGui::SetNextWindowSize({panel_w, disasm_h});
         panels::render_disasm(emu, paused, action);
-    }
 
-    // FDC panel (always at bottom when visible)
     if (show_fdc_)
-    {
-        float fdc_y = menu_h + main_h - fdc_h;
-        ImGui::SetNextWindowPos({main_w, fdc_y});
-        ImGui::SetNextWindowSize({panel_w, fdc_h});
         panels::render_fdc(emu);
-    }
 }
 
 std::vector<uint8_t> gui::drain_keys()
@@ -296,5 +265,13 @@ void gui::end_frame()
     glClear(GL_COLOR_BUFFER_BIT);
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+    if (ImGui::GetIO().ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
+    {
+        SDL_Window *backup_window = SDL_GL_GetCurrentWindow();
+        SDL_GLContext backup_context = SDL_GL_GetCurrentContext();
+        ImGui::UpdatePlatformWindows();
+        ImGui::RenderPlatformWindowsDefault();
+        SDL_GL_MakeCurrent(backup_window, backup_context);
+    }
     SDL_GL_SwapWindow(window_);
 }

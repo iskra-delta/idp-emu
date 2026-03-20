@@ -261,6 +261,20 @@ void display::draw_text(int col, int row, const char *text)
     }
 }
 
+void display::fill_char_cell(int col, int row)
+{
+    if (col < 0 || col >= COLS || row < 0 || row >= ROWS)
+        return;
+
+    const int x0 = col * CHAR_W;
+    const int y0 = row * CHAR_H;
+    for (int y = y0; y < y0 + CHAR_H; y++)
+    {
+        for (int x = x0; x < x0 + CHAR_W; x++)
+            set_pixel(x, y, true);
+    }
+}
+
 GLuint display::compile_shader(const char *vert_src, const char *frag_src)
 {
     GLuint vs = glCreateShader(GL_VERTEX_SHADER);

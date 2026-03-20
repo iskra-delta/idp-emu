@@ -1,15 +1,4 @@
 // main.cpp - Partner emulator entry point
-#define CHIPS_IMPL
-#include "z80.h"
-#include "z80sio.h"
-#include "z80pio.h"
-#include "z80ctc.h"
-#include "z80dma.h"
-#include "i8272.h"
-
-#define CHIPS_UTIL_IMPL
-#include "z80dasm.h"
-
 #include "partner_crt.hpp"
 #include "debugger.hpp"
 #include "gui/gui.hpp"
@@ -17,24 +6,30 @@
 #include <iostream>
 #include <string>
 #include <cstring>
+#include <filesystem>
 
 static constexpr uint32_t CPU_CLOCK_HZ = 4000000;
 static constexpr uint32_t TARGET_FPS = 60;
 static constexpr uint32_t TICKS_PER_FRAME = CPU_CLOCK_HZ / TARGET_FPS;
+static constexpr uint32_t RUN_TICK_SLICE = 8192;
 
 void print_usage(const char *prog)
 {
-    std::cerr << "Usage: " << prog << " [rom_file] [options]\n";
+    std::cerr << "Usage: " << prog << " [options]\n";
     std::cerr << "Options:\n";
     std::cerr << "  --help           Show this help\n";
+    std::cerr << "  --rom FILE       ROM file (default: roms/partner_crt.rom)\n";
+    std::cerr << "  --disk FILE      Boot disk image for drive A: (default: disks/boot.img)\n";
+    std::cerr << "  --hdd FILE       Hard disk image for Xebec/SASI controller\n";
+    std::cerr << "                   (not loaded unless explicitly requested)\n";
     std::cerr << "  --terminal TYPE  Terminal profile: vt52|vt100\n";
-    std::cerr << "Default ROM: roms/partner_crt.rom\n";
 }
 
 int main(int argc, char **argv)
 {
-    std::string rom_file = "roms/partner_crt.rom";
-    bool rom_set_from_cli = false;
+    std::string rom_file  = "roms/partner_crt.rom";
+    std::string disk_file = "disks/boot.img";
+    std::string hdd_file;
     terminal_profile term_profile = terminal_profile::vt52;
 
     for (int i = 1; i < argc; i++)
@@ -43,6 +38,21 @@ int main(int argc, char **argv)
         {
             print_usage(argv[0]);
             return 0;
+        }
+        else if (strcmp(argv[i], "--rom") == 0)
+        {
+            if ((i + 1) >= argc) { std::cerr << "Error: --rom requires a value\n"; return 1; }
+            rom_file = argv[++i];
+        }
+        else if (strcmp(argv[i], "--disk") == 0)
+        {
+            if ((i + 1) >= argc) { std::cerr << "Error: --disk requires a value\n"; return 1; }
+            disk_file = argv[++i];
+        }
+        else if (strcmp(argv[i], "--hdd") == 0)
+        {
+            if ((i + 1) >= argc) { std::cerr << "Error: --hdd requires a value\n"; return 1; }
+            hdd_file = argv[++i];
         }
         else if (strcmp(argv[i], "--terminal") == 0)
         {
@@ -63,11 +73,6 @@ int main(int argc, char **argv)
                 return 1;
             }
         }
-        else if (!rom_set_from_cli)
-        {
-            rom_file = argv[i];
-            rom_set_from_cli = true;
-        }
         else
         {
             std::cerr << "Error: Unknown option: " << argv[i] << "\n";
@@ -79,11 +84,16 @@ int main(int argc, char **argv)
     try
     {
         partner_crt idp(term_profile);
+        if (hdd_file.empty())
+            idp.set_force_floppy_boot(true);
         idp.load_rom(rom_file);
+        idp.load_disk(0, disk_file);
+        if (!hdd_file.empty())
+            idp.load_hdd(hdd_file);
         idp.reset();
 
         gui app_gui;
-        if (!app_gui.init("Iskra Delta Partner Emulator", 1280, 800))
+        if (!app_gui.init("Iskra Delta Partner Emulator", 1800, 680))
         {
             std::cerr << "[error] Failed to initialize GUI\n";
             return 1;
@@ -109,10 +119,24 @@ int main(int argc, char **argv)
 
             if (!paused)
             {
-                // Free-run mode: execute one frame's worth of ticks
-                for (uint32_t i = 0; i < TICKS_PER_FRAME; i++)
+                // Execute roughly a frame worth of emulation, but in smaller
+                // chunks so the window remains responsive.
+                uint32_t ticks_left = TICKS_PER_FRAME;
+                while (ticks_left > 0 && running && !paused)
                 {
-                    idp.tick();
+                    const uint32_t slice = (ticks_left > RUN_TICK_SLICE) ? RUN_TICK_SLICE : ticks_left;
+                    for (uint32_t i = 0; i < slice; i++)
+                    {
+                        idp.tick();
+                    }
+                    ticks_left -= slice;
+
+                    running = app_gui.process_events(paused, action);
+                    if (!running || paused)
+                        break;
+
+                    for (uint8_t ch : app_gui.drain_keys())
+                        idp.key_input(ch);
                 }
             }
             else if (action == dbg_action::STEP_INTO)

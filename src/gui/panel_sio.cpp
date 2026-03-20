@@ -40,7 +40,6 @@ void render_channel(const char *name, const z80sio_channel_t &ch)
 void panels::render_sio(partner &emu, std::vector<uint8_t> &inject_buf)
 {
     ImGui::Begin("Z80 SIO", nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoCollapse);
 
     const z80sio_t &sio = emu.get_sio();

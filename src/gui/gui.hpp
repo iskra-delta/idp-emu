@@ -29,13 +29,15 @@ private:
     SDL_GLContext gl_context_ = nullptr;
     display display_;
 
-    bool show_registers_ = true;
+    bool show_registers_ = false;
     bool show_disasm_ = true;
-    bool show_fdc_ = true;
+    bool show_fdc_ = false;
     bool show_sio_ = false;
     bool show_pio_ = false;
     bool show_dma_ = false;
+    bool show_xebec_ = false;
     bool show_rtc_ = false;
+    bool startup_layout_applied_ = false;
 
     std::vector<uint8_t> key_buf_;
 };

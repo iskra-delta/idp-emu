@@ -10,11 +10,11 @@ class display
 {
 public:
     static constexpr int FB_W = 800;
-    static constexpr int FB_H = 350;
+    static constexpr int FB_H = 400;
     static constexpr int COLS = 80;
     static constexpr int ROWS = 25;
     static constexpr int CHAR_W = 10; // 5 * 2 (2x scale)
-    static constexpr int CHAR_H = 14; // 7 * 2 (2x scale)
+    static constexpr int CHAR_H = 16; // 7 * 2 plus a little line spacing
 
     void init();
     void shutdown();
@@ -26,6 +26,7 @@ public:
 
     void draw_char(int col, int row, char c);
     void draw_text(int col, int row, const char *text);
+    void fill_char_cell(int col, int row);
 
     GLuint get_texture() const { return crt_tex_; }
     float aspect_ratio() const { return (float)FB_W / (float)FB_H; }

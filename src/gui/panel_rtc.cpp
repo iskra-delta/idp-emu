@@ -25,7 +25,6 @@ void draw_reg_row(const mm58167a_t &rtc, int base, int count)
 void panels::render_rtc(partner &emu)
 {
     ImGui::Begin("MM58167 RTC", nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoCollapse);
 
     const mm58167a_t &rtc = emu.get_rtc();

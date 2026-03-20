@@ -5,7 +5,6 @@
 void panels::render_registers(partner &emu)
 {
     ImGui::Begin("Z80 Registers", nullptr,
-                 ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoResize |
                  ImGuiWindowFlags_NoCollapse);
 
     const z80_t &cpu = emu.get_cpu();
@@ -34,6 +33,14 @@ void panels::render_registers(partner &emu)
     ImGui::Text("Ticks: %llu", (unsigned long long)emu.get_tick_count());
     ImGui::Text("ROM: %s   Bank: %d",
                 emu.is_rom_enabled() ? "ON" : "OFF", emu.get_ram_bank());
+
+    const uint64_t pins = emu.get_pins();
+    ImGui::Text("Pins: %s %s %s %s %s",
+                (pins & Z80_HALT) ? "HALT" : "----",
+                (pins & Z80_INT) ? "INT" : "---",
+                (pins & Z80_M1) ? "M1" : "--",
+                (pins & Z80_IORQ) ? "IORQ" : "----",
+                (pins & Z80_IEIO) ? "IEIO" : "----");
 
     ImGui::End();
 }
