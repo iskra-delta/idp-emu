@@ -26,6 +26,26 @@
     - Commands: SPECIFY, RECALIBRATE, SENSE INTERRUPT STATUS, READ DATA, SEEK
     - Per-drive state (track, head, motor)
     - Sector read via callback
+    - CHIPS-style pin-level bus tick (`i8272_tick_pins`)
+
+    ## Emulated Pins
+
+    ***************************************
+    *           +-----------+             *
+    * D0..D7 <->|           |<-> A0       *
+    *           |   i8272   |             *
+    *   CS̅  --->|   FDC     |---> IRQ     *
+    *   RD̅  --->|           |             *
+    *   WR̅  --->|           |             *
+    * RESET̅ --->|           |             *
+    *           +-----------+             *
+    ***************************************
+
+    - D0..D7: bidirectional data bus
+    - A0: register select (0=MSR/status, 1=data)
+    - CS̅/RD̅/WR̅: active-low bus control
+    - RESET̅: active-low reset
+    - IRQ: INTRQ output
 
     ## Functions:
     ~~~C
@@ -78,6 +98,24 @@
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+/*--- CHIPS-style bus helpers ---*/
+#define I8272_GET_ADDR(p)      ((uint8_t)((p) & 0x03))
+#define I8272_GET_DATA(p)      ((uint8_t)(((p) >> 16) & 0xFF))
+#define I8272_SET_DATA(p, d)   { p = ((p) & ~0xFF0000ULL) | (((uint64_t)(d) << 16) & 0xFF0000ULL); }
+
+/* Active-low bus control pins */
+#define I8272_PIN_RD           (24)
+#define I8272_PIN_WR           (25)
+#define I8272_PIN_CS           (26)
+#define I8272_PIN_RESET        (27)
+#define I8272_PIN_IRQ          (28)  /* INTRQ output */
+
+#define I8272_RD               (1ULL << I8272_PIN_RD)
+#define I8272_WR               (1ULL << I8272_PIN_WR)
+#define I8272_CS               (1ULL << I8272_PIN_CS)
+#define I8272_RESET            (1ULL << I8272_PIN_RESET)
+#define I8272_IRQ              (1ULL << I8272_PIN_IRQ)
 
 /*--- MSR (Main Status Register) bits, read from port 0xF0 ---*/
 #define I8272_MSR_RQM       (1 << 7)   /* Request for Master: 1=ready */
@@ -198,6 +236,13 @@ typedef struct {
     uint8_t data_buf[I8272_SECTOR_SIZE];
     uint16_t data_len;
     uint16_t data_idx;
+    /* last READ DATA request (debug visibility) */
+    uint8_t last_us;
+    uint8_t last_c;
+    uint8_t last_h;
+    uint8_t last_r;
+    uint8_t last_n;
+    bool last_read_ok;
 
     /* sector read callback */
     i8272_read_sector_cb read_sector;
@@ -210,6 +255,8 @@ void i8272_init(i8272_t *fdc);
 void i8272_reset(i8272_t *fdc);
 /* Advance delayed interrupt bookkeeping */
 void i8272_tick(i8272_t *fdc);
+/* Pin-level tick for CHIPS-style bus integration */
+uint64_t i8272_tick_pins(i8272_t *fdc, uint64_t pins);
 /* Read Main Status Register (port 0xF0) */
 uint8_t i8272_read_status(i8272_t *fdc);
 /* Read Data Register (port 0xF1) */
@@ -400,9 +447,20 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
     uint8_t h  = fdc->cmd[3];  /* head */
     uint8_t r  = fdc->cmd[4];  /* sector */
     uint8_t n  = fdc->cmd[5];  /* sector size code (0=128, 1=256, 2=512, 3=1024) */
+    uint8_t eot = fdc->cmd[6]; /* end-of-track sector */
+    fdc->last_us = us;
+    fdc->last_c = c;
+    fdc->last_h = h;
+    fdc->last_r = r;
+    fdc->last_n = n;
 
     fdc->drive[us].head = hd;
-    fdc->st0 = (hd << 2) | (us & 0x03);
+    /*
+        Partner boot loaders treat READ DATA success as ST0 == 0.
+        Keep SEEK/SENSE-specific unit bits in SENSE paths, but report plain
+        normal-termination ST0 for data transfers.
+    */
+    fdc->st0 = 0;
     fdc->st1 = 0;
     fdc->st2 = 0;
 
@@ -421,6 +479,14 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
         fdc->data_len = sector_size;
         fdc->data_idx = 0;
         fdc->st0 |= I8272_ST0_IC_NT;
+        /*
+            uPD765/i8272 sets ST1.EN when the transfer reaches EOT.
+            GDP Partner ROM uses one-sector READ DATA with EOT=R and expects
+            ST1=0x80 as success marker.
+        */
+        if (r == eot) {
+            fdc->st1 |= I8272_ST1_EN;
+        }
     } else {
         /* Sector not found */
         fdc->data_len = 0;
@@ -428,6 +494,7 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
         fdc->st0 |= I8272_ST0_IC_AT;
         fdc->st1 |= I8272_ST1_ND | I8272_ST1_MA;
     }
+    fdc->last_read_ok = ok;
 
     /* Prepare result phase */
     fdc->result[0] = fdc->st0;
@@ -440,23 +507,21 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
     fdc->result_len = 7;
 
     if (ok && fdc->data_len > 0) {
-        /*
-            Delay entry into EXECUTE just long enough for the Partner ROM to
-            finish issuing the READ DATA parameter bytes and reach its EI/HALT
-            wait point before the DMA-driven data stream begins.
-        */
-        fdc->phase = I8272_PHASE_IDLE;
-        fdc->msr = I8272_MSR_CB;
-        _i8272_schedule_execute(fdc, 1024);
+        /* Enter transfer phase immediately: data is sourced by DMA pacing. */
+        fdc->phase = I8272_PHASE_EXECUTE;
+        fdc->msr = I8272_MSR_RQM | I8272_MSR_DIO | I8272_MSR_EXM | I8272_MSR_CB;
     } else {
         /*
-            READ DATA completes by raising an interrupt and then presenting
-            the result bytes. Exposing RESULT too early can leave the ROM
-            polling F0h/F1h out of sequence.
+            Command failed before data phase: expose result immediately and
+            assert IRQ so firmware can consume ST0/ST1/ST2.
         */
-        fdc->phase = I8272_PHASE_IDLE;
-        fdc->msr = I8272_MSR_CB;
-        _i8272_schedule_irq(fdc, 1024, false, true);
+        _i8272_enter_result(fdc);
+        /*
+            Keep RESULT visible immediately, but delay INTRQ slightly so ROM
+            polling code reliably reaches its EI/HALT wait point before the
+            completion interrupt is observed.
+        */
+        _i8272_schedule_irq(fdc, 1024, false, false);
     }
 }
 
@@ -560,6 +625,12 @@ void i8272_reset(i8272_t *fdc) {
     fdc->exec_pending = false;
     fdc->data_len = 0;
     fdc->data_idx = 0;
+    fdc->last_us = 0;
+    fdc->last_c = 0;
+    fdc->last_h = 0;
+    fdc->last_r = 0;
+    fdc->last_n = 0;
+    fdc->last_read_ok = false;
 
     for (int i = 0; i < I8272_MAX_DRIVES; i++) {
         fdc->drive[i].track = 0;
@@ -605,6 +676,38 @@ void i8272_tick(i8272_t *fdc) {
     fdc->irq_request = true;
 }
 
+uint64_t i8272_tick_pins(i8272_t *fdc, uint64_t pins) {
+    CHIPS_ASSERT(fdc);
+
+    if ((pins & I8272_RESET) == 0) {
+        i8272_reset(fdc);
+        pins &= ~I8272_IRQ;
+        return pins;
+    }
+
+    /* progress internal delayed execution/IRQ state */
+    i8272_tick(fdc);
+
+    if ((pins & I8272_CS) == 0) {
+        const uint8_t a = I8272_GET_ADDR(pins) & 0x01;
+        if ((pins & I8272_RD) == 0) {
+            const uint8_t data = (a == 0) ? i8272_read_status(fdc) : i8272_read_data(fdc);
+            I8272_SET_DATA(pins, data);
+        } else if ((pins & I8272_WR) == 0) {
+            if (a == 1) {
+                i8272_write_data(fdc, I8272_GET_DATA(pins));
+            }
+        }
+    }
+
+    if (fdc->irq_request) {
+        pins |= I8272_IRQ;
+    } else {
+        pins &= ~I8272_IRQ;
+    }
+    return pins;
+}
+
 uint8_t i8272_read_status(i8272_t *fdc) {
     CHIPS_ASSERT(fdc);
     return fdc->msr;
@@ -619,13 +722,15 @@ uint8_t i8272_read_data(i8272_t *fdc) {
             uint8_t data = fdc->data_buf[fdc->data_idx++];
             if (fdc->data_idx >= fdc->data_len) {
                 /*
-                    On real hardware the terminal interrupt announces the
-                    switch into RESULT phase; don't present result bytes until
-                    that interrupt has actually been generated.
+                    End-of-transfer: raise IRQ and enter RESULT phase so CPU
+                    can fetch ST0..N response bytes.
                 */
-                fdc->phase = I8272_PHASE_IDLE;
-                fdc->msr = I8272_MSR_CB;
-                _i8272_schedule_irq(fdc, 1024, false, true);
+                _i8272_enter_result(fdc);
+                /*
+                    Schedule (don't instant-fire) completion IRQ to avoid
+                    racing ahead of firmware's HALT wait point.
+                */
+                _i8272_schedule_irq(fdc, 1024, false, false);
             }
             return data;
         }

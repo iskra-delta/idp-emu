@@ -5,6 +5,7 @@ add_subdirectory(zilog)
 add_subdirectory(intel)
 add_subdirectory(national)
 add_subdirectory(signetics)
+add_subdirectory(thomson)
 add_subdirectory(xebec)
 
 # You can optionally gather all include paths here
@@ -13,5 +14,6 @@ target_include_directories(chipsex INTERFACE
     ${CMAKE_CURRENT_SOURCE_DIR}/intel
     ${CMAKE_CURRENT_SOURCE_DIR}/national
     ${CMAKE_CURRENT_SOURCE_DIR}/signetics
+    ${CMAKE_CURRENT_SOURCE_DIR}/thomson
     ${CMAKE_CURRENT_SOURCE_DIR}/xebec
 )

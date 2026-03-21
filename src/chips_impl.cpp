@@ -8,6 +8,8 @@
 #include "s1410.h"
 #include "idpartner_sasi.h"
 #include "mm58167.h"
+#include "scn2674.h"
+#include "ef9367.h"
 
 #define CHIPS_UTIL_IMPL
 #include "z80dasm.h"

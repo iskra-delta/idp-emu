@@ -160,7 +160,7 @@ void panels::render_disasm(partner &emu, bool &paused, dbg_action &action)
     // Debug toolbar
     if (paused)
     {
-        if (ImGui::Button("Run (F5)"))
+        if (ImGui::Button("Run (Space)"))
             paused = false;
         ImGui::SameLine();
         if (ImGui::Button("Step Into (F11)"))
@@ -171,7 +171,7 @@ void panels::render_disasm(partner &emu, bool &paused, dbg_action &action)
     }
     else
     {
-        if (ImGui::Button("Pause (F5)"))
+        if (ImGui::Button("Pause (Space)"))
             paused = true;
     }
     ImGui::SameLine();

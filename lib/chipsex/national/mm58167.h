@@ -164,6 +164,7 @@ extern "C"
         uint8_t regs[32];      // MM58167 has 32 registers
         uint8_t addr_latch;    // latched address (via AS)
         time_t last_sync_time; // for refreshing time
+        bool nvram_init_done;  // battery-backed setup area initialized once
     } mm58167a_t;
 
     void mm58167a_init(mm58167a_t *chip);
@@ -184,7 +185,22 @@ void mm58167a_init(mm58167a_t *chip)
 
 void mm58167a_reset(mm58167a_t *chip)
 {
-    memset(chip->regs, 0, sizeof(chip->regs));
+    if (!chip->nvram_init_done) {
+        memset(chip->regs, 0, sizeof(chip->regs));
+        // Partner uses MM58167 battery-backed RAM as setup CMOS.
+        // Initialize conservative machine defaults once, then preserve them
+        // across warm resets just like the real battery-backed device.
+        // Partner setup profile captured from a known-good emulator image.
+        chip->regs[0x08] = 0xF0; // 0xA8
+        chip->regs[0x09] = 0x98; // 0xA9
+        chip->regs[0x0A] = 0xFF; // 0xAA
+        chip->regs[0x0B] = 0x01; // 0xAB
+        chip->regs[0x0C] = 0x85; // 0xAC (132-column mode)
+        chip->regs[0x0D] = 0x07; // 0xAD
+        chip->regs[0x0E] = 0x00; // 0xAE
+        chip->regs[0x0F] = 0x57; // 0xAF
+        chip->nvram_init_done = true;
+    }
     chip->addr_latch = 0;
     chip->last_sync_time = 0;
     mm58167a_sync_time(chip);
@@ -199,15 +215,18 @@ void mm58167a_sync_time(mm58167a_t *chip)
 
     struct tm *t = localtime(&now);
 
-    // Partner port map uses:
-    // A0: 1/1000s, A1: sec, A2: min, A3: hour, A4: wday, A5: day, A6: year, A7: month.
-    chip->regs[0x00] = 0x00;                                                     // 1/1000s (not modeled)
-    chip->regs[0x01] = ((t->tm_sec % 10) | ((t->tm_sec / 10) << 4));            // sec
-    chip->regs[0x02] = ((t->tm_min % 10) | ((t->tm_min / 10) << 4));            // min
-    chip->regs[0x03] = ((t->tm_hour % 10) | ((t->tm_hour / 10) << 4));          // hour
-    chip->regs[0x04] = (t->tm_wday & 0x07);                                      // day of week
-    chip->regs[0x05] = ((t->tm_mday % 10) | ((t->tm_mday / 10) << 4));          // day
-    chip->regs[0x06] = ((t->tm_year % 10) | (((t->tm_year / 10) % 10) << 4));   // year
+    // Partner software-visible map:
+    // 0xA0: 1/1000s, 0xA1: 1/100s, 0xA2: sec, 0xA3: min, 0xA4: hour,
+    // 0xA5: wday, 0xA6: day, 0xA7: month, 0xA9: year (software-maintained).
+    // Do not overwrite 0xA9 from host time: Partner firmware treats it as
+    // battery-backed setup/state rather than true hardware year.
+    chip->regs[0x00] = 0x00;                                                     // 1/1000s
+    chip->regs[0x01] = 0x00;                                                     // 1/100s
+    chip->regs[0x02] = ((t->tm_sec % 10) | ((t->tm_sec / 10) << 4));            // sec
+    chip->regs[0x03] = ((t->tm_min % 10) | ((t->tm_min / 10) << 4));            // min
+    chip->regs[0x04] = ((t->tm_hour % 10) | ((t->tm_hour / 10) << 4));          // hour
+    chip->regs[0x05] = (t->tm_wday & 0x07);                                      // day of week
+    chip->regs[0x06] = ((t->tm_mday % 10) | ((t->tm_mday / 10) << 4));          // day
     chip->regs[0x07] = ((t->tm_mon + 1) % 10) | (((t->tm_mon + 1) / 10) << 4);  // month
 }
 

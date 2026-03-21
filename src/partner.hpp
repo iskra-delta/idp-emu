@@ -37,6 +37,7 @@ public:
     const z80dma_t& get_dma() const { return dma; }
     const z80ctc_t& get_ctc() const { return ctc; }
     const z80sio_t& get_sio() const { return sio; }
+    const z80sio_t& get_sio2() const { return sio2; }
     const z80pio_t& get_pio() const { return pio; }
     const i8272_t& get_fdc() const { return fdc; }
     const s1410_t& get_hdc() const { return hdc; }
@@ -71,6 +72,7 @@ protected:
     z80dma_t dma{};    // Highest priority (if present)
     z80ctc_t ctc{};    // Second priority
     z80sio_t sio{};    // Third priority
+    z80sio_t sio2{};   // Fourth priority
     z80pio_t pio{};    // Lowest priority
 
     // Intel 8272 FDC (not on Zilog daisy chain)
@@ -120,6 +122,9 @@ protected:
     uint8_t peek_ram(uint16_t addr) const;
 
 private:
+    void load_rtc_nvram();
+    void save_rtc_nvram() const;
+
     struct disk_image {
         std::vector<uint8_t> data;
         uint32_t seclen = 256;
@@ -128,6 +133,7 @@ private:
     };
     std::array<disk_image, I8272_MAX_DRIVES> disks_;
     disk_image hdd_;
+    std::string rtc_nvram_path_ = "partner_cmos.bin";
 
     static bool read_sector_cb(int drive, int c, int h, int r, int n,
                                uint8_t *buf, void *user);

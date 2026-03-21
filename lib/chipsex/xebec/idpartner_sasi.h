@@ -22,6 +22,7 @@ extern "C" {
 typedef struct {
     s1410_t *target;
     bool session_active;
+    bool sel_latched;
     bool data_enable;
     bool drq_enable;
     bool drq;
@@ -51,6 +52,10 @@ static inline bool _idpartner_sasi_req(const idpartner_sasi_t *adp) {
     if (!adp->target || !adp->target->present) {
         return false;
     }
+    if ((adp->target->phase == S1410_PHASE_IDLE) &&
+        adp->session_active && adp->data_enable && !adp->sel_latched) {
+        return true;
+    }
     switch (adp->target->phase) {
         case S1410_PHASE_AWAIT_CONFIG:
             return true;
@@ -75,6 +80,12 @@ static inline bool _idpartner_sasi_cd(const idpartner_sasi_t *adp) {
     if (!adp->target) {
         return false;
     }
+    /* Partner firmware may poll for command/status phase after data transfer
+       while the adapter has already dropped to idle with ATN/data path active. */
+    if ((adp->target->phase == S1410_PHASE_IDLE) &&
+        adp->session_active && adp->data_enable && !adp->sel_latched) {
+        return true;
+    }
     return (adp->target->phase == S1410_PHASE_AWAIT_CONFIG) ||
            (adp->target->phase == S1410_PHASE_RESPONSE);
 }
@@ -83,7 +94,7 @@ static inline bool _idpartner_sasi_bsy(const idpartner_sasi_t *adp) {
     if (!adp->target || !adp->target->present) {
         return false;
     }
-    return adp->target->busy || adp->session_active;
+    return adp->target->busy;
 }
 
 static inline void _idpartner_sasi_update_drq(idpartner_sasi_t *adp) {
@@ -99,6 +110,7 @@ void idpartner_sasi_init(idpartner_sasi_t *adp, s1410_t *target) {
 void idpartner_sasi_reset(idpartner_sasi_t *adp) {
     CHIPS_ASSERT(adp);
     adp->session_active = false;
+    adp->sel_latched = false;
     adp->data_enable = false;
     adp->drq_enable = false;
     adp->drq = false;
@@ -123,9 +135,6 @@ uint8_t idpartner_sasi_data_r(idpartner_sasi_t *adp) {
     }
     const uint8_t data = s1410_read_data(adp->target);
     _idpartner_sasi_update_drq(adp);
-    if (!_idpartner_sasi_bsy(adp)) {
-        adp->session_active = false;
-    }
     return data;
 }
 
@@ -135,19 +144,18 @@ void idpartner_sasi_ctrl_w(idpartner_sasi_t *adp, uint8_t data) {
         return;
     }
 
-    const bool prev_data_enable = adp->data_enable;
     const bool sel = (data & 0x01) != 0;
     adp->data_enable = (data & 0x02) != 0;
     adp->drq_enable = (data & 0x20) != 0;
     adp->last_ctrl = data;
-
-    if (sel && !adp->session_active) {
+    if (sel && !adp->sel_latched) {
         adp->session_active = true;
         s1410_write_control(adp->target, 0x01);
     }
-    if (!sel && adp->session_active && adp->data_enable && !prev_data_enable) {
+    if (!sel && adp->sel_latched && adp->session_active && adp->data_enable) {
         s1410_write_control(adp->target, 0x02);
     }
+    adp->sel_latched = sel;
 
     _idpartner_sasi_update_drq(adp);
 }

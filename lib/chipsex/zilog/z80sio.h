@@ -420,7 +420,13 @@ static inline uint8_t _z80sio_read(z80sio_t *sio, int chn_id, bool control, uint
     {
         // Read from data register
         ch->rx_ready = false;
-        ch->int_state &= ~Z80SIO_INT_NEEDED; // Clear RX interrupt
+        // Consuming the RX byte clears the pending RX cause. If the interrupt
+        // hasn't been acknowledged yet, drop the outstanding request as well.
+        if (ch->int_state & Z80SIO_INT_SERVICED) {
+            ch->int_state &= ~Z80SIO_INT_NEEDED;
+        } else {
+            ch->int_state &= (uint8_t)~(Z80SIO_INT_NEEDED | Z80SIO_INT_REQUESTED);
+        }
         return ch->rx_data;
     }
 }
@@ -476,43 +482,40 @@ static inline uint64_t _z80sio_io(z80sio_t *sio, uint64_t pins)
 static inline uint8_t _z80sio_get_int_vector(z80sio_t *sio, int chn_id)
 {
     z80sio_channel_t *ch = &sio->chn[chn_id];
-    uint8_t base_vector = sio->chn[Z80SIO_CHANNEL_B].int_vector;
+    const uint8_t base_vector = sio->chn[Z80SIO_CHANNEL_B].int_vector;
 
     // Check if status affects vector (WR1 bit 2 in channel B)
-    bool status_affects_vector = (sio->chn[Z80SIO_CHANNEL_B].wr[1] & (1 << 2)) != 0;
+    const bool status_affects_vector = (sio->chn[Z80SIO_CHANNEL_B].wr[1] & (1 << 2)) != 0;
 
     if (!status_affects_vector)
     {
         return base_vector;
     }
 
-    // Modify vector based on channel and interrupt type
-    // Bits 1-3 of vector are modified:
-    // V3 V2 V1 = Channel (0=B, 1=A), Type (00=TX, 01=Ext/Status, 10=RX, 11=Special RX)
-    uint8_t modified = base_vector & 0xF1; // Clear bits 1-3
+    // Bits 1..3 are modified by channel/cause.
+    uint8_t modified = base_vector & 0xF1u;
 
-    // Channel bit (bit 3)
+    // Channel bit (bit 3): 0=B, 1=A
     if (chn_id == Z80SIO_CHANNEL_A) {
-        modified |= (1 << 3);
+        modified |= (1u << 3);
     }
 
-    // Type bits (bits 1-2)
-    // Determine interrupt type priority: Special RX > RX > TX > Ext/Status
+    // Type bits (bits 1..2): 00=TX, 01=Ext/Status, 10=RX, 11=Special RX
     if (ch->rx_ready && (ch->parity_error || ch->rx_overrun || ch->framing_error))
     {
-        modified |= (3 << 1); // Special RX condition
+        modified |= (3u << 1);
     }
-    else if (ch->rx_ready && (ch->wr[1] & 0x18)) // RX int enabled
+    else if (ch->rx_ready && (ch->wr[1] & 0x18u))
     {
-        modified |= (2 << 1); // RX character available
+        modified |= (2u << 1);
     }
-    else if (!ch->tx_ready && (ch->wr[1] & (1 << 1))) // TX int enabled
+    else if (!ch->tx_ready && (ch->wr[1] & (1u << 1)))
     {
-        modified |= (0 << 1); // TX buffer empty
+        modified |= (0u << 1);
     }
     else
     {
-        modified |= (1 << 1); // External/Status change
+        modified |= (1u << 1);
     }
 
     return modified;
@@ -538,10 +541,17 @@ static inline uint64_t _z80sio_int(z80sio_t *sio, uint64_t pins)
             // Block downstream interrupts
             pins &= ~Z80SIO_IEIO;
 
+            // Keep INT asserted from the first pending tick until the CPU
+            // acknowledges the request, matching the level-like daisy-chain
+            // behavior expected by Partner firmware.
+            if (ch->int_state & (Z80SIO_INT_NEEDED | Z80SIO_INT_REQUESTED))
+            {
+                pins |= Z80SIO_INT;
+            }
+
             // Request interrupt
             if (ch->int_state & Z80SIO_INT_NEEDED)
             {
-                pins |= Z80SIO_INT;
                 ch->int_state = (ch->int_state & ~Z80SIO_INT_NEEDED) | Z80SIO_INT_REQUESTED;
             }
 

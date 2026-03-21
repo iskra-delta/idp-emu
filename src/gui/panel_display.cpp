@@ -11,7 +11,8 @@ void panels::render_display(display &disp)
     ImVec2 avail = ImGui::GetContentRegionAvail();
     float aspect = disp.aspect_ratio();
 
-    // Fit image maintaining aspect ratio
+    // Fit image maintaining aspect ratio and allow it to scale with the docked
+    // window size.
     float img_w, img_h;
     if (avail.x / avail.y > aspect)
     {

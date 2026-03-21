@@ -29,13 +29,13 @@ void panels::render_rtc(partner &emu)
 
     const mm58167a_t &rtc = emu.get_rtc();
 
-    int sec = bcd_to_int(rtc.regs[0x01]);
-    int min = bcd_to_int(rtc.regs[0x02]);
-    int hour = bcd_to_int(rtc.regs[0x03]);
-    int day = bcd_to_int(rtc.regs[0x05]);
+    int sec = bcd_to_int(rtc.regs[0x02]);
+    int min = bcd_to_int(rtc.regs[0x03]);
+    int hour = bcd_to_int(rtc.regs[0x04]);
+    int day = bcd_to_int(rtc.regs[0x06]);
     int month = bcd_to_int(rtc.regs[0x07]);
-    int year = bcd_to_int(rtc.regs[0x06]);
-    int wday = rtc.regs[0x04] & 0x07;
+    int year = bcd_to_int(rtc.regs[0x09]);
+    int wday = rtc.regs[0x05] & 0x07;
 
     ImGui::Text("Time: %02d:%02d:%02d", hour, min, sec);
     ImGui::Text("Date: %02d/%02d/%02d  WDay:%d", day, month, year, wday);

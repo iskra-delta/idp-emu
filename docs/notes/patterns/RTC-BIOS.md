@@ -5,7 +5,9 @@ Date(s): 2021-05-22 to 2021-05-25
 
 ## Problem / Purpose
 
-Understand the hardware behavior and software usage of the MM58167A real-time clock chip in the Iskra Delta Partner, including its NVRAM registers and how the SET UP program stores system configuration data (BIOS settings).
+Document the hardware behavior and software usage of the MM58167A real-time
+clock chip in Iskra Delta Partner, including NVRAM register usage and how the
+SET UP program stores BIOS configuration data.
 
 ## Findings / Observations
 
@@ -17,7 +19,7 @@ The Partner uses the National Semiconductor MM58167A RTC chip. It exposes 32 reg
 
 | Port | Description                                  |
 | ---- | -------------------------------------------- |
-| 0xA0 | 1/1000 sec counter (or 1/10000 by some docs) |
+| 0xA0 | 1/1000 sec counter (or 1/10000 in some docs) |
 | 0xA1 | 1/100 sec                                    |
 | 0xA2 | Seconds (BCD)                                |
 | 0xA3 | Minutes (BCD)                                |
@@ -27,8 +29,10 @@ The Partner uses the National Semiconductor MM58167A RTC chip. It exposes 32 reg
 | 0xA7 | Month                                        |
 | 0xA9 | Year (software-maintained)                   |
 
-- Port `0xA0` updates every 1/1000 sec. Only values with low nibble `0x0` appear (`0x00`, `0x10`, etc.).
-- Year is not tracked by hardware; port `0xA9` is maintained by software (e.g. value `0x21` for 2021).
+- Port `0xA0` updates every 1/1000 sec. Only values with low nibble `0x0`
+  appear (`0x00`, `0x10`, etc.).
+- Year is not tracked by hardware; port `0xA9` is software-maintained
+  (for example, `0x21` for 2021).
 
 ### RTC Battery-Backed RAM (NVRAM)
 
@@ -36,7 +40,7 @@ Ports `0xA8` to `0xAF` are used by the Partner’s SET UP program to persist con
 
 | Port | Purpose                  | Description                                       |
 | ---- | ------------------------ | ------------------------------------------------- |
-| 0xA8 | Unknown                  | Always `0x00` on real Partner, `0xF0` in emulator |
+| 0xA8 | Unknown                  | Always `0x00` on real Partner, used as a setup marker in some traces |
 | 0xA9 | Year (software-managed)  | Last two digits (e.g. `0x21` for 2021)            |
 | 0xAA | Unknown                  | Not yet decoded                                   |
 | 0xAB | Terminal type & language | Bitfield described below                          |
@@ -98,11 +102,14 @@ Examples:
 
 ## Analysis / Interpretation
 
-The MM58167A RTC provides timekeeping and doubles as a simple NVRAM configuration store. The SET UP program uses ports `0xAB`, `0xAC`, `0xAE`, and `0xAF` to save BIOS-like settings.
+The MM58167A RTC provides timekeeping and doubles as a simple NVRAM
+configuration store. The SET UP program uses ports `0xAB`, `0xAC`, `0xAE`,
+and `0xAF` to save BIOS-like settings.
 
-The lack of a true hardware year counter means the system relies on software to track the year (port `0xA9`).
+Because there is no true hardware year counter, the system relies on software
+to track the year (`0xA9`).
 
-Emulator differences at port `0xA8` may serve as a detection mechanism or version signature.
+Emulator differences at port `0xA8` may act as a detection mechanism or version signature.
 
 ## Solution / Summary
 
@@ -112,4 +119,29 @@ The RTC and NVRAM combo acts as a basic BIOS configuration store:
 - `0xAB`–`0xAF` configure terminal, display, and keyboard.
 - Port `0xA8` may indicate machine type or firmware revision.
 
-These findings are essential for developing accurate emulators or tools that read or replicate the Partner's boot-time state.
+These findings are essential for developing accurate emulators or tools that
+read or replicate the Partner boot-time state.
+
+## Emulator Notes
+
+- The MM58167 setup/NVRAM area should behave as battery-backed storage.
+- A machine reset must not wipe `0xA8..0xAF`; only first-time power-on
+  initialization should seed defaults.
+- Safe Partner defaults for emulator bring-up are:
+  - `0xAB = 0x10` (Partner terminal, US ASCII)
+  - `0xAC = 0x85` (132 columns)
+  - `0xAE = 0x06` (wrap + newline)
+  - `0xAF = 0x28` (QWERTY, click on, autorepeat on)
+- If these bytes are left zeroed, firmware and CP/M utilities may fall back to
+  degraded or nonsensical display behavior.
+
+## Default values
+
+a8 = 240
+a9 = 152
+aa = 255
+ab = 1
+ac = 133
+ad = 7
+ae = 0
+af = 87

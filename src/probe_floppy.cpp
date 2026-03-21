@@ -63,7 +63,55 @@ bool is_interesting_pc(uint16_t pc) {
         case 0x0405:
         case 0x0408:
         case 0x040B:
+        case 0x0479:
+        case 0x04DA:
+        case 0x04E0:
+        case 0x04F8:
+        case 0x0501:
+        case 0x052F:
+        case 0x0532:
+        case 0x0535:
+        case 0x0538:
+        case 0x053B:
+        case 0x053E:
+        case 0x0548:
+        case 0x054B:
+        case 0x0552:
+        case 0x0556:
+        case 0x055D:
+        case 0x0560:
+        case 0x0564:
+        case 0x0567:
+        case 0x056A:
+        case 0x056D:
+        case 0x0570:
+        case 0x0573:
+        case 0x0579:
+        case 0x057D:
+        case 0x0582:
+        case 0x0585:
+        case 0x0588:
+        case 0x058D:
+        case 0x0592:
+        case 0x0595:
+        case 0x059A:
+        case 0x059F:
+        case 0x05A2:
+        case 0x05A6:
+        case 0x05AB:
+        case 0x05B1:
+        case 0x05B2:
+        case 0x05B6:
+        case 0x05B9:
+        case 0x05BE:
+        case 0x05C2:
+        case 0x05C6:
+        case 0x05C9:
+        case 0x05CE:
+        case 0x05D1:
+        case 0x05D5:
         case 0x0604:
+        case 0x060A:
         case 0x0610:
             return true;
         default:
@@ -78,6 +126,8 @@ void dump_state(const partner_crt& idp, const char* tag) {
     const auto& pio = idp.get_pio();
     const auto& cpu = idp.get_cpu();
     const auto& sio = idp.get_sio();
+    const auto& hdc = idp.get_hdc();
+    const auto& sasi = idp.get_sasi();
     const uint64_t pins = idp.get_pins();
     const uint8_t drv = idp.peek_mem(0xFFD0);
     const uint8_t trk = idp.peek_mem(0xFFD1);
@@ -104,9 +154,17 @@ void dump_state(const partner_crt& idp, const char* tag) {
         << " irq=" << fdc.irq_request
         << " sense=" << fdc.int_pending
         << " fint=" << std::hex << std::setw(2) << (int)idp.get_fdc_int_state()
+        << " fvec=" << std::hex << std::setw(2) << (int)idp.get_fdc_int_vector()
         << " delay=" << std::dec << fdc.irq_delay
         << " res=" << (int)fdc.result_idx << "/" << (int)fdc.result_len
         << " data=" << (int)fdc.data_idx << "/" << (int)fdc.data_len
+        << " rdok=" << (fdc.last_read_ok ? 1 : 0)
+        << " rdchs="
+        << std::hex << std::setw(2) << (int)fdc.last_us << ":"
+        << std::hex << std::setw(2) << (int)fdc.last_c << ":"
+        << std::hex << std::setw(2) << (int)fdc.last_h << ":"
+        << std::hex << std::setw(2) << (int)fdc.last_r << ":"
+        << std::hex << std::setw(2) << (int)fdc.last_n
         << " motor=" << std::hex << std::setw(2) << (int)idp.get_fdc_motor()
         << " dma=" << std::dec << (int)dma.state
         << " den=" << dma.enabled
@@ -161,6 +219,25 @@ void dump_state(const partner_crt& idp, const char* tag) {
         << " dma-int="
         << (int)dma.int_state
         << " dvec=" << std::setw(2) << (int)dma.int_vector
+        << " sasi="
+        << std::hex << std::setw(2) << (int)idpartner_sasi_status_r(const_cast<idpartner_sasi_t*>(&sasi))
+        << " ctrl=" << std::hex << std::setw(2) << (int)sasi.last_ctrl
+        << " ses=" << std::dec << (sasi.session_active ? 1 : 0)
+        << " de=" << (sasi.data_enable ? 1 : 0)
+        << " dq=" << (sasi.drq_enable ? 1 : 0)
+        << " hdp=" << std::dec << (int)hdc.phase
+        << " hbusy=" << (hdc.busy ? 1 : 0)
+        << " cfg=" << (int)hdc.cfg_len << "/" << (int)hdc.cfg_expected
+        << " kind=" << (int)hdc.cfg_kind
+        << " cdb="
+        << std::hex << std::setw(2) << (int)hdc.cfg_buf[0]
+        << "/" << std::setw(2) << (int)hdc.cfg_buf[1]
+        << "/" << std::setw(2) << (int)hdc.cfg_buf[2]
+        << "/" << std::setw(2) << (int)hdc.cfg_buf[3]
+        << "/" << std::setw(2) << (int)hdc.cfg_buf[4]
+        << "/" << std::setw(2) << (int)hdc.cfg_buf[5]
+        << " resp=" << (int)hdc.response_idx << "/" << (int)hdc.response_len
+        << " hdat=" << hdc.data_idx << "/" << hdc.data_len
         << "\n";
 }
 
@@ -185,8 +262,22 @@ void dump_bytes(const partner_crt& idp, uint16_t base, int count, const char* la
 int main(int argc, char** argv) {
     std::string rom_file = "roms/partner_crt.rom";
     std::string disk_file = "disks/boot.img";
-    if (argc > 1) {
-        disk_file = argv[1];
+    std::string hdd_file;
+    bool force_floppy = true;
+    bool hdd_mode = false;
+    for (int i = 1; i < argc; i++) {
+        std::string arg = argv[i];
+        if ((arg == "--hdd") && (i + 1 < argc)) {
+            hdd_file = argv[++i];
+            force_floppy = false;
+            hdd_mode = true;
+        } else if (arg == "--no-force-floppy") {
+            force_floppy = false;
+        } else if ((arg == "--disk") && (i + 1 < argc)) {
+            disk_file = argv[++i];
+        } else if (arg.rfind("--", 0) != 0) {
+            disk_file = arg;
+        }
     }
 
     {
@@ -212,9 +303,12 @@ int main(int argc, char** argv) {
     }
 
     partner_crt idp(terminal_profile::vt52);
-    idp.set_force_floppy_boot(true);
+    idp.set_force_floppy_boot(force_floppy);
     idp.load_rom(rom_file);
     idp.load_disk(0, disk_file);
+    if (!hdd_file.empty()) {
+        idp.load_hdd(hdd_file);
+    }
     idp.reset();
     dump_state(idp, "after-reset");
 
@@ -345,6 +439,20 @@ int main(int argc, char** argv) {
         if (injected_f && ((pc == 0x03F5) || (pc == 0x03A5) || (pc == 0x0292) || (pc == 0x029B))) {
             boot_started = true;
         }
+        if (hdd_mode && ((pc == 0x0479) || (pc == 0x053E) || (pc == 0x052F) || (pc == 0x0570))) {
+            boot_started = true;
+        }
+
+        if (hdd_mode && (pc == 0x060A)) {
+            dump_state(idp, "hdd-error-060A");
+            dump_terminal(idp, "hdd-error-terminal");
+            dump_raw_serial(idp, "hdd-error-raw");
+            dump_bytes(idp, 0x068E, 32, "hdd-cmd-tables");
+            dump_bytes(idp, 0x0B40, 64, "hdd-im2-table-window");
+            dump_bytes(idp, 0x1000, 192, "hdd-loader-window");
+            dump_bytes(idp, 0x10F0, 96, "hdd-isr-window");
+            return 5;
+        }
 
         if (!boot_started && saw_init_resume && pc == 0x0003 && i > 20400000ULL) {
             dump_state(idp, "first-prompt-return");
@@ -397,7 +505,9 @@ int main(int argc, char** argv) {
     dump_bytes(idp, 0x0480, 160, "mem0480");
     dump_bytes(idp, 0x0680, 96, "mem0680");
     dump_bytes(idp, 0x09a0, 96, "mem09a0");
-    dump_bytes(idp, 0x1000, 64, "mem1000");
+    dump_bytes(idp, 0x0C00, 128, "mem0c00");
+    dump_bytes(idp, 0x1000, 192, "mem1000");
+    dump_bytes(idp, 0x10A0, 128, "mem10a0");
     dump_terminal(idp, "terminal");
     dump_raw_serial(idp, "raw-serial");
     return 1;

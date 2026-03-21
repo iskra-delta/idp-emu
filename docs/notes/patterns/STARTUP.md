@@ -1,13 +1,28 @@
 # Pattern: Partner Startup and Boot Process
 
 Category: ROM / Bootloader / CP/M Loader  
-Date(s): 2021-03-21 to 2021-05-27
+Date(s): 2021-03-21 to 2021-05-27, 2026-03-20
 
 ## Problem / Purpose
 
-Understand the full startup process of the Iskra Delta Partner computer, as implemented in ROM. Analyze how the system boots from floppy or hard disk, how CP/M is loaded, and how the BIOS/loader code behaves. Explain what happens from reset to CP/M execution.
+Describe the full Iskra Delta Partner startup sequence as implemented in ROM.
+Cover floppy and hard-disk boot paths, CP/M loader hand-off, and BIOS/loader
+behavior from reset to CP/M execution.
 
 ## Findings / Observations
+
+### 2026 Runtime Validation (GDP + TrdiDisk HDD path)
+
+- GDP ROM reaches the hard-disk bootstrap and successfully loads CP/M loader blocks through the Xebec/SASI path (transfer completes, no terminal error path).
+- Runtime text sequence observed in probe:
+  - `CP/M V3.0 Loader`
+  - `BNKBIOS3 SPR`, `RESBDOS3 SPR`, `BNKBDOS3 SPR`
+  - `61K TPA`
+  - `Partner Gdp V 1.0 wf`
+- On `TrdiDisk.img`, startup continues into an application banner (`PROGRAMGENERATOR FORMATIX...`) rather than immediately showing a plain `A>` prompt.
+- Practical implication:
+  - The HDD boot-to-loader path is operational.
+  - A missing immediate CCP prompt on this image is likely image/profile behavior plus remaining AVDC presentation gaps, not an early HDD transfer failure.
 
 ### Overview of Startup Flow
 
@@ -23,11 +38,11 @@ Understand the full startup process of the Iskra Delta Partner computer, as impl
    - Initializes FDC.
    - Waits for keyboard input. If no key is pressed, it attempts **hard disk boot**. If key is available, prompts user for **disk selection (A or F)**.
 
-3. **Input Handling**:
+3. **Input handling**:
    - Character is read and converted to uppercase.
-   - If `A`, jumps to hard disk boot routine
-   - If `F`, jumps to floppy boot routine
-   - Otherwise, prints `?` and re-prompts.
+   - If `A`, jumps to the hard-disk boot routine
+   - If `F`, jumps to the floppy boot routine
+   - Otherwise, prints `?` and re-prompts
 
 ### Floppy Boot (FDBoot at `0x04D4`)
 
@@ -64,16 +79,16 @@ Understand the full startup process of the Iskra Delta Partner computer, as impl
 
 ### Emulator Notes
 
-- The emulator mimics a virtual disk controller that reads only, and doesn't fully simulate hardware write operations.
+- The emulator currently mimics a virtual disk controller that is read-focused and does not fully simulate hardware write operations.
 - Addresses `0x0B00–0x0B72` are unstable due to emulated device buffer behavior.
 
 ## Analysis / Interpretation
 
-- The ROM is carefully organized to support both floppy and hard disk boot, providing a flexible startup path.
+- The ROM is organized to support both floppy and hard-disk boot, providing a flexible startup path.
 - CP/M loader is treated as a relocatable binary copied to `0x0100`, the canonical CP/M application entry.
-- The hardcoded check for opcode `0x31` ensures that the CPMLDR begins with `LD SP,nn`.
+- The hard-coded check for opcode `0x31` ensures CPMLDR begins with `LD SP,nn`.
 - The memory copy from ROM to `0x2000` ensures that utility routines are available even after CP/M has taken control.
-- Interrupt handling is relocated and patched into high memory (`0xC000`).
+- Interrupt handling is relocated into high memory (`0xC000`).
 
 ## Solution / Summary
 
