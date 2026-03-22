@@ -44,7 +44,23 @@ cmake --build build
 
 ## Run
 
-...todo...
+Run Partner P (CRT) with floppy:
+
+```bash
+./bin/idp-emu --model crt --rom roms/partner_crt.rom --disk disks/fdd-partner-p.img
+```
+
+Run Partner G (GDP) with HDD:
+
+```bash
+./bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g.img
+```
+
+Run Partner G (GDP) with empty HDD:
+
+```bash
+./bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g-empty.img
+```
 
 # Dependencies
 

@@ -346,7 +346,8 @@ void z80pio_reset(z80pio_t* pio) {
         pio->port[p].bctrl_match = false;
         pio->port[p].int_state = 0;
         pio->port[p].ready = false;
-        pio->port[p].strobe_prev = false;
+        /* STB pins are active-low, idle high after reset. */
+        pio->port[p].strobe_prev = true;
     }
     pio->reset_active = true;
 }
@@ -373,16 +374,18 @@ void _z80pio_write_ctrl(z80pio_t* pio, int port_id, uint8_t data) {
         if ((ctrl & 1) == 0) {
             /* set interrupt vector */
             p->int_vector = data;
-            /* according to MAME setting the interrupt vector
-               also enables interrupts, but this doesn't seem to
-               be mentioned in the spec
-            */
-            p->int_control |= Z80PIO_INTCTRL_EI;
-            p->int_enabled = true;
         }
         else if (ctrl == 0x0F) {
             /* set operating mode (Z80PIO_MODE_*) */
-            p->mode = data>>6;
+            uint8_t mode = data >> 6;
+            /* MK3881/Z80-PIO supports bidirectional mode on port A only. */
+            if ((port_id == Z80PIO_PORT_B) && (mode == Z80PIO_MODE_BIDIRECTIONAL)) {
+                mode = Z80PIO_MODE_INPUT;
+            }
+            p->mode = mode;
+            p->ready = false;
+            p->strobe_prev = true;
+            p->expect_int_mask = false;
             if (p->mode == Z80PIO_MODE_BITCONTROL) {
                 /* next control word is the io_select mask */
                 p->expect_io_select = true;
@@ -400,7 +403,7 @@ void _z80pio_write_ctrl(z80pio_t* pio, int port_id, uint8_t data) {
                 /* temporarly disable interrupt until mask is written */
                 p->int_enabled = false;
                 /* reset pending interrupt */
-                p->int_state &= ~Z80PIO_INT_NEEDED;
+                p->int_state &= (uint8_t)~(Z80PIO_INT_NEEDED | Z80PIO_INT_REQUESTED);
                 p->bctrl_match = false;
             }
             else {
@@ -488,29 +491,31 @@ uint8_t _z80pio_read_data(z80pio_t* pio, int port_id) {
 uint64_t _z80pio_set_port_output_pins(z80pio_t* pio, uint64_t pins) {
     for (int port_id = 0; port_id < Z80PIO_NUM_PORTS; port_id++) {
         z80pio_port_t* p = &pio->port[port_id];
+        const uint8_t ext_data = (port_id == Z80PIO_PORT_A) ? Z80PIO_GET_PA(pins) : Z80PIO_GET_PB(pins);
         uint8_t data;
         switch (p->mode) {
             case Z80PIO_MODE_OUTPUT:
                 data = p->output;
                 break;
             case Z80PIO_MODE_INPUT:
-                data = 0xFF;  // Input mode - pins are high impedance (read as 0xFF)
+                /* Input mode drives high-Z, preserve external pin state. */
+                data = ext_data;
                 break;
             case Z80PIO_MODE_BIDIRECTIONAL:
-                // Port A is output, Port B is input
+                /* Port A drives only while ASTB is asserted (active-low). */
                 if (port_id == Z80PIO_PORT_A) {
-                    data = p->output;
+                    data = (pins & Z80PIO_ASTB) ? ext_data : p->output;
                 } else {
-                    data = 0xFF;
+                    data = ext_data;
                 }
                 break;
             case Z80PIO_MODE_BITCONTROL:
-                // set input bits to 1, output bits from output register
-                data = p->io_select | (p->output & ~p->io_select);
+                /* Input-assigned bits are high-Z, output-assigned bits are driven. */
+                data = (ext_data & p->io_select) | (p->output & (uint8_t)~p->io_select);
                 break;
             default:
                 _Z80PIO_UNREACHABLE;
-                data = 0xFF;
+                data = ext_data;
                 break;
         }
 
@@ -600,13 +605,16 @@ uint64_t _z80pio_int(z80pio_t* pio, uint64_t pins) {
               their interrupt request status when M1 is active - about two
               clock cycles earlier than IORQ".
         */
-        if ((p->int_state != 0) && (pins & Z80PIO_IEIO)) {
+        const bool int_active = (p->int_state & (Z80PIO_INT_REQUESTED | Z80PIO_INT_SERVICED)) != 0;
+        if ((p->int_state != 0) && (pins & Z80PIO_IEIO) && (p->int_enabled || int_active)) {
             // inhibit interrupt handling on downstream devices for the
             // entire duration of interrupt servicing
             pins &= ~Z80PIO_IEIO;
-            // set INT pint active until the CPU acknowledges the interrupt
-            if (p->int_state & Z80PIO_INT_NEEDED) {
+            // Keep INT active until the CPU acknowledges the interrupt.
+            if (p->int_state & (Z80PIO_INT_NEEDED | Z80PIO_INT_REQUESTED)) {
                 pins |= Z80PIO_INT;
+            }
+            if ((p->int_state & Z80PIO_INT_NEEDED) && p->int_enabled) {
                 p->int_state = (p->int_state & ~Z80PIO_INT_NEEDED) | Z80PIO_INT_REQUESTED;
             }
             // interrupt ackowledge from CPU (M1|IORQ): put interrupt vector
@@ -628,19 +636,20 @@ void _z80pio_read_port_inputs(z80pio_t* pio, uint64_t pins) {
 
         // Handle strobe input for handshake modes
         uint64_t strobe_pin = (i == 0) ? Z80PIO_ASTB : Z80PIO_BSTB;
-        bool strobe = (pins & strobe_pin) != 0;
-        bool strobe_falling = p->strobe_prev && !strobe;
-        p->strobe_prev = strobe;
+        const bool strobe_level = (pins & strobe_pin) != 0;
+        const bool strobe_asserted = !strobe_level;
+        const bool strobe_rising = (!p->strobe_prev) && strobe_level;
+        p->strobe_prev = strobe_level;
 
         // Handle input modes
         if (Z80PIO_MODE_INPUT == p->mode) {
-            // In input mode, data is latched on strobe active
-            if (strobe) {
+            /* Input is sampled while STB is active-low. */
+            if (strobe_asserted) {
                 p->input = data;
             }
 
-            // On strobe falling edge, set ready and generate interrupt
-            if (strobe_falling) {
+            /* Rising edge acknowledges transfer and makes data available to CPU. */
+            if (strobe_rising) {
                 p->ready = true;  // Ready goes active
                 if (p->int_enabled) {
                     p->int_state |= Z80PIO_INT_NEEDED;
@@ -648,8 +657,8 @@ void _z80pio_read_port_inputs(z80pio_t* pio, uint64_t pins) {
             }
         }
         else if (Z80PIO_MODE_OUTPUT == p->mode) {
-            // In output mode, strobe falling edge clears ready
-            if (strobe_falling) {
+            /* Peripheral acknowledge on STB deassertion (low->high). */
+            if (strobe_rising) {
                 p->ready = false;
                 // Generate interrupt if enabled
                 if (p->int_enabled) {
@@ -661,17 +670,17 @@ void _z80pio_read_port_inputs(z80pio_t* pio, uint64_t pins) {
             // Port A is output (handled like output mode)
             // Port B is input (handled like input mode)
             if (i == Z80PIO_PORT_A) {
-                if (strobe_falling) {
+                if (strobe_rising) {
                     p->ready = false;
                     if (p->int_enabled) {
                         p->int_state |= Z80PIO_INT_NEEDED;
                     }
                 }
             } else {
-                if (strobe) {
+                if (strobe_asserted) {
                     p->input = data;
                 }
-                if (strobe_falling) {
+                if (strobe_rising) {
                     p->ready = true;
                     if (p->int_enabled) {
                         p->int_state |= Z80PIO_INT_NEEDED;
@@ -728,6 +737,10 @@ uint64_t z80pio_tick(z80pio_t* pio, uint64_t pins) {
           the data on the port data lines satisfy the logical equation defined by
           the 8-bit mask and 2-bit mask control registers
     */
+    if ((pins & Z80PIO_M1) && !(pins & Z80PIO_IORQ) && !(pins & Z80PIO_RD)) {
+        /* Enter reset state when M1 occurs without RD/IORQ active. */
+        z80pio_reset(pio);
+    }
     if ((pins & (Z80PIO_CE|Z80PIO_IORQ|Z80PIO_M1)) == (Z80PIO_CE|Z80PIO_IORQ)) {
         pins = _z80pio_iorq(pio, pins);
     }

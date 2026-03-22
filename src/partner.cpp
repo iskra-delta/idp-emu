@@ -2,12 +2,28 @@
 #include <fstream>
 #include <iostream>
 #include <cstring>
+#include <algorithm>
+#include <cerrno>
+#include <cctype>
+#include <cstdio>
+
+#include <fcntl.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
 
 namespace {
 constexpr uint64_t PARTNER_HDD_SIZE = 1224ULL * 32 * 256;
 constexpr uint8_t FDC_INT_NEEDED = 1 << 0;
 constexpr uint8_t FDC_INT_REQUESTED = 1 << 1;
 constexpr uint8_t FDC_INT_SERVICED = 1 << 2;
+constexpr size_t MAX_SIO_RX_FIFO_BYTES = 8192;
+constexpr size_t MAX_TCP_RX_FIFO_BYTES = 32768;
+constexpr size_t MAX_TCP_TX_FIFO_BYTES = 32768;
+constexpr size_t MAX_PRINTER_TEXT_BYTES = 1 << 20;
+constexpr uint64_t TCP_POLL_INTERVAL_ACTIVE_TICKS = 2048;
+constexpr uint64_t TCP_POLL_INTERVAL_IDLE_TICKS = 8192;
 
 static inline uint64_t i8272_bus_idle() {
     return I8272_CS | I8272_RD | I8272_WR | I8272_RESET;
@@ -99,6 +115,83 @@ static inline void z80pio_cpu_write(z80pio_t* pio, uint8_t port, uint8_t data) {
     Z80PIO_SET_DATA(pins, data);
     (void)z80pio_tick(pio, pins);
 }
+
+static int clamp_tcp_port(int port)
+{
+    if (port < 1) return 1;
+    if (port > 65535) return 65535;
+    return port;
+}
+
+static bool set_nonblocking(int fd)
+{
+    if (fd < 0)
+        return false;
+    const int flags = fcntl(fd, F_GETFL, 0);
+    if (flags < 0)
+        return false;
+    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+}
+
+static int make_tcp_listener(int port)
+{
+    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd < 0)
+        return -1;
+
+    int one = 1;
+    (void)::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_addr.s_addr = htonl(INADDR_ANY);
+    addr.sin_port = htons((uint16_t)clamp_tcp_port(port));
+    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    if (::listen(fd, 1) != 0) {
+        ::close(fd);
+        return -1;
+    }
+    if (!set_nonblocking(fd)) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static int accept_nonblocking(int listen_fd)
+{
+    if (listen_fd < 0)
+        return -1;
+    sockaddr_in client{};
+    socklen_t len = sizeof(client);
+    int fd = ::accept(listen_fd, reinterpret_cast<sockaddr*>(&client), &len);
+    if (fd < 0)
+        return -1;
+    if (!set_nonblocking(fd)) {
+        ::close(fd);
+        return -1;
+    }
+    return fd;
+}
+
+static void close_fd_if_open(int &fd)
+{
+    if (fd >= 0) {
+        ::close(fd);
+        fd = -1;
+    }
+}
+
+template <typename T>
+static T clamp_delta(T v, T lo, T hi)
+{
+    if (v < lo) return lo;
+    if (v > hi) return hi;
+    return v;
+}
 }
 
 partner::partner()
@@ -121,7 +214,790 @@ partner::partner()
     hdc.read_blocks = read_hdd_blocks_cb;
     hdc.user_data   = this;
 
+    sio_device_cfg_[sio_port_index(sio_port_id::sio1_a)].kind = sio_device_kind::none;
+    sio_device_cfg_[sio_port_index(sio_port_id::sio1_b)].kind = sio_device_kind::none;
+    sio_device_cfg_[sio_port_index(sio_port_id::sio2_a)].kind = sio_device_kind::none;
+    sio_device_cfg_[sio_port_index(sio_port_id::sio2_b)].kind = sio_device_kind::none;
+    set_sio_port_lock(sio_port_id::sio1_a, true, "Fixed internal channel");
+    set_sio_port_lock(sio_port_id::sio1_b, false, "");
+    set_sio_port_lock(sio_port_id::sio2_a, false, "");
+    set_sio_port_lock(sio_port_id::sio2_b, false, "");
+
     reset();
+}
+
+partner::~partner()
+{
+    for (auto &runtime : sio_device_runtime_)
+        cleanup_tcp_bridge(runtime.tcp);
+}
+
+std::pair<z80sio_t *, int> partner::resolve_sio_channel(sio_port_id port)
+{
+    switch (port)
+    {
+    case sio_port_id::sio1_a: return { &sio, Z80SIO_CHANNEL_A };
+    case sio_port_id::sio1_b: return { &sio, Z80SIO_CHANNEL_B };
+    case sio_port_id::sio2_a: return { &sio2, Z80SIO_CHANNEL_A };
+    case sio_port_id::sio2_b: return { &sio2, Z80SIO_CHANNEL_B };
+    }
+    return { nullptr, Z80SIO_CHANNEL_A };
+}
+
+const std::pair<const z80sio_t *, int> partner::resolve_sio_channel_const(sio_port_id port) const
+{
+    switch (port)
+    {
+    case sio_port_id::sio1_a: return { &sio, Z80SIO_CHANNEL_A };
+    case sio_port_id::sio1_b: return { &sio, Z80SIO_CHANNEL_B };
+    case sio_port_id::sio2_a: return { &sio2, Z80SIO_CHANNEL_A };
+    case sio_port_id::sio2_b: return { &sio2, Z80SIO_CHANNEL_B };
+    }
+    return { nullptr, Z80SIO_CHANNEL_A };
+}
+
+void partner::set_sio_port_lock(sio_port_id port, bool locked, const std::string &reason)
+{
+    const int idx = sio_port_index(port);
+    sio_port_locked_[idx] = locked;
+    sio_port_lock_reason_[idx] = reason;
+}
+
+partner::sio_device_config partner::get_sio_device_config(sio_port_id port) const
+{
+    return sio_device_cfg_[sio_port_index(port)];
+}
+
+bool partner::set_sio_device_config(sio_port_id port, const sio_device_config &cfg_in)
+{
+    const int idx = sio_port_index(port);
+    if (sio_port_locked_[idx])
+        return false;
+
+    sio_device_config cfg = cfg_in;
+    cfg.tcp_data_port = clamp_tcp_port(cfg.tcp_data_port);
+    cfg.tcp_control_port = clamp_tcp_port(cfg.tcp_control_port);
+    if (cfg.tcp_control_port == cfg.tcp_data_port)
+        cfg.tcp_control_port = clamp_tcp_port(cfg.tcp_data_port + 1);
+
+    const sio_device_config old_cfg = sio_device_cfg_[idx];
+    sio_device_cfg_[idx] = cfg;
+    const bool changed =
+        old_cfg.kind != cfg.kind ||
+        old_cfg.tcp_data_port != cfg.tcp_data_port ||
+        old_cfg.tcp_control_port != cfg.tcp_control_port ||
+        old_cfg.tcp_require_rts != cfg.tcp_require_rts ||
+        old_cfg.tcp_cts_follows_data_client != cfg.tcp_cts_follows_data_client;
+    if (changed)
+        reset_sio_device_runtime(port);
+    return true;
+}
+
+partner::sio_port_status partner::get_sio_port_status(sio_port_id port) const
+{
+    sio_port_status st{};
+    const int idx = sio_port_index(port);
+    const auto [chip, channel] = resolve_sio_channel_const(port);
+    if (!chip)
+        return st;
+
+    const z80sio_channel_t &ch = chip->chn[channel];
+    const auto &cfg = sio_device_cfg_[idx];
+    const auto &rt = sio_device_runtime_[idx];
+
+    st.locked = sio_port_locked_[idx];
+    st.rts = ch.rts;
+    st.dtr = ch.dtr;
+    st.pending_rx_bytes = rt.rx_fifo.size();
+    st.tx_bytes = rt.tx_bytes;
+    st.rx_bytes = rt.rx_bytes;
+
+    bool cts = false;
+    bool dcd = false;
+    bool connected = false;
+    switch (cfg.kind)
+    {
+    case sio_device_kind::none:
+        st.detail = "Not connected";
+        break;
+    case sio_device_kind::mouse_microsoft:
+        cts = true;
+        dcd = true;
+        connected = true;
+        st.detail = "Serial mouse (Microsoft)";
+        break;
+    case sio_device_kind::mouse_mousesystems:
+        cts = true;
+        dcd = true;
+        connected = true;
+        st.detail = "Serial mouse (Mouse Systems)";
+        break;
+    case sio_device_kind::mouse_logitech:
+        cts = true;
+        dcd = true;
+        connected = true;
+        st.detail = "Serial mouse (Logitech)";
+        break;
+    case sio_device_kind::tcp_bridge: {
+        const bool data_connected = rt.tcp.data_client_fd >= 0;
+        dcd = data_connected;
+        if (rt.tcp.control_dcd_override_active)
+            dcd = rt.tcp.control_dcd_override_value;
+        cts = cfg.tcp_cts_follows_data_client ? data_connected : true;
+        if (rt.tcp.control_cts_override_active)
+            cts = rt.tcp.control_cts_override_value;
+        connected = data_connected;
+        char buf[128];
+        std::snprintf(buf, sizeof(buf), "TCP %d / ctl %d",
+                      cfg.tcp_data_port, cfg.tcp_control_port);
+        st.detail = buf;
+        st.pending_rx_bytes += rt.tcp.data_rx_fifo.size();
+        break;
+    }
+    }
+    st.cts = cts;
+    st.dcd = dcd;
+    st.connected = connected;
+    if (st.locked && !sio_port_lock_reason_[idx].empty())
+        st.detail = sio_port_lock_reason_[idx];
+    return st;
+}
+
+bool partner::is_sio_port_locked(sio_port_id port) const
+{
+    return sio_port_locked_[sio_port_index(port)];
+}
+
+std::string partner::get_sio_port_lock_reason(sio_port_id port) const
+{
+    return sio_port_lock_reason_[sio_port_index(port)];
+}
+
+partner::pio_device_config partner::get_pio_device_config(pio_port_id port) const
+{
+    return pio_device_cfg_[pio_port_index(port)];
+}
+
+void partner::set_pio_device_config(pio_port_id port, const pio_device_config &cfg)
+{
+    pio_device_cfg_[pio_port_index(port)] = cfg;
+}
+
+partner::pio_port_status partner::get_pio_port_status(pio_port_id port) const
+{
+    const auto &rt = pio_device_runtime_[pio_port_index(port)];
+    pio_port_status st{};
+    st.last_output = rt.last_output;
+    st.covox_level = rt.covox_level;
+    st.bytes_seen = rt.bytes_seen;
+    return st;
+}
+
+void partner::cleanup_tcp_bridge(tcp_bridge_runtime &tcp)
+{
+    close_fd_if_open(tcp.data_client_fd);
+    close_fd_if_open(tcp.control_client_fd);
+    close_fd_if_open(tcp.listen_fd);
+    close_fd_if_open(tcp.control_listen_fd);
+    tcp.next_poll_tick = 0;
+    tcp.control_cts_override_active = false;
+    tcp.control_cts_override_value = false;
+    tcp.control_dcd_override_active = false;
+    tcp.control_dcd_override_value = false;
+    tcp.last_rts = false;
+    tcp.last_dtr = false;
+    tcp.control_rx_buf.clear();
+    tcp.data_rx_fifo.clear();
+    tcp.data_tx_fifo.clear();
+}
+
+void partner::reset_sio_device_runtime(sio_port_id port)
+{
+    auto &rt = sio_device_runtime_[sio_port_index(port)];
+    rt.rx_fifo.clear();
+    rt.last_mouse_buttons = 0;
+    rt.mouse_buttons_initialized = false;
+    rt.mouse_accum_dx = 0;
+    rt.mouse_accum_dy = 0;
+    rt.tx_bytes = 0;
+    rt.rx_bytes = 0;
+    cleanup_tcp_bridge(rt.tcp);
+}
+
+bool partner::parse_bool_token(const std::string &token, bool &value)
+{
+    std::string up = token;
+    for (char &ch : up)
+        ch = (char)std::toupper((unsigned char)ch);
+    if (up == "1" || up == "ON" || up == "TRUE" || up == "YES") {
+        value = true;
+        return true;
+    }
+    if (up == "0" || up == "OFF" || up == "FALSE" || up == "NO") {
+        value = false;
+        return true;
+    }
+    return false;
+}
+
+void partner::tcp_bridge_send_modem_state(tcp_bridge_runtime &tcp, const char *name, bool value)
+{
+    if (tcp.control_client_fd < 0)
+        return;
+    char line[64];
+    std::snprintf(line, sizeof(line), "%s %d\n", name, value ? 1 : 0);
+    const ssize_t n = ::send(tcp.control_client_fd, line, std::strlen(line), MSG_NOSIGNAL);
+    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+        close_fd_if_open(tcp.control_client_fd);
+}
+
+void partner::tcp_bridge_parse_control_line(tcp_bridge_runtime &tcp, const std::string &line)
+{
+    auto send_reply = [&](const char *msg) {
+        if (tcp.control_client_fd < 0)
+            return;
+        (void)::send(tcp.control_client_fd, msg, std::strlen(msg), MSG_NOSIGNAL);
+    };
+
+    std::string cmd;
+    std::string arg;
+    const size_t sp = line.find_first_of(" \t");
+    if (sp == std::string::npos)
+        cmd = line;
+    else {
+        cmd = line.substr(0, sp);
+        size_t arg_start = line.find_first_not_of(" \t", sp);
+        if (arg_start != std::string::npos)
+            arg = line.substr(arg_start);
+    }
+    for (char &ch : cmd)
+        ch = (char)std::toupper((unsigned char)ch);
+    for (char &ch : arg)
+        ch = (char)std::toupper((unsigned char)ch);
+
+    if (cmd == "PING") {
+        send_reply("PONG\n");
+        return;
+    }
+
+    if (cmd == "CTS") {
+        if (arg == "AUTO") {
+            tcp.control_cts_override_active = false;
+            send_reply("OK CTS AUTO\n");
+            return;
+        }
+        bool val = false;
+        if (parse_bool_token(arg, val)) {
+            tcp.control_cts_override_active = true;
+            tcp.control_cts_override_value = val;
+            send_reply("OK CTS\n");
+            return;
+        }
+        send_reply("ERR CTS <0|1|AUTO>\n");
+        return;
+    }
+
+    if (cmd == "DCD") {
+        if (arg == "AUTO") {
+            tcp.control_dcd_override_active = false;
+            send_reply("OK DCD AUTO\n");
+            return;
+        }
+        bool val = false;
+        if (parse_bool_token(arg, val)) {
+            tcp.control_dcd_override_active = true;
+            tcp.control_dcd_override_value = val;
+            send_reply("OK DCD\n");
+            return;
+        }
+        send_reply("ERR DCD <0|1|AUTO>\n");
+        return;
+    }
+
+    send_reply("ERR UNKNOWN\n");
+}
+
+bool partner::ensure_tcp_bridge_listeners(sio_port_id port)
+{
+    const int idx = sio_port_index(port);
+    const auto &cfg = sio_device_cfg_[idx];
+    auto &tcp = sio_device_runtime_[idx].tcp;
+    if (cfg.kind != sio_device_kind::tcp_bridge)
+        return false;
+
+    if (tcp.listen_fd < 0)
+        tcp.listen_fd = make_tcp_listener(cfg.tcp_data_port);
+    if (tcp.control_listen_fd < 0)
+        tcp.control_listen_fd = make_tcp_listener(cfg.tcp_control_port);
+    return tcp.listen_fd >= 0 && tcp.control_listen_fd >= 0;
+}
+
+void partner::poll_tcp_bridge(sio_port_id port, z80sio_channel_t &ch)
+{
+    const int idx = sio_port_index(port);
+    auto &rt = sio_device_runtime_[idx];
+    auto &tcp = rt.tcp;
+    const auto &cfg = sio_device_cfg_[idx];
+    if (!ensure_tcp_bridge_listeners(port))
+        return;
+
+    const bool active_before_poll =
+        (tcp.data_client_fd >= 0) || (tcp.control_client_fd >= 0) || !tcp.data_tx_fifo.empty();
+    const uint64_t interval =
+        active_before_poll ? TCP_POLL_INTERVAL_ACTIVE_TICKS : TCP_POLL_INTERVAL_IDLE_TICKS;
+    if (tick_count < tcp.next_poll_tick)
+        return;
+    tcp.next_poll_tick = tick_count + interval;
+
+    if (tcp.data_client_fd < 0)
+        tcp.data_client_fd = accept_nonblocking(tcp.listen_fd);
+    if (tcp.control_client_fd < 0)
+        tcp.control_client_fd = accept_nonblocking(tcp.control_listen_fd);
+
+    if (tcp.data_client_fd >= 0)
+    {
+        uint8_t buf[512];
+        for (;;)
+        {
+            const ssize_t n = ::recv(tcp.data_client_fd, buf, sizeof(buf), 0);
+            if (n > 0) {
+                for (ssize_t i = 0; i < n; i++) {
+                    if (tcp.data_rx_fifo.size() >= MAX_TCP_RX_FIFO_BYTES)
+                        tcp.data_rx_fifo.pop_front();
+                    tcp.data_rx_fifo.push_back(buf[i]);
+                }
+                continue;
+            }
+            if (n == 0) {
+                close_fd_if_open(tcp.data_client_fd);
+            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                close_fd_if_open(tcp.data_client_fd);
+            }
+            break;
+        }
+    }
+
+    if (tcp.control_client_fd >= 0)
+    {
+        char buf[256];
+        for (;;)
+        {
+            const ssize_t n = ::recv(tcp.control_client_fd, buf, sizeof(buf), 0);
+            if (n > 0) {
+                tcp.control_rx_buf.append(buf, (size_t)n);
+                for (;;) {
+                    size_t nl = tcp.control_rx_buf.find('\n');
+                    if (nl == std::string::npos)
+                        break;
+                    std::string line = tcp.control_rx_buf.substr(0, nl);
+                    if (!line.empty() && line.back() == '\r')
+                        line.pop_back();
+                    tcp.control_rx_buf.erase(0, nl + 1);
+                    tcp_bridge_parse_control_line(tcp, line);
+                }
+                continue;
+            }
+            if (n == 0) {
+                close_fd_if_open(tcp.control_client_fd);
+                tcp.control_rx_buf.clear();
+            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+                close_fd_if_open(tcp.control_client_fd);
+                tcp.control_rx_buf.clear();
+            }
+            break;
+        }
+    }
+
+    while (tcp.data_client_fd >= 0 && !tcp.data_tx_fifo.empty())
+    {
+        uint8_t out_buf[1024];
+        const size_t out_n = std::min(tcp.data_tx_fifo.size(), sizeof(out_buf));
+        for (size_t i = 0; i < out_n; i++)
+            out_buf[i] = tcp.data_tx_fifo[i];
+
+        const ssize_t sent = ::send(tcp.data_client_fd, out_buf, out_n, MSG_NOSIGNAL);
+        if (sent > 0)
+        {
+            for (ssize_t i = 0; i < sent; i++)
+                tcp.data_tx_fifo.pop_front();
+            continue;
+        }
+        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+            break;
+        close_fd_if_open(tcp.data_client_fd);
+        break;
+    }
+
+    if (tcp.last_rts != ch.rts) {
+        tcp.last_rts = ch.rts;
+        tcp_bridge_send_modem_state(tcp, "RTS", ch.rts);
+    }
+    if (tcp.last_dtr != ch.dtr) {
+        tcp.last_dtr = ch.dtr;
+        tcp_bridge_send_modem_state(tcp, "DTR", ch.dtr);
+    }
+
+    const bool allow_remote_tx = !cfg.tcp_require_rts || ch.rts;
+    while (allow_remote_tx && !tcp.data_rx_fifo.empty())
+    {
+        if (rt.rx_fifo.size() >= MAX_SIO_RX_FIFO_BYTES)
+            rt.rx_fifo.pop_front();
+        rt.rx_fifo.push_back(tcp.data_rx_fifo.front());
+        tcp.data_rx_fifo.pop_front();
+    }
+}
+
+void partner::queue_mouse_packet(sio_port_id port, int dx, int dy, uint8_t buttons)
+{
+    const int idx = sio_port_index(port);
+    auto &rt = sio_device_runtime_[idx];
+    const auto push_byte = [&](uint8_t b) {
+        if (rt.rx_fifo.size() >= MAX_SIO_RX_FIFO_BYTES)
+            rt.rx_fifo.pop_front();
+        rt.rx_fifo.push_back(b);
+    };
+
+    const auto kind = sio_device_cfg_[idx].kind;
+    if (kind == sio_device_kind::mouse_microsoft || kind == sio_device_kind::mouse_logitech)
+    {
+        const int8_t sx = (int8_t)clamp_delta(dx, -127, 127);
+        const int8_t sy = (int8_t)clamp_delta(dy, -127, 127);
+        const uint8_t xb = (uint8_t)sx;
+        const uint8_t yb = (uint8_t)sy;
+        // Microsoft/Logitech protocol is 7N1. The sync bit is bit6 (0x40),
+        // not bit7, so keep packet bytes in the 0x00..0x7F range.
+        uint8_t b1 = 0x40;
+        if (buttons & 0x01) b1 |= 0x20; // left
+        if (buttons & 0x02) b1 |= 0x10; // right
+        b1 |= (uint8_t)((yb >> 4) & 0x0C);
+        b1 |= (uint8_t)((xb >> 6) & 0x03);
+        const uint8_t b2 = (uint8_t)(xb & 0x3F);
+        const uint8_t b3 = (uint8_t)(yb & 0x3F);
+        push_byte(b1);
+        push_byte(b2);
+        push_byte(b3);
+        if (kind == sio_device_kind::mouse_logitech && (buttons & 0x04))
+            push_byte(0x20);
+        return;
+    }
+
+    if (kind == sio_device_kind::mouse_mousesystems)
+    {
+        const int clamped_dx = clamp_delta(dx, -127, 127);
+        const int clamped_dy = clamp_delta(dy, -127, 127);
+        // Mouse Systems is an 8N1 protocol. Use full 8-bit signed deltas.
+        const int dxa = clamped_dx / 2;
+        const int dxb = clamped_dx - dxa;
+        const int dya = clamped_dy / 2;
+        const int dyb = clamped_dy - dya;
+
+        uint8_t b1 = 0x80;
+        if ((buttons & 0x01) == 0) b1 |= 0x04; // left up
+        if ((buttons & 0x04) == 0) b1 |= 0x02; // middle up
+        if ((buttons & 0x02) == 0) b1 |= 0x01; // right up
+        push_byte(b1);
+        push_byte((uint8_t)(int8_t)dxa);
+        push_byte((uint8_t)(int8_t)dya);
+        push_byte((uint8_t)(int8_t)dxb);
+        push_byte((uint8_t)(int8_t)dyb);
+    }
+}
+
+void partner::queue_logitech_c7_identification(sio_port_id port)
+{
+    static constexpr const char *k_logitech_id =
+        "\r\nLOGIMOUSE C7 Firmware Revision 3.0\r\n";
+    const int idx = sio_port_index(port);
+    auto &rt = sio_device_runtime_[idx];
+    const auto push_byte = [&](uint8_t b) {
+        if (rt.rx_fifo.size() >= MAX_SIO_RX_FIFO_BYTES)
+            rt.rx_fifo.pop_front();
+        rt.rx_fifo.push_back(b);
+    };
+
+    for (const char *p = k_logitech_id; *p; ++p)
+        push_byte((uint8_t)*p);
+    push_byte(0x00);
+}
+
+void partner::queue_logitech_c7_poll_report(sio_port_id port)
+{
+    const int idx = sio_port_index(port);
+    auto &rt = sio_device_runtime_[idx];
+    const auto push_byte = [&](uint8_t b) {
+        if (rt.rx_fifo.size() >= MAX_SIO_RX_FIFO_BYTES)
+            rt.rx_fifo.pop_front();
+        rt.rx_fifo.push_back(b);
+    };
+    const auto with_even_parity = [](uint8_t data7) -> uint8_t {
+        uint8_t b = data7 & 0x7F;
+        uint8_t x = b;
+        x ^= (uint8_t)(x >> 4);
+        x ^= (uint8_t)(x >> 2);
+        x ^= (uint8_t)(x >> 1);
+        const bool odd = (x & 1u) != 0;
+        if (odd)
+            b |= 0x80;
+        return b;
+    };
+
+    const int16_t dx = (int16_t)clamp_delta(rt.mouse_accum_dx, -2048, 2047);
+    const int16_t dy = (int16_t)clamp_delta(rt.mouse_accum_dy, -2048, 2047);
+    rt.mouse_accum_dx = 0;
+    rt.mouse_accum_dy = 0;
+
+    const bool left = (rt.last_mouse_buttons & 0x01) != 0;
+    const bool right = (rt.last_mouse_buttons & 0x02) != 0;
+    const bool middle = (rt.last_mouse_buttons & 0x04) != 0;
+
+    const uint8_t data1 =
+        0x40 |
+        (left ? 0x10 : 0x00) |
+        (middle ? 0x08 : 0x00) |
+        (right ? 0x04 : 0x00);
+    const uint16_t dx12 = (uint16_t)(dx & 0x0FFF);
+    const uint16_t dy12 = (uint16_t)(dy & 0x0FFF);
+
+    push_byte(with_even_parity(data1));
+    push_byte(with_even_parity((uint8_t)(dx12 & 0x3F)));
+    push_byte(with_even_parity((uint8_t)((dx12 >> 6) & 0x3F)));
+    push_byte(with_even_parity((uint8_t)(dy12 & 0x3F)));
+    push_byte(with_even_parity((uint8_t)((dy12 >> 6) & 0x3F)));
+}
+
+void partner::inject_serial_mouse_motion(int dx, int dy, bool left_pressed, bool right_pressed, bool middle_pressed)
+{
+    uint8_t buttons = 0;
+    if (left_pressed) buttons |= 0x01;
+    if (right_pressed) buttons |= 0x02;
+    if (middle_pressed) buttons |= 0x04;
+
+    const std::array<sio_port_id, 3> ports = {
+        sio_port_id::sio1_b, sio_port_id::sio2_a, sio_port_id::sio2_b
+    };
+    for (sio_port_id port : ports)
+    {
+        const int idx = sio_port_index(port);
+        const auto kind = sio_device_cfg_[idx].kind;
+        const bool is_mouse =
+            (kind == sio_device_kind::mouse_microsoft) ||
+            (kind == sio_device_kind::mouse_mousesystems) ||
+            (kind == sio_device_kind::mouse_logitech);
+        if (!is_mouse)
+            continue;
+
+        auto &rt = sio_device_runtime_[idx];
+        const bool button_change = !rt.mouse_buttons_initialized || (rt.last_mouse_buttons != buttons);
+        if (kind == sio_device_kind::mouse_logitech)
+        {
+            // Logitech C7 is prompt/poll oriented: accumulate movement and
+            // publish only when host sends 'P'.
+            int32_t adx = rt.mouse_accum_dx + dx;
+            int32_t ady = rt.mouse_accum_dy - dy;
+            rt.mouse_accum_dx = clamp_delta(adx, (int32_t)-2048, (int32_t)2047);
+            rt.mouse_accum_dy = clamp_delta(ady, (int32_t)-2048, (int32_t)2047);
+            rt.last_mouse_buttons = buttons;
+            rt.mouse_buttons_initialized = true;
+            continue;
+        }
+
+        int rem_x = dx;
+        int rem_y = -dy;
+        bool sent = false;
+        while (rem_x != 0 || rem_y != 0)
+        {
+            const int step_x = clamp_delta(rem_x, -127, 127);
+            const int step_y = clamp_delta(rem_y, -127, 127);
+            queue_mouse_packet(port, step_x, step_y, buttons);
+            rem_x -= step_x;
+            rem_y -= step_y;
+            sent = true;
+        }
+        if (!sent && button_change) {
+            queue_mouse_packet(port, 0, 0, buttons);
+        }
+        rt.last_mouse_buttons = buttons;
+        rt.mouse_buttons_initialized = true;
+    }
+}
+
+bool partner::has_logitech_mouse_attached() const
+{
+    const std::array<sio_port_id, 3> ports = {
+        sio_port_id::sio1_b, sio_port_id::sio2_a, sio_port_id::sio2_b
+    };
+    for (sio_port_id port : ports)
+    {
+        const auto &cfg = sio_device_cfg_[sio_port_index(port)];
+        if (cfg.kind == sio_device_kind::mouse_logitech)
+            return true;
+    }
+    return false;
+}
+
+bool partner::has_serial_mouse_attached() const
+{
+    const std::array<sio_port_id, 3> ports = {
+        sio_port_id::sio1_b, sio_port_id::sio2_a, sio_port_id::sio2_b
+    };
+    for (sio_port_id port : ports)
+    {
+        const auto kind = sio_device_cfg_[sio_port_index(port)].kind;
+        if (kind == sio_device_kind::mouse_microsoft ||
+            kind == sio_device_kind::mouse_mousesystems ||
+            kind == sio_device_kind::mouse_logitech)
+            return true;
+    }
+    return false;
+}
+
+void partner::apply_pio_device_output(pio_port_id port, uint8_t data)
+{
+    const int idx = pio_port_index(port);
+    const auto kind = pio_device_cfg_[idx].kind;
+    if (kind == pio_device_kind::none)
+        return;
+
+    auto &rt = pio_device_runtime_[idx];
+    rt.last_output = data;
+    rt.bytes_seen++;
+    if (kind == pio_device_kind::covox) {
+        rt.covox_level = (float)data / 255.0f;
+        return;
+    }
+    if (kind == pio_device_kind::centronics_printer)
+    {
+        if (data == '\r') {
+            virtual_printer_text_.push_back('\n');
+        } else if (data == '\n') {
+            if (virtual_printer_text_.empty() || virtual_printer_text_.back() != '\n')
+                virtual_printer_text_.push_back('\n');
+        } else if (data == '\t' || ((data >= 0x20) && (data < 0x7F))) {
+            virtual_printer_text_.push_back((char)data);
+        }
+        if (virtual_printer_text_.size() > MAX_PRINTER_TEXT_BYTES)
+            virtual_printer_text_.erase(0, virtual_printer_text_.size() - (MAX_PRINTER_TEXT_BYTES / 2));
+    }
+}
+
+void partner::apply_sio_modem_inputs(uint64_t &bus_pins, sio_port_id port_a, sio_port_id port_b)
+{
+    auto eval_modem = [&](sio_port_id port) {
+        const int idx = sio_port_index(port);
+        if (sio_port_locked_[idx]) {
+            // Internal hard-wired channels are always present/ready.
+            return std::pair<bool, bool>{true, true};
+        }
+        bool cts = false;
+        bool dcd = false;
+        const auto &cfg = sio_device_cfg_[idx];
+        const auto &rt = sio_device_runtime_[idx];
+        switch (cfg.kind)
+        {
+        case sio_device_kind::none:
+            break;
+        case sio_device_kind::mouse_microsoft:
+        case sio_device_kind::mouse_mousesystems:
+        case sio_device_kind::mouse_logitech:
+            cts = true;
+            dcd = true;
+            break;
+        case sio_device_kind::tcp_bridge: {
+            const bool data_connected = rt.tcp.data_client_fd >= 0;
+            dcd = data_connected;
+            if (rt.tcp.control_dcd_override_active)
+                dcd = rt.tcp.control_dcd_override_value;
+            cts = cfg.tcp_cts_follows_data_client ? data_connected : true;
+            if (rt.tcp.control_cts_override_active)
+                cts = rt.tcp.control_cts_override_value;
+            break;
+        }
+        }
+        return std::pair<bool, bool>{cts, dcd};
+    };
+
+    const auto [cts_a, dcd_a] = eval_modem(port_a);
+    const auto [cts_b, dcd_b] = eval_modem(port_b);
+
+    bus_pins &= ~(Z80SIO_CTSA | Z80SIO_DCDA | Z80SIO_CTSB | Z80SIO_DCDB);
+    if (cts_a) bus_pins |= Z80SIO_CTSA;
+    if (dcd_a) bus_pins |= Z80SIO_DCDA;
+    if (cts_b) bus_pins |= Z80SIO_CTSB;
+    if (dcd_b) bus_pins |= Z80SIO_DCDB;
+}
+
+void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
+{
+    if (!chip)
+        return;
+    const int idx = sio_port_index(port);
+    auto &cfg = sio_device_cfg_[idx];
+    if (cfg.kind == sio_device_kind::none)
+        return;
+    auto &rt = sio_device_runtime_[idx];
+    z80sio_channel_t &ch = chip->chn[channel];
+
+    if (cfg.kind == sio_device_kind::tcp_bridge)
+        poll_tcp_bridge(port, ch);
+
+    if (!ch.tx_ready)
+    {
+        const uint8_t tx = z80sio_tx_data(chip, channel);
+        rt.tx_bytes++;
+        if (cfg.kind == sio_device_kind::tcp_bridge)
+        {
+            if (rt.tcp.data_tx_fifo.size() >= MAX_TCP_TX_FIFO_BYTES)
+                rt.tcp.data_tx_fifo.pop_front();
+            rt.tcp.data_tx_fifo.push_back(tx);
+        }
+        else if (cfg.kind == sio_device_kind::mouse_logitech)
+        {
+            // Logitech C7 prompt-mode commands:
+            //   'c' => identification string
+            //   'P' => poll report
+            //   'D' => prompt mode (accepted, no-op)
+            if (tx == 'c' || tx == 'C')
+                queue_logitech_c7_identification(port);
+            else if (tx == 'P' || tx == 'p')
+                queue_logitech_c7_poll_report(port);
+            else if (tx == 'D' || tx == 'd')
+            {
+                // Prompt mode command accepted (no-op in current model).
+            }
+        }
+    }
+
+    if (ch.rx_ready || rt.rx_fifo.empty())
+        return;
+
+    const uint8_t data = rt.rx_fifo.front();
+    const bool was_ready = ch.rx_ready;
+    z80sio_rx_data(chip, channel, data);
+    if (!ch.rx_ready && !was_ready)
+    {
+        ch.rx_data = data;
+        ch.rx_ready = true;
+        ch.int_state |= Z80SIO_INT_NEEDED;
+    }
+    if (ch.rx_ready)
+    {
+        rt.rx_fifo.pop_front();
+        rt.rx_bytes++;
+    }
+}
+
+void partner::service_virtual_devices()
+{
+    const bool any_active =
+        (sio_device_cfg_[sio_port_index(sio_port_id::sio1_b)].kind != sio_device_kind::none) ||
+        (sio_device_cfg_[sio_port_index(sio_port_id::sio2_a)].kind != sio_device_kind::none) ||
+        (sio_device_cfg_[sio_port_index(sio_port_id::sio2_b)].kind != sio_device_kind::none);
+    if (!any_active)
+        return;
+
+    service_sio_device(sio_port_id::sio1_b, &sio, Z80SIO_CHANNEL_B);
+    service_sio_device(sio_port_id::sio2_a, &sio2, Z80SIO_CHANNEL_A);
+    service_sio_device(sio_port_id::sio2_b, &sio2, Z80SIO_CHANNEL_B);
 }
 
 void partner::load_rtc_nvram()
@@ -331,6 +1207,15 @@ void partner::reset()
     tick_count = 0;
     auto_floppy_key_sent_ = false;
     restore_drive_ready_flags();
+
+    for (sio_port_id port : { sio_port_id::sio1_a, sio_port_id::sio1_b, sio_port_id::sio2_a, sio_port_id::sio2_b })
+        reset_sio_device_runtime(port);
+    for (auto &rt : pio_device_runtime_) {
+        rt.last_output = 0;
+        rt.covox_level = 0.0f;
+        rt.bytes_seen = 0;
+    }
+    virtual_printer_text_.clear();
 }
 
 void partner::tick()
@@ -484,6 +1369,7 @@ void partner::tick()
         if (port & 0x01) pins |= Z80SIO_CS_A;  // control register select
         if (port & 0x02) pins |= Z80SIO_CS_B;  // channel B select
     }
+    apply_sio_modem_inputs(pins, sio_port_id::sio1_a, sio_port_id::sio1_b);
     pins = z80sio_tick(&sio, pins);
     pins &= ~(Z80SIO_CE | Z80SIO_CS_A | Z80SIO_CS_B);
 
@@ -494,6 +1380,7 @@ void partner::tick()
         if (port & 0x01) pins |= Z80SIO_CS_A;  // control register select
         if (port & 0x02) pins |= Z80SIO_CS_B;  // channel B select
     }
+    apply_sio_modem_inputs(pins, sio_port_id::sio2_a, sio_port_id::sio2_b);
     pins = z80sio_tick(&sio2, pins);
     pins &= ~(Z80SIO_CE | Z80SIO_CS_A | Z80SIO_CS_B);
 
@@ -517,6 +1404,8 @@ void partner::tick()
         pins |= Z80DMA_BUSACK;
     else
         pins &= ~Z80DMA_BUSACK;
+
+    service_virtual_devices();
 
     // FDC interrupt participates in the Z80 daisy chain after the Zilog devices.
     service_fdc_daisy(pins, cpu_ticked);
@@ -811,7 +1700,11 @@ void partner::io_write(uint16_t port, uint8_t data)
     // Z80 PIO: 0xD0-0xD3
     if (port >= 0xD0 && port <= 0xD3)
     {
+        const bool is_data_write = (port & 0x01) == 0;
+        const pio_port_id pio_port = (port & 0x02) ? pio_port_id::b : pio_port_id::a;
         z80pio_cpu_write(&pio, (uint8_t)port, data);
+        if (is_data_write)
+            apply_pio_device_output(pio_port, pio.port[(port & 0x02) ? Z80PIO_PORT_B : Z80PIO_PORT_A].output);
         return;
     }
 

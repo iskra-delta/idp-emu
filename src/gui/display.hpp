@@ -43,6 +43,21 @@ public:
     const uint8_t* data() const { return fb_; }
     void set_phosphor_type(phosphor_type t) { phosphor_ = t; }
     phosphor_type get_phosphor_type() const { return phosphor_; }
+    void set_monitor_brightness(float v);
+    float get_monitor_brightness() const { return monitor_brightness_; }
+    void set_monitor_contrast(float v);
+    float get_monitor_contrast() const { return monitor_contrast_; }
+    void set_monitor_bloom(float v);
+    float get_monitor_bloom() const { return monitor_bloom_; }
+    void set_monitor_scanline_strength(float v);
+    float get_monitor_scanline_strength() const { return monitor_scanline_strength_; }
+    void set_monitor_mask_strength(float v);
+    float get_monitor_mask_strength() const { return monitor_mask_strength_; }
+    void set_monitor_vignette(float v);
+    float get_monitor_vignette() const { return monitor_vignette_; }
+    void set_monitor_persistence(float v);
+    float get_monitor_persistence() const { return monitor_persistence_; }
+    void reset_monitor_tuning();
 
 private:
     uint8_t fb_[FB_W * FB_H]{};
@@ -57,6 +72,13 @@ private:
     GLuint vao_ = 0;
     GLuint vbo_ = 0;
     phosphor_type phosphor_ = phosphor_type::green;
+    float monitor_brightness_ = 1.00f;
+    float monitor_contrast_ = 1.00f;
+    float monitor_bloom_ = 1.00f;
+    float monitor_scanline_strength_ = 1.00f;
+    float monitor_mask_strength_ = 1.00f;
+    float monitor_vignette_ = 1.00f;
+    float monitor_persistence_ = 0.78f;
 
     void apply_crt();
     GLuint compile_shader(const char *vert_src, const char *frag_src);

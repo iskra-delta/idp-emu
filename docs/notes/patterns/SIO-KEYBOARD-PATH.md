@@ -33,3 +33,7 @@ Document how Partner ROM expects keyboard bytes during boot and why loops at
 
 - SIO polling/input path works for boot selection and text diagnostics.
 - Remaining GDP issues are not caused by basic SIO key ingress.
+
+## See Also
+
+- `docs/notes/patterns/SIO-PIO-TCP-VIRTUAL-DEVICES.md` (current virtual-device routing, mouse protocols, and TCP bridge behavior)

@@ -18,10 +18,14 @@ const char *phase_name(s1410_phase_t phase)
 
 } // namespace
 
-void panels::render_xebec(partner &emu)
+void panels::render_xebec(partner &emu, bool *p_open)
 {
-    ImGui::Begin("Xebec S1410", nullptr,
-                 ImGuiWindowFlags_NoCollapse);
+    if (!ImGui::Begin("Xebec S1410", p_open,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
 
     const s1410_t &hdc = emu.get_hdc();
     const idpartner_sasi_t &sasi = emu.get_sasi();

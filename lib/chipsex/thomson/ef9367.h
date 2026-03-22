@@ -75,6 +75,7 @@ typedef struct {
     bool mode_512_lines; /* true=1024x512, false=1024x256 (each line doubled) */
     uint8_t read_bank;   /* 0/1: bank selected for scanout (RBNK) */
     uint8_t write_bank;  /* 0/1: bank selected for drawing/writes (WRNK) */
+    bool xor_mode;       /* Partner board flag: XOR plot mode */
     uint8_t fb[2][(1024 * 512) / 8];
 } ef9367_t;
 
@@ -95,6 +96,7 @@ bool ef9367_load_charset_rom(ef9367_t *gdp, const uint8_t *rom, uint32_t size);
     #include <assert.h>
     #define CHIPS_ASSERT(c) assert(c)
 #endif
+#include <math.h>
 
 static inline uint8_t _ef9367_status(const ef9367_t *gdp) {
     uint8_t st = gdp->vblank ? 0x02 : 0x00;
@@ -128,6 +130,22 @@ static inline void _ef9367_set_px(ef9367_t *gdp, int x, int y, bool on) {
     else fb[byte_ix] &= (uint8_t)~bit;
 }
 
+static inline void _ef9367_flip_px(ef9367_t *gdp, int x, int y) {
+    const bool mode_256 = !gdp->mode_512_lines;
+    const int logical_h = mode_256 ? 256 : 512;
+    if ((x < 0) || (x >= 1024) || (y < 0) || (y >= logical_h)) {
+        return;
+    }
+    const int base_fb_y = mode_256 ? (255 - y) : (511 - y);
+    const int fb_mod = mode_256 ? 256 : 512;
+    const int fb_y = (base_fb_y - gdp->scroll_offset) & (fb_mod - 1);
+    const uint32_t p = (uint32_t)fb_y * 1024u + (uint32_t)x;
+    const uint32_t byte_ix = p >> 3;
+    const uint8_t bit = (uint8_t)(1u << (p & 7u));
+    uint8_t *fb = _ef9367_fb_page(gdp, gdp->write_bank);
+    fb[byte_ix] ^= bit;
+}
+
 static inline void _ef9367_clear(ef9367_t *gdp) {
     memset(gdp->fb[0], 0, sizeof(gdp->fb[0]));
     memset(gdp->fb[1], 0, sizeof(gdp->fb[1]));
@@ -145,6 +163,13 @@ static inline int _ef9367_q_factor(const ef9367_t *gdp) {
 
 static inline void _ef9367_plot(ef9367_t *gdp, int x, int y) {
     if ((gdp->cr1 & 0x01) == 0) {
+        return;
+    }
+    if (gdp->xor_mode) {
+        /* Partner XOR mode toggles pixels only when "pen" is selected. */
+        if ((gdp->cr1 & 0x02) != 0) {
+            _ef9367_flip_px(gdp, x, y);
+        }
         return;
     }
     _ef9367_set_px(gdp, x, y, (gdp->cr1 & 0x02) != 0);
@@ -195,6 +220,98 @@ static inline void _ef9367_draw_glyph(ef9367_t *gdp, uint8_t ch) {
     }
 }
 
+static inline int _ef9367_iabs(int v) {
+    return (v < 0) ? -v : v;
+}
+
+static inline void _ef9367_draw_line_to(ef9367_t *gdp, int dst_x, int dst_y) {
+    const int x0 = (int)gdp->x;
+    const int y0 = (int)gdp->y;
+    const int delta_x = dst_x - x0;
+    const int delta_y = dst_y - y0;
+    const int steps = _ef9367_iabs(delta_x) > _ef9367_iabs(delta_y)
+        ? _ef9367_iabs(delta_x)
+        : _ef9367_iabs(delta_y);
+
+    if (steps == 0) {
+        _ef9367_plot(gdp, x0, y0);
+        gdp->x = (uint16_t)dst_x;
+        gdp->y = (uint16_t)dst_y;
+        return;
+    }
+
+    const double x_step = (double)delta_x / (double)steps;
+    const double y_step = (double)delta_y / (double)steps;
+    double x = (double)x0;
+    double y = (double)y0;
+    for (int i = 0; i <= steps; i++) {
+        const int px = (int)nearbyint(x);
+        const int py = (int)nearbyint(y);
+        _ef9367_plot(gdp, px, py);
+        x += x_step;
+        y += y_step;
+    }
+
+    gdp->x = (uint16_t)dst_x;
+    gdp->y = (uint16_t)dst_y;
+}
+
+static inline void _ef9367_draw_vector(ef9367_t *gdp, uint8_t cmd, int delta_x, int delta_y) {
+    const int dir = cmd & 0x06;
+    const bool special_axis = (cmd & 0x01) == 0;
+    const int x0 = (int)gdp->x;
+    const int y0 = (int)gdp->y;
+
+    /*
+        Thomson WRVECT sets DIRECT from signed (dX,dY):
+            0: +X/+Y quadrant, 2: -X/+Y quadrant,
+            4: +X/-Y quadrant, 6: -X/-Y quadrant.
+        Special vectors (b0=0) are axis-parallel shortcuts. When either
+        delta is 0, DIRECT maps to axis direction:
+            0 => +X, 2 => +Y, 4 => -Y, 6 => -X.
+    */
+    if (special_axis) {
+        switch (dir) {
+            case 0x00: {
+                const int len = delta_x;
+                _ef9367_draw_line_to(gdp, x0 + len, y0);
+                return;
+            }
+            case 0x02: {
+                const int len = delta_y;
+                _ef9367_draw_line_to(gdp, x0, y0 + len);
+                return;
+            }
+            case 0x04: {
+                const int len = delta_y;
+                _ef9367_draw_line_to(gdp, x0, y0 - len);
+                return;
+            }
+            case 0x06: {
+                const int len = delta_x;
+                _ef9367_draw_line_to(gdp, x0 - len, y0);
+                return;
+            }
+            default:
+                return;
+        }
+    }
+
+    /* Oblique vectors (b0=1) use both dX and dY with quadrant signs. */
+    int sx = 1;
+    int sy = 1;
+    switch (dir) {
+        case 0x00: sx = +1; sy = +1; break;
+        case 0x02: sx = -1; sy = +1; break;
+        case 0x04: sx = +1; sy = -1; break;
+        case 0x06: sx = -1; sy = -1; break;
+        default: break;
+    }
+    const int dst_x = x0 + (sx * delta_x);
+    const int dst_y = y0 + (sy * delta_y);
+    _ef9367_draw_line_to(gdp, dst_x, dst_y);
+}
+
 void ef9367_init(ef9367_t *gdp) {
     CHIPS_ASSERT(gdp);
     memset(gdp, 0, sizeof(*gdp));
@@ -223,6 +340,7 @@ void ef9367_reset(ef9367_t *gdp) {
     gdp->mode_512_lines = true;
     gdp->read_bank = 0;
     gdp->write_bank = 0;
+    gdp->xor_mode = false;
     gdp->status = _ef9367_status(gdp);
 }
 
@@ -247,7 +365,9 @@ static inline uint8_t _ef9367_read_idx(ef9367_t *gdp, uint8_t idx) {
 static inline void _ef9367_write_idx(ef9367_t *gdp, uint8_t idx, uint8_t data) {
     switch (idx & 0x0F) {
         case 0x0:
-            if (data < 0x20) {
+            /* EF936x command space: 0x00..0x1F and 0x80..0xFF.
+               0x20..0x7F are printable character codes. */
+            if ((data < 0x20) || (data >= 0x80)) {
                 ef9367_command(gdp, data);
             } else {
                 _ef9367_draw_glyph(gdp, data);
@@ -311,7 +431,18 @@ uint8_t ef9367_read(ef9367_t *gdp, uint8_t port) {
 void ef9367_command(ef9367_t *gdp, uint8_t cmd) {
     CHIPS_ASSERT(gdp);
     gdp->command = cmd;
-    switch (cmd & 0x0F) {
+
+    /* Small vectors (bit7=1): packed dX/dY in 2-bit fields. */
+    if ((cmd & 0x80) != 0) {
+        const int delta_x = (int)((cmd >> 5) & 0x03);
+        const int delta_y = (int)((cmd >> 3) & 0x03);
+        _ef9367_draw_vector(gdp, cmd, delta_x, delta_y);
+    }
+    /* Standard vectors (0x10..0x17): deltas from DX/DY registers. */
+    else if ((cmd & 0xF8) == 0x10) {
+        _ef9367_draw_vector(gdp, cmd, (int)gdp->dx, (int)gdp->dy);
+    }
+    else switch (cmd) {
         case 0x04: /* clear current page */
             _ef9367_clear(gdp);
             break;

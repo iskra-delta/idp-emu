@@ -37,14 +37,19 @@ void render_channel(const char *name, const z80sio_channel_t &ch)
 
 } // namespace
 
-void panels::render_sio(partner &emu, std::vector<uint8_t> &inject_buf)
+void panels::render_sio(partner &emu, std::vector<uint8_t> &inject_buf, bool *p_open)
 {
-    ImGui::Begin("Z80 SIO", nullptr,
-                 ImGuiWindowFlags_NoCollapse);
+    if (!ImGui::Begin("Z80 SIO", p_open,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
 
-    const z80sio_t &sio = emu.get_sio();
+    const z80sio_t &sio1 = emu.get_sio();
+    const z80sio_t &sio2 = emu.get_sio2();
 
-    ImGui::Text("Pins: %016llX", (unsigned long long)sio.pins);
+    ImGui::Text("SIO1 Pins: %016llX", (unsigned long long)sio1.pins);
 
     ImGui::SeparatorText("Inject RX (Ch A)");
     static char ascii_in[2] = "";
@@ -72,8 +77,13 @@ void panels::render_sio(partner &emu, std::vector<uint8_t> &inject_buf)
         }
     }
 
-    render_channel("Channel A", sio.chn[Z80SIO_CHANNEL_A]);
-    render_channel("Channel B", sio.chn[Z80SIO_CHANNEL_B]);
+    render_channel("SIO1 / Channel A", sio1.chn[Z80SIO_CHANNEL_A]);
+    render_channel("SIO1 / Channel B", sio1.chn[Z80SIO_CHANNEL_B]);
+
+    ImGui::SeparatorText("Second SIO");
+    ImGui::Text("SIO2 Pins: %016llX", (unsigned long long)sio2.pins);
+    render_channel("SIO2 / Channel A", sio2.chn[Z80SIO_CHANNEL_A]);
+    render_channel("SIO2 / Channel B", sio2.chn[Z80SIO_CHANNEL_B]);
 
     ImGui::End();
 }

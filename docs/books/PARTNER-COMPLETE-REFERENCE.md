@@ -1,56 +1,50 @@
-# Iskra Delta Partner: The Complete Reference
+# Iskra Delta Partner: Complete Reference
 
-_Tomaz Stih, London 2025_
+_Tomaz Stih, London 2025_  
+_Updated for current `idp-emu` behavior, March 2026_
 
-# Introduction
+## Introduction
 
-The **Iskra Delta Partner** was a powerful 8-bit microcomputer developed in 1980s Yugoslavia by Iskra Delta, designed for military, business, technical, and professional use. Based on the Zilog Z80A processor, the Partner offered a modular, banked, and expandable architecture—unusual and advanced for its time.
+The **Iskra Delta Partner** is a Z80-based professional microcomputer family
+developed in Yugoslavia in the 1980s. The machine combines classic Z80 design
+patterns (CTC/SIO/PIO daisy-chain peripherals) with banked memory and several
+display options.
 
-At its core, the Partner features up to 64 KB of addressable RAM, and multiple configurations supporting floppy disks, hard disks, real-time clock functionality, and a choice of text-only or graphical display systems.
+This document is a practical, emulator-oriented reference. It is written for:
 
-Depending on the model, the Partner came equipped with different display subsystems:
+- emulator developers
+- firmware/ROM reverse engineers
+- system programmers writing Partner-targeted code
 
-- **Text-only models** used a **custom CRT controller board**, with screen output handled via a serial connection through the Z80 SIO. Input and output were character-based, and managed entirely over this serial channel.
-
-- **GDP models** included both a **Signetics SCN2674 AVDC** for hardware text display and a **Thomson EF9367 Graphics Display Processor (GDP)** for high-resolution raster graphics. These two processors shared the screen space, allowing mixed text and graphics output—rare among Z80-based systems.
-
-This document provides a complete and detailed technical reference for the Partner, including:
-
-- **Z80 CPU core** and memory banking
-- **Memory map**, including RAM, ROM, and CP/M layout
-- **Display subsystems**:
-  - **Text-only CRT** via SIO (non-GDP models)
-  - **AVDC + GDP** (GDP models only)
-- **Floppy disk controller** based on Intel 8272
-- **Hard disk controller** using the Xebec S1410 SASI interface
-- **Real-time clock** (MM58167A) with alarm and NVRAM
-- **Peripheral I/O**, including:
-  - Z80 SIO for serial communication
-  - Z80 PIO for parallel ports
-  - Z80 CTC for counters/timers (when present)
-- **ROM disassembly insights**, covering bootloader, memory tests, and device initialization
-
-This reference draws from ROM disassembly, original documentation, and direct hardware research. It is meant for programmers, hardware tinkerers, emulator developers, and digital preservationists working with the Partner system.
-
-Whether you're reverse-engineering the ROM, restoring an original machine, or writing an emulator, this guide offers comprehensive and authoritative information on every aspect of the Iskra Delta Partner.
+It focuses on what is implemented and observable in the current emulator code.
+For historical nuances and unresolved hardware questions, see the `docs/notes`
+folder.
 
 ## Table of Contents
 
 - [Computer Specifications](#computer-specifications)
   - [Models](#models)
-  - [I/O Map](#io-map)
-    - [Xebec S1410 SASI Hard Disk Controller](#xebec-s1410-sasi-hard-disk-controller)
-    - [Shared Graphics and Text Control](#shared-graphics-and-text-control)
-    - [Text Output (Signetics SCN2674)](#text-output-signetics-scn2674)
-    - [Memory Banking and EPROM Control](#memory-banking-and-eprom-control)
-    - [MM58167A Real-Time Clock](#mm58167a-real-time-clock)
-    - [Z80 PIO: Parallel Ports](#z80-pio-parallel-ports)
-    - [Z80 SIO: Serial Ports](#z80-sio-serial-ports)
-    - [8272 Floppy Disk Controller](#8272-floppy-disk-controller)
-  - [Memory Map](#memory-map)
-    - [ROM](#rom)
-    - [RAM](#ram)
-    - [CP/M Memory Layout](#cpm-memory-layout)
+  - [Current Bundled Media Names](#current-bundled-media-names)
+  - [CPU and Chipset Overview](#cpu-and-chipset-overview)
+  - [Display Subsystems](#display-subsystems)
+- [I/O Map (Emulator-Verified)](#io-map-emulator-verified)
+  - [Base System Ports](#base-system-ports)
+  - [GDP Model Additions](#gdp-model-additions)
+  - [Notes on SIO and PIO Routing](#notes-on-sio-and-pio-routing)
+- [Memory Map (Emulator)](#memory-map-emulator)
+  - [Physical Organization](#physical-organization)
+  - [Reset and ROM Overlay Behavior](#reset-and-rom-overlay-behavior)
+  - [Typical CP/M Logical Layout](#typical-cpm-logical-layout)
+- [Emulator-Safe Programming Samples](#emulator-safe-programming-samples)
+  - [Sample 1: Disable ROM and Switch Banks](#sample-1-disable-rom-and-switch-banks)
+  - [Sample 2: SIO Polling TX/RX on SIO2 Channel A](#sample-2-sio-polling-txrx-on-sio2-channel-a)
+  - [Sample 3: RTC Write and Read (MM58167A)](#sample-3-rtc-write-and-read-mm58167a)
+  - [Sample 4: PIO Output to Virtual Devices](#sample-4-pio-output-to-virtual-devices)
+  - [Sample 5: FDC Motor and Status Poll](#sample-5-fdc-motor-and-status-poll)
+- [Virtual Devices (Current Emulator)](#virtual-devices-current-emulator)
+  - [SIO Virtual Devices](#sio-virtual-devices)
+  - [PIO Virtual Devices](#pio-virtual-devices)
+  - [TCP Bridge Control Channel](#tcp-bridge-control-channel)
 - [About This Document](#about-this-document)
 
 ---
@@ -59,470 +53,406 @@ Whether you're reverse-engineering the ROM, restoring an original machine, or wr
 
 ### Models
 
-The following Iskra Delta Partner models were produced: `WF`, `1F`, `2F`, `WFG`, `1FG`, and `2FG`.
+Common model suffixes:
 
-Model code breakdown:
+- `W`: hard disk present
+- `1F`: one floppy drive
+- `2F`: two floppy drives
+- `G`: GDP graphics subsystem
 
-- `W` – Includes a hard disk
-- `1F` – One floppy disk drive
-- `2F` – Two floppy disk drives
-- `G` – Includes a Thomson EF9367 graphics card
+Examples:
 
-For example, a `WFG` model includes a hard disk, a single floppy disk, and the graphical processor.
+- `WF`: hard disk + floppy
+- `1FG`: one floppy + GDP
+- `WFG`: hard disk + floppy + GDP
+
+### Current Bundled Media Names
+
+Current repository media files:
+
+- ROMs:
+  - `roms/partner_crt.rom` (Partner P/CRT path)
+  - `roms/partner_gdp.rom` (Partner G/GDP path)
+- Floppies:
+  - `disks/fdd-partner-p.img` (P model floppy image)
+  - `disks/fdd-partner-g.img` (G model floppy image)
+- Hard disks:
+  - `disks/hdd-partner-g.img` (G model HDD image with startup programs)
+  - `disks/hdd-partner-g-empty.img` (empty G model HDD image)
+
+### CPU and Chipset Overview
+
+- CPU: **Z80A**
+- Main Zilog peripherals:
+  - **Z80 DMA** (`0xC0`)
+  - **Z80 CTC** (`0xC8..0xCB`)
+  - **Z80 SIO #1** (`0xD8..0xDB`)
+  - **Z80 SIO #2** (`0xE0..0xE3`, `0xE4` currently also decoded by helper)
+  - **Z80 PIO** (`0xD0..0xD3`)
+- Storage:
+  - Intel **8272** FDC (`0xF0`, `0xF1`)
+  - Xebec **S1410** SASI path (`0x10..0x12`)
+- RTC:
+  - National **MM58167A** (`0xA0..0xB6`, `0xBF`)
+
+Interrupt daisy-chain priority in emulator tick order:
+
+1. DMA
+2. CTC
+3. SIO #1
+4. SIO #2
+5. PIO
+
+### Display Subsystems
+
+- CRT model:
+  - text path is serial and tied to SIO1 channel A
+  - terminal rendering is handled by the emulator terminal backend
+- GDP model:
+  - SCN2674 AVDC text subsystem (`0x34..0x3F`)
+  - EF9367 graphics subsystem (`0x20..0x2F`)
+  - GDP-local PIO (`0x30..0x33`) gates display-side behavior
+  - board-level scroll/sync latch behavior on `0x36`
 
 ---
 
-## I/O Map
+## I/O Map (Emulator-Verified)
 
-### Xebec S1410 SASI Hard Disk Controller
+### Base System Ports
 
-| Port | Dec | Description | Dir | Notes                  |
-| ---- | --- | ----------- | --- | ---------------------- |
-| 0x10 | 16  | RDSTAT      | In  | Status read            |
-| 0x11 | 17  | RDDATA      | In  | Data read              |
-| 0x12 | 18  | ERROR       | In  | Error code             |
-| 0x10 | 16  | WRCONTR     | Out | Control register write |
-| 0x11 | 17  | WRDATA      | Out | Data write             |
-| 0x12 | 18  | RESET       | Out | Controller reset       |
+| Port | Dec | Device | Dir | Description |
+| ---- | --- | ------ | --- | ----------- |
+| `0x10` | 16 | SASI/S1410 | I/O | Status read / control write |
+| `0x11` | 17 | SASI/S1410 | I/O | Data read/write |
+| `0x12` | 18 | SASI/S1410 | I/O | Error/read side or reset/write side |
+| `0x80..0x87` | 128..135 | Banking | I/O | Disable ROM overlay |
+| `0x88..0x8F` | 136..143 | Banking | I/O | Select RAM Bank 1 |
+| `0x90..0x97` | 144..151 | Banking | I/O | Select RAM Bank 2 |
+| `0x98` | 152 | FDC motor | I/O | Motor control/write, motor status/read (`bit0`) |
+| `0xA0..0xB6` | 160..182 | MM58167A | I/O | RTC register window |
+| `0xBF` | 191 | MM58167A | I/O | RTC test/extra register path |
+| `0xC0` | 192 | Z80 DMA | I/O | DMA register port |
+| `0xC8..0xCB` | 200..203 | Z80 CTC | I/O | CTC channels |
+| `0xD0..0xD3` | 208..211 | Z80 PIO | I/O | Port A/B data/control |
+| `0xD8..0xDB` | 216..219 | Z80 SIO #1 | I/O | Channel A/B data/control |
+| `0xE0..0xE3` | 224..227 | Z80 SIO #2 | I/O | Channel A/B data/control |
+| `0xE8` | 232 | FDC vector | Out | Interrupt vector register |
+| `0xF0` | 240 | Intel 8272 | In | Main status register |
+| `0xF1` | 241 | Intel 8272 | I/O | Data FIFO/command/result |
 
-Early units used Tandon drives; later ones used Seagate ST-412. Disk parameters are set from the EPROM at startup.
+### GDP Model Additions
 
-### Shared Graphics and Text Control
+GDP mode extends I/O with EF9367, AVDC, and a local PIO window.
 
-These ports are shared between the EF9367 graphics display processor and the SCN2674 AVDC character display.
+| Port | Dec | Device | Dir | Description |
+| ---- | --- | ------ | --- | ----------- |
+| `0x20..0x2F` | 32..47 | EF9367 | I/O | GDP command/data/status window |
+| `0x30..0x33` | 48..51 | GDP local PIO | I/O | GDP board control PIO |
+| `0x34..0x3F` | 52..63 | SCN2674 AVDC | I/O | AVDC text controller window |
 
-| Port | Dec | Description            | Dir | Notes                         |
-| ---- | --- | ---------------------- | --- | ----------------------------- |
-| 0x30 | 48  | Graphics control       | I/O | Shared control signals        |
-| 0x31 | 49  | PIO Port A Control     | Out | Possibly unused or repurposed |
-| 0x32 | 50  | Common text attributes | I/O | Shared visual attribute bus   |
-| 0x33 | 51  | PIO Port B Control     | Out | Possibly unused or repurposed |
+Important emulator behavior in GDP mode:
 
-Note: Ports 0x31 and 0x33 _appear_ to shadow the Z80 PIO at 0xD1 and 0xD3 but are likely separate lines for AVDC/GDP internal signal control, as suggested in the ROM init routine.
+- Port `0x36` is used as a board-level scroll/sync latch path:
+  - read: sync bit source
+  - write: scroll latch
+- AVDC ports `0x36`/`0x37` are intentionally treated as inert in the current
+  model.
 
-### Text Output (Signetics SCN2674)
+### Notes on SIO and PIO Routing
 
-Used by the AVDC for character-oriented text display. Supports 80×25 and 132×26 modes, row addressing, split-screen.
+- SIO logical channels:
+  - `sio1_a`, `sio1_b`, `sio2_a`, `sio2_b`
+- `sio1_a` is locked internal:
+  - CRT model: `"Internal CRT terminal (fixed)"`
+  - GDP model: `"Internal GDP keyboard (fixed)"`
+- Attachable serial virtual devices are on free channels:
+  - `sio1_b`, `sio2_a`, `sio2_b`
 
-| Port | Dec | Description                   | Dir | Notes                     |
-| ---- | --- | ----------------------------- | --- | ------------------------- |
-| 0x34 | 52  | Character register            | I/O | Writes characters         |
-| 0x35 | 53  | Attribute register            | I/O | Color, blink, underline   |
-| 0x36 | 54  | Scroll (W) / Common Input (R) | I/O | Scrolls text; GDP bridge  |
-| 0x38 | 56  | Init / Interrupt status       | I/O | Init pointer or IRQ flags |
-| 0x39 | 57  | Command / Status              | I/O | Control commands          |
-| 0x3A | 58  | Screen Start 1 Low            | I/O | Lower byte of screen addr |
-| 0x3B | 59  | Screen Start 1 High           | I/O | Upper byte of screen addr |
-| 0x3C | 60  | Cursor Address Low            | I/O |                           |
-| 0x3D | 61  | Cursor Address High           | I/O |                           |
-| 0x3E | 62  | Screen Start 2 Low            | I/O | Split-screen feature      |
-| 0x3F | 63  | Screen Start 2 High           | I/O |                           |
+---
 
-The command register (0x39) supports master reset (`0x00`), cursor enable/disable, write/read-at-cursor, and split screen handling.
+## Memory Map (Emulator)
 
-### Memory Banking and EPROM Control
+### Physical Organization
 
-| Port | Dec | Description                 | Dir | Notes                               |
-| ---- | --- | --------------------------- | --- | ----------------------------------- |
-| 0x80 | 128 | Disable 4KB EPROM           | I/O | RAM at 0x0000-0x1FFF becomes usable |
-| 0x88 | 136 | Select RAM Bank 1 (default) | I/O | On reset                            |
-| 0x90 | 144 | Select RAM Bank 2           | I/O | Alternate bank                      |
+- ROM image size: `0x0800` (2 KB)
+- Shared RAM base: `0xC000`
+- Banked region: `0x0000..0xBFFF` (48 KB)
+- Shared region: `0xC000..0xFFFF` (16 KB)
+- Two banked RAM images exist in emulator for `0x0000..0xBFFF`.
 
-Other ports in the 0x81–0x8F range are unused or undocumented.
+### Reset and ROM Overlay Behavior
 
-<details>
-<summary>Example: Disable ROM and toggle RAM banks
-</summary>
+On reset:
+
+- ROM overlay is enabled.
+- Reads from `0x0000..0x1FFF` return ROM bytes mirrored from the 2 KB ROM.
+- Writes into `0x0000..0x1FFF` are ignored while ROM overlay is enabled.
+
+After writing any value to `0x80..0x87`:
+
+- ROM overlay is disabled.
+- RAM becomes visible/writable at low addresses.
+
+### Typical CP/M Logical Layout
+
+The exact layout depends on ROM/loader image and model, but a common CP/M 3
+shape on Partner-class systems is:
+
+- `0x0000..0x00FF`: low vectors/system scratch
+- `0x0100..`: TPA (user program area)
+- upper RAM: CCP/BDOS/BIOS residency blocks
+
+In practice, treat this as firmware-dependent and verify against the boot image
+you are running.
+
+---
+
+## Emulator-Safe Programming Samples
+
+The samples below are written to match the current emulator behavior and use
+valid Z80 syntax (I/O via register `A`).
+
+### Sample 1: Disable ROM and Switch Banks
 
 ```asm
-;===============================================================================
-; Disable ROM and toggle RAM banks
-;===============================================================================
+; Disable ROM overlay and toggle RAM banks.
+
+BANK_ROM_OFF    equ     #0x80
+BANK_RAM1       equ     #0x88
+BANK_RAM2       equ     #0x90
 
 switch_banks:
-        ; Disable ROM at 0000h–07FFh (Enable RAM there)
-        ld      a, #0x00
-        out     (#0x80), a                       ; Disable EPROM (shows RAM)
+        xor     a
+        out     (BANK_ROM_OFF), a        ; ROM off, RAM visible at 0000h
 
-        ; Select RAM Bank 1 (default)
-        ld      a, #0x00
-        out     (#0x88), a                       ; Select Bank 1
+        xor     a
+        out     (BANK_RAM1), a           ; select bank 1
 
-        ; Select RAM Bank 2
-        ld      a, #0x00
-        out     (#0x90), a                       ; Select Bank 2
+        xor     a
+        out     (BANK_RAM2), a           ; select bank 2
 
-        ; Switch back to RAM Bank 1
-        ld      a, #0x00
-        out     (#0x88), a                       ; Select Bank 1 again
-
+        xor     a
+        out     (BANK_RAM1), a           ; back to bank 1
         ret
 ```
 
-</details>
+### Sample 2: SIO Polling TX/RX on SIO2 Channel A
 
-### MM58167A Real-Time Clock
-
-BCD-based RTC with alarm, interrupt, and NVRAM.
-
-| Port      | Dec     | Description                       | Dir   | Notes      |
-| --------- | ------- | --------------------------------- | ----- | ---------- |
-| 0xA0–0xA7 | 160–167 | Time registers (1/1000s to month) | I/O   | BCD format |
-| 0xA8–0xAF | 168–175 | Alarm registers (NVRAM)           | I/O   | 9 bytes    |
-| 0xB0      | 176     | Interrupt status                  | In    |            |
-| 0xB1      | 177     | Interrupt control                 | I/O   |            |
-| 0xB2      | 178     | Reset counter                     | Out   |            |
-| 0xB3      | 179     | Reset NVRAM flags                 | Out   |            |
-| 0xB4–0xB6 | 180–182 | Status and standby                | Mixed |            |
-| 0xBF      | 191     | Chip test mode                    | ?     |            |
-
-<details>
-<summary>Example: Set and Get Date/Time (MM58167A) (in BCD!)
-</summary>
+This avoids the fixed internal `SIO1A` channel.
 
 ```asm
-;===============================================================================
-; Write Date and Time to MM58167A
-;===============================================================================
-; Sets:
-;   - Seconds = 45
-;   - Minutes = 30
-;   - Hours   = 14
-;   - Day     = 25
-;   - Month   = 4
-;===============================================================================
+SIO2A_DATA      equ     #0xE0
+SIO2A_CTRL      equ     #0xE1
 
-set_datetime:
-        ; Seconds (#0x45 = 45 BCD)
-        ld      a, #0x45
-        out     (#0xA1), a                            ; Seconds
-
-        ; Minutes (#0x30 = 30 BCD)
-        ld      a, #0x30
-        out     (#0xA2), a                            ; Minutes
-
-        ; Hours (#0x14 = 14 BCD)
-        ld      a, #0x14
-        out     (#0xA3), a                            ; Hours
-
-        ; Day (#0x25 = 25 BCD)
-        ld      a, #0x25
-        out     (#0xA5), a                            ; Day
-
-        ; Month (#0x04 = April)
+; Init SIO2 Channel A for async, 8-bit, RX/TX enabled.
+; Works with emulator polling model.
+init_sio2a:
         ld      a, #0x04
-        out     (#0xA7), a                            ; Month
+        out     (SIO2A_CTRL), a          ; select WR4
+        ld      a, #0x44                 ; x16 clock, 1 stop, no parity
+        out     (SIO2A_CTRL), a
 
+        ld      a, #0x03
+        out     (SIO2A_CTRL), a          ; select WR3
+        ld      a, #0xC1                 ; RX enable, 8-bit
+        out     (SIO2A_CTRL), a
+
+        ld      a, #0x05
+        out     (SIO2A_CTRL), a          ; select WR5
+        ld      a, #0xEA                 ; DTR+RTS, TX enable, 8-bit
+        out     (SIO2A_CTRL), a
         ret
 
-;===============================================================================
-; Read Date and Time from MM58167A
-;===============================================================================
-; Returns values in BCD in registers:
-;   E = Seconds
-;   D = Minutes
-;   C = Hours
-;   B = Day
-;   A = Month
-;===============================================================================
-
-get_datetime:
-        in      e, (#0xA1)                            ; Read Seconds
-        in      d, (#0xA2)                            ; Read Minutes
-        in      c, (#0xA3)                            ; Read Hours
-        in      b, (#0xA5)                            ; Read Day
-        in      a, (#0xA7)                            ; Read Month
-
+; TX: character in A
+sio2a_putc:
+        ld      b, a
+sio2a_putc_wait:
+        in      a, (SIO2A_CTRL)
+        bit     2, a                     ; RR0 bit2 = TX buffer empty
+        jr      z, sio2a_putc_wait
+        ld      a, b
+        out     (SIO2A_DATA), a
         ret
 
+; RX: returns character in A
+sio2a_getc:
+sio2a_getc_wait:
+        in      a, (SIO2A_CTRL)
+        bit     0, a                     ; RR0 bit0 = RX char available
+        jr      z, sio2a_getc_wait
+        in      a, (SIO2A_DATA)
+        ret
 ```
 
-</details>
-
----
-
-### Z80 PIO: Parallel Ports
-
-| Port | Dec | Description        | Dir | Model |
-| ---- | --- | ------------------ | --- | ----- |
-| 0xD0 | 208 | PIO Port A Data    | I/O | All   |
-| 0xD1 | 209 | PIO Port A Control | I/O | All   |
-| 0xD2 | 210 | PIO Port B Data    | I/O | All   |
-| 0xD3 | 211 | PIO Port B Control | I/O | All   |
-
-### Z80 SIO: Serial Ports
-
-Dual SIO channels for CRT, printer, and host.
-
-| Port      | Dec     | Description                      | Dir | Use |
-| --------- | ------- | -------------------------------- | --- | --- |
-| 0xD8–0xDB | 216–219 | SIO Channel 1 (Keyboard/Printer) | I/O |     |
-| 0xE0–0xE4 | 224–228 | SIO Channel 2 (Host/VAX)         | I/O |     |
-
-<details>
-<summary>Example: Interrupt-Driven Serial I/O Routine Using Z80 SIO (Channel A)
-</summary>
+### Sample 3: RTC Write and Read (MM58167A)
 
 ```asm
-SIO1_CTRL_A    equ   #0xD9                             ; SIO1 Channel A control port
-SIO1_DATA_A    equ   #0xD8                             ; SIO1 Channel A data port
-INT_VEC_TABLE  equ   #0x0200                           ; IM2 vector table location
-ISR_ADDRESS    equ   serial_isr                        ; Actual ISR routine
+RTC_SEC         equ     #0xA1
+RTC_MIN         equ     #0xA2
+RTC_HOUR        equ     #0xA3
+RTC_DAY         equ     #0xA5
+RTC_MONTH       equ     #0xA7
+RTC_RESETCNT    equ     #0xB2
 
-;---------------------------------------
-; Setup interrupt mode and vector table
-;---------------------------------------
-init_interrupts:
-        di                                            ; Disable interrupts
-        ld    a, #0x02                                 ; Interrupt page = 0x02
-        ld    i, a                                     ; Set high byte of vector
-        ld    hl, INT_VEC_TABLE
-        ld    de, INT_VEC_TABLE + 1
-        ld    bc, #0x0100                              ; Fill 256 bytes
-        ld    (hl), low(ISR_ADDRESS)                   ; Fill with ISR address
-        ldir
-        im    2                                        ; Interrupt Mode 2
-        ei                                            ; Enable interrupts
+rtc_set_example:
+        ld      a, #0x45                 ; 45 sec (BCD)
+        out     (RTC_SEC), a
+        ld      a, #0x30                 ; 30 min (BCD)
+        out     (RTC_MIN), a
+        ld      a, #0x14                 ; 14 hour (BCD)
+        out     (RTC_HOUR), a
+        ld      a, #0x25                 ; day 25 (BCD)
+        out     (RTC_DAY), a
+        ld      a, #0x04                 ; month 04 (BCD)
+        out     (RTC_MONTH), a
+
+        xor     a
+        out     (RTC_RESETCNT), a        ; refresh/sync path
         ret
 
-;---------------------------------------
-; SIO Channel A Initialization (9600 8N1)
-;---------------------------------------
-init_sio1:
-        ld    c, SIO1_CTRL_A
-        ld    hl, sio1_init_data
-        ld    b, #0x07                                 ; 7 control words
-        otir                                           ; Send init data to SIO
+rtc_read_example:
+        in      a, (RTC_SEC)
+        ld      (rtc_sec_bcd), a
+        in      a, (RTC_MIN)
+        ld      (rtc_min_bcd), a
+        in      a, (RTC_HOUR)
+        ld      (rtc_hour_bcd), a
+        in      a, (RTC_DAY)
+        ld      (rtc_day_bcd), a
+        in      a, (RTC_MONTH)
+        ld      (rtc_month_bcd), a
         ret
 
-sio1_init_data:
-        db   #0x18                                     ; WR0: Point to WR1
-        db   #0x04                                     ; WR1: Enable RX interrupt only
-        db   #0x05                                     ; WR2: Vector base = 0x00
-        db   #0x04                                     ; WR3: RX enable, 8-bit
-        db   #0x44                                     ; WR4: 1 stop, 8-bit, async
-        db   #0x00                                     ; WR5: TX disabled for now
-        db   #0x10                                     ; WR0: Reset ext/status interrupts
-
-;---------------------------------------
-; Install SIO ISR (simple echo routine)
-;---------------------------------------
-serial_isr:
-        push af
-        in    a, (SIO1_CTRL_A)                         ; Read RR0: interrupt reason
-        bit   2, a                                     ; RX ready?
-        jr    z, .done
-
-        in    a, (SIO1_DATA_A)                         ; Read incoming byte
-        out   (SIO1_DATA_A), a                         ; Echo it back
-
-.done:
-        pop   af
-        ei                                            ; Enable next interrupt
-        reti                                           ; Return from interrupt
+rtc_sec_bcd:    db      #0x00
+rtc_min_bcd:    db      #0x00
+rtc_hour_bcd:   db      #0x00
+rtc_day_bcd:    db      #0x00
+rtc_month_bcd:  db      #0x00
 ```
 
-</details>
+### Sample 4: PIO Output to Virtual Devices
 
----
-
-### Z80 DMA
-
-| Port | Dec | Description  | Dir | Notes        |
-| ---- | --- | ------------ | --- | ------------ |
-| 0xC0 | 192 | DMA Register | ?   | Possibly DMA |
-
-<details>
-<summary>Example: DMA Memory Copy: #0x8000 ➝ #0x4000, size #0x4000
-</summary>
+If a virtual Covox or visual Centronics printer is attached in the **Devices**
+panel, data writes to PIO data ports are consumed by the attached device.
 
 ```asm
-        ld      c, #0xC0                              ; DMA port
-        ld      hl, dma_program                       ; DMA program in memory
-        ld      b, #0x11                              ; 17 bytes to write
-        otir                                          ; Send to DMA controller
+PIOA_DATA       equ     #0xD0
+PIOA_CTRL       equ     #0xD1
+PIOB_DATA       equ     #0xD2
+PIOB_CTRL       equ     #0xD3
 
-        ld      a, #0x01                              ; Start DMA transfer
-        out     (#0xDF03), a                          ; Trigger transfer
+; Put Port A in Mode 0 (output), then write one byte.
+pioa_write_byte:
+        ld      a, #0x0F                 ; mode set, mode 0
+        out     (PIOA_CTRL), a
+        ld      a, #'H'
+        out     (PIOA_DATA), a           ; goes to attached PIO-A virtual device
         ret
 
-;-----------------------------------------------
-; DMA program: 17 bytes for memory copy
-;-----------------------------------------------
-dma_program:
-        db      #0xC3                                 ; Command: memory-to-memory
-        db      #0x05                                 ; Channel (src/dest interleaved)
-
-        ; Source address (start at 0x8000)
-        db      #0x00, #0x80                          ; Source address low, high
-
-        ; Destination address (start at 0x4000)
-        db      #0x00, #0x40                          ; Dest address low, high
-
-        ; Transfer length (0x4000 bytes)
-        db      #0x00, #0x40                          ; Count low, high
-
-        ; Source page
-        db      #0x80
-
-        ; Destination page
-        db      #0x40
-
-        ; Mode register
-        db      #0x45                                 ; Mode: mem→mem, increment
-
-        ; Misc/Timing
-        db      #0xF1                                 ; Misc
-        db      #0x8A                                 ; Timing
-        db      #0xCF                                 ; Master control
-        db      #0x01, #0xCF, #0x87                   ; Final bytes (specific to IDP ROM)
-
+; Put Port B in Mode 0 (output), then write one byte.
+piob_write_byte:
+        ld      a, #0x0F
+        out     (PIOB_CTRL), a
+        ld      a, #'I'
+        out     (PIOB_DATA), a
+        ret
 ```
 
-</details>
-
----
-
-### 8272 Floppy Disk Controller
-
-| Port | Dec | Description                 | Dir | Notes         |
-| ---- | --- | --------------------------- | --- | ------------- |
-| 0x98 | 152 | FDC Motor On / Motor status | I/O | Bit 1 = motor |
-| 0xC0 | 192 | DMA Register (?)            | ?   | Possibly DMA  |
-| 0xE8 | 232 | Interrupt Vector Register   | ?   |               |
-| 0xF0 | 240 | FDC Status                  | In  |               |
-| 0xF1 | 241 | FDC Data                    | I/O |               |
-
-<details>
-<summary>Example: Boot Sector Read Example (with #0x prefix and proper alignment)
-</summary>
+### Sample 5: FDC Motor and Status Poll
 
 ```asm
-FDC_STATUS     equ   #0xF0                             ; FDC status register (read)
-FDC_DATA       equ   #0xF1                             ; FDC data register (read/write)
-LOAD_ADDR      equ   #0x8000                           ; Boot sector destination
-BUFFER         equ   LOAD_ADDR
+FDC_MOTOR       equ     #0x98
+FDC_STATUS      equ     #0xF0
 
-;---------------------------------------
-; Wait until FDC is ready to accept data
-;---------------------------------------
-wait_fdc_ready:
-        in    a, (FDC_STATUS)                          ; Read FDC status
-        and   #0xC0                                    ; Mask RQM and DIO
-        cp    #0x80                                    ; RQM=1, DIO=0?
-        jr    nz, wait_fdc_ready                       ; Loop until ready
-        ret
+fdc_motor_on_and_check:
+        ld      a, #0x01
+        out     (FDC_MOTOR), a           ; emulator latches motor on
 
-;---------------------------------------
-; Issue READ SECTOR command (sector 1)
-;---------------------------------------
-fdc_read_sector:
-        call  wait_fdc_ready
-        ld    a, #0x06                                 ; READ SECTOR command
-        out   (FDC_DATA), a
+        in      a, (FDC_MOTOR)
+        and     #0x01                    ; bit0 = motor running
+        ret                               ; Z=0 means motor is on
 
-        call  wait_fdc_ready
-        ld    a, #0x00                                 ; Drive 0, Head 0
-        out   (FDC_DATA), a
-
-        call  wait_fdc_ready
-        ld    a, #0x00                                 ; Track 0
-        out   (FDC_DATA), a
-
-        call  wait_fdc_ready
-        ld    a, #0x00                                 ; Head 0
-        out   (FDC_DATA), a
-
-        call  wait_fdc_ready
-        ld    a, #0x01                                 ; Sector 1
-        out   (FDC_DATA), a
-
-        call  wait_fdc_ready
-        ld    a, #0x02                                 ; 512 byte sector size (2^2)
-        out   (FDC_DATA), a
-
-        call  wait_fdc_ready
-        ld    a, #0x01                                 ; One sector
-        out   (FDC_DATA), a
-
-        call  wait_fdc_ready
-        ld    a, #0x1B                                 ; GAP3 length
-        out   (FDC_DATA), a
-
-        call  wait_fdc_ready
-        ld    a, #0xFF                                 ; DTL (don’t care)
-        out   (FDC_DATA), a
-
-;---------------------------------------
-; Wait for result phase and read results
-;---------------------------------------
-wait_result_phase:
-        in    a, (FDC_STATUS)
-        and   #0xC0
-        cp    #0x80
-        jr    nz, wait_result_phase
-
-        ld    b, #0x07                                 ; Expect 7 result bytes
-read_result:
-        call  wait_fdc_ready
-        in    a, (FDC_DATA)                            ; Read result byte
-        djnz  read_result
+; Poll Intel 8272 MSR until RQM=1 (bit7)
+fdc_wait_rqm:
+        ld      b, #0x00                 ; timeout (256 loops)
+fdc_wait_rqm_loop:
+        in      a, (FDC_STATUS)
+        bit     7, a
+        ret     nz
+        djnz    fdc_wait_rqm_loop
+        scf                               ; timeout indicator
         ret
 ```
-
-</details>
 
 ---
 
-## Memory Map
+## Virtual Devices (Current Emulator)
 
-#### Partner Physical Memory Map Diagram
+### SIO Virtual Devices
 
-```
-+--------------------------+  FFFFh
-|      Shared RAM          |  (Always visible, not banked,
-|      (16 KB)             |   Used for data sharing, IRQs, buffers)
-+--------------------------+  C000h
-|                          |
-|                          |
-|     Banked RAM           |  (48 KB switchable via OUT #0x88/#0x90
-|                          |   Visible at 1000h–BFFFh)
-|                          |
-+--------------------------+  1000h
-|   Empty ROM Socket Area  |  (Physical 4 KB socket partially used)
-+--------------------------+  0800h
-|       ROM (2 KB)         |  (Enabled on reset
-|      (EPROM active)      |   Can be disabled with OUT #0x80)
-+--------------------------+  0000h
-```
+Per free SIO port, device options are:
 
-#### Partner Logical Memory Map Diagram
+- `None`
+- `Serial Mouse (Microsoft)`
+- `Serial Mouse (Mouse Systems)`
+- `Serial Mouse (Logitech)`
+- `TCP Bridge`
 
-```
-+-------------------------+  FFFFh
-|     Shared Memory       |  (Shared RAM, interrupt vectors, etc.)
-|    (Banked 3 KB)        |
-|-------------------------|
-|     CP/M BIOS           |  F000h - FFFFh
-|-------------------------|
-|     CP/M BDOS           |  E400h - EFFFh (typical)
-|-------------------------|
-|     CP/M CCP            |  DC00h - E3FFh (typical)
-|-------------------------|
-|  Transient Program Area |  0100h - DBFFh
-|   (User Application)    |
-|-------------------------|
-|    System I/O Buffers   |  0000h - 00FFh
-+-------------------------+  0000h
+Logitech-specific behavior includes prompt/poll handling:
 
-```
+- `c` -> identification string (`LOGIMOUSE C7 ...`)
+- `P` -> 5-byte C7 poll report
+- `D` -> prompt-mode no-op acceptance
+
+Logitech capture behavior in SDL UI:
+
+- auto-capture on window enter
+- release on leave
+- toggle on `F12`
+
+### PIO Virtual Devices
+
+Per PIO port:
+
+- `None`
+- `Covox DAC`
+- `Centronics Printer (Visual)`
+
+Data writes to `0xD0`/`0xD2` are consumed by attached device runtime.
+
+### TCP Bridge Control Channel
+
+Control socket supports:
+
+- `PING`
+- `CTS 0|1|AUTO`
+- `DCD 0|1|AUTO`
+
+And reports modem output state changes:
+
+- `RTS <0|1>`
+- `DTR <0|1>`
 
 ---
 
 ## About This Document
 
-**Iskra Delta Partner: The Complete Reference** is maintained by Tomaz Stih.
+This reference is maintained alongside the emulator and should be updated when:
 
-If you find corrections, improvements, or have historical insights into the Iskra Delta Partner platform, your contributions are welcome.
+- new port behavior is implemented
+- register semantics are changed
+- virtual device routing is extended
 
----
+Primary implementation sources:
+
+- `src/partner.cpp`
+- `src/partner_crt.cpp`
+- `src/partner_gdp.cpp`
+- `lib/chipsex/zilog/z80sio.h`
+- `lib/chipsex/zilog/z80pio.h`
+
+Related notes:
+
+- `docs/notes/patterns/SIO-PIO-TCP-VIRTUAL-DEVICES.md`
+- `docs/notes/patterns/SIO-KEYBOARD-PATH.md`
+- `docs/notes/patterns/INTERRUPT-IM2-DAISYCHAIN.md`

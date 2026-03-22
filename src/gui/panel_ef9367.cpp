@@ -3,10 +3,14 @@
 #include "../partner_gdp.hpp"
 #include <imgui.h>
 
-void panels::render_ef9367(partner &emu)
+void panels::render_ef9367(partner &emu, bool *p_open)
 {
-    ImGui::Begin("EF9367 GDP", nullptr,
-                 ImGuiWindowFlags_NoCollapse);
+    if (!ImGui::Begin("EF9367 GDP", p_open,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
 
     const auto *gdp = dynamic_cast<const partner_gdp*>(&emu);
     if (!gdp)

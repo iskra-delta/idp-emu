@@ -6,6 +6,11 @@
 #include <fstream>
 #include <iostream>
 
+static inline float clampf(float v, float lo, float hi)
+{
+    return (v < lo) ? lo : ((v > hi) ? hi : v);
+}
+
 static const char *crt_vert_src = R"(
 #version 330 core
 layout(location = 0) in vec2 aPos;
@@ -29,6 +34,12 @@ uniform vec3 phosphor_core;
 uniform vec3 phosphor_glow;
 uniform vec3 glass_ambient;
 uniform float time_sec;
+uniform float monitor_brightness;
+uniform float monitor_contrast;
+uniform float monitor_bloom;
+uniform float monitor_scanline;
+uniform float monitor_mask;
+uniform float monitor_vignette;
 
 float hash21(vec2 p) {
     p = fract(p * vec2(123.34, 345.45));
@@ -109,6 +120,9 @@ void main() {
         vec2 vig = uv * (1.0 - uv);
         color *= clamp(pow(vig.x * vig.y * 20.0, 0.12), 0.86, 1.0);
 
+        color = (color - vec3(0.5)) * monitor_contrast + vec3(0.5);
+        color *= monitor_brightness;
+        color = clamp(color, vec3(0.0), vec3(1.0));
         FragColor = vec4(color, 1.0);
         return;
     }
@@ -124,18 +138,18 @@ void main() {
     bloom += texture(screen_texture, uv - vec2(0.0, texel.y * 1.0)).r * 0.09;
 
     float beam = pow(pixel, 0.78) * 1.45;
-    float trail = texture(screen_texture, uv - vec2(texel.x * 2.0, 0.0)).r * 0.35;
+    float trail = texture(screen_texture, uv - vec2(texel.x * 2.0, 0.0)).r * 0.18;
     vec3 color = phosphor_core * beam;
-    color += phosphor_glow * (bloom * 1.22 + trail * 0.55);
+    color += phosphor_glow * (bloom * 1.22 * monitor_bloom + trail * 0.25);
 
     // Stable scanlines (removed time-drift to avoid visible blinking).
     float scanline = 0.80 + 0.20 * sin(uv.y * resolution.y * 3.14159265);
-    color *= scanline;
+    color *= mix(1.0, scanline, clamp(monitor_scanline, 0.0, 1.6));
 
     // Slot mask / phosphor grille.
     vec2 maskpix = fract(uv * resolution);
     float slot = 0.92 + 0.08 * smoothstep(0.08, 0.55, maskpix.x) * (1.0 - smoothstep(0.72, 0.98, maskpix.x));
-    color *= slot;
+    color *= mix(1.0, slot, clamp(monitor_mask, 0.0, 1.6));
 
     // Very mild analog shimmer/noise.
     float flicker = 0.995 + 0.005 * sin(time_sec * 7.0);
@@ -145,13 +159,17 @@ void main() {
 
     // Vignette (darker edges).
     vec2 vig = uv * (1.0 - uv);
-    color *= clamp(pow(vig.x * vig.y * 17.0, 0.15), 0.33, 1.0);
+    float vig_mul = clamp(pow(vig.x * vig.y * 17.0, 0.15), 0.33, 1.0);
+    color *= mix(1.0, vig_mul, clamp(monitor_vignette, 0.0, 1.6));
 
     // Ambient glass lift.
     color += glass_ambient;
 
     // Keep thin AVDC glyphs visible.
     color = min(color * 1.16, vec3(1.0));
+    color = (color - vec3(0.5)) * monitor_contrast + vec3(0.5);
+    color *= monitor_brightness;
+    color = clamp(color, vec3(0.0), vec3(1.0));
 
     FragColor = vec4(color, 1.0);
 }
@@ -283,7 +301,11 @@ bool display::load_font(const std::string &path)
 
 void display::update()
 {
-    const uint16_t decay = (phosphor_ == phosphor_type::lcd) ? 224u : 238u;
+    const uint16_t base_decay = (phosphor_ == phosphor_type::lcd) ? 214u : 224u;
+    const float persistence = clampf(monitor_persistence_, 0.20f, 1.15f);
+    uint16_t decay = (uint16_t)(base_decay * persistence);
+    if (decay > 255u)
+        decay = 255u;
     for (size_t i = 0; i < (size_t)(FB_W * FB_H); i++)
     {
         const uint8_t cur = fb_[i];
@@ -323,6 +345,12 @@ void display::apply_crt()
     glUniform1f(glGetUniformLocation(shader_, "time_sec"),
                 (float)SDL_GetTicks() * 0.001f);
     glUniform1i(glGetUniformLocation(shader_, "monitor_mode"), (int)phosphor_);
+    glUniform1f(glGetUniformLocation(shader_, "monitor_brightness"), monitor_brightness_);
+    glUniform1f(glGetUniformLocation(shader_, "monitor_contrast"), monitor_contrast_);
+    glUniform1f(glGetUniformLocation(shader_, "monitor_bloom"), monitor_bloom_);
+    glUniform1f(glGetUniformLocation(shader_, "monitor_scanline"), monitor_scanline_strength_);
+    glUniform1f(glGetUniformLocation(shader_, "monitor_mask"), monitor_mask_strength_);
+    glUniform1f(glGetUniformLocation(shader_, "monitor_vignette"), monitor_vignette_);
     if (phosphor_ == phosphor_type::orange) {
         glUniform3f(glGetUniformLocation(shader_, "phosphor_core"), 1.72f, 0.83f, 0.22f);
         glUniform3f(glGetUniformLocation(shader_, "phosphor_glow"), 1.05f, 0.48f, 0.12f);
@@ -347,6 +375,52 @@ void display::apply_crt()
     glBindFramebuffer(GL_FRAMEBUFFER, (GLuint)prev_fbo);
     glViewport(prev_viewport[0], prev_viewport[1],
                prev_viewport[2], prev_viewport[3]);
+}
+
+void display::set_monitor_brightness(float v)
+{
+    monitor_brightness_ = clampf(v, 0.35f, 2.20f);
+}
+
+void display::set_monitor_contrast(float v)
+{
+    monitor_contrast_ = clampf(v, 0.40f, 2.30f);
+}
+
+void display::set_monitor_bloom(float v)
+{
+    monitor_bloom_ = clampf(v, 0.00f, 2.40f);
+}
+
+void display::set_monitor_scanline_strength(float v)
+{
+    monitor_scanline_strength_ = clampf(v, 0.00f, 1.60f);
+}
+
+void display::set_monitor_mask_strength(float v)
+{
+    monitor_mask_strength_ = clampf(v, 0.00f, 1.60f);
+}
+
+void display::set_monitor_vignette(float v)
+{
+    monitor_vignette_ = clampf(v, 0.00f, 1.60f);
+}
+
+void display::set_monitor_persistence(float v)
+{
+    monitor_persistence_ = clampf(v, 0.20f, 1.15f);
+}
+
+void display::reset_monitor_tuning()
+{
+    monitor_brightness_ = 1.00f;
+    monitor_contrast_ = 1.00f;
+    monitor_bloom_ = 1.00f;
+    monitor_scanline_strength_ = 1.00f;
+    monitor_mask_strength_ = 1.00f;
+    monitor_vignette_ = 1.00f;
+    monitor_persistence_ = 0.78f;
 }
 
 void display::set_pixel(int x, int y, bool on)

@@ -261,7 +261,7 @@ void dump_bytes(const partner_crt& idp, uint16_t base, int count, const char* la
 
 int main(int argc, char** argv) {
     std::string rom_file = "roms/partner_crt.rom";
-    std::string disk_file = "disks/boot.img";
+    std::string disk_file = "disks/fdd-partner-p.img";
     std::string hdd_file;
     bool force_floppy = true;
     bool hdd_mode = false;

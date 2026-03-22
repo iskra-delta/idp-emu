@@ -43,10 +43,14 @@ void render_port(const char *name, const z80pio_port_t &p)
 
 } // namespace
 
-void panels::render_pio(partner &emu)
+void panels::render_pio(partner &emu, bool *p_open)
 {
-    ImGui::Begin("Z80 PIO", nullptr,
-                 ImGuiWindowFlags_NoCollapse);
+    if (!ImGui::Begin("Z80 PIO", p_open,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
 
     const z80pio_t &pio = emu.get_pio();
 

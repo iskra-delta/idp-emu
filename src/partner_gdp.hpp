@@ -26,6 +26,7 @@ public:
     std::string dump_raw_serial_text() const;
     const scn2674_t& get_avdc() const { return avdc_; }
     const ef9367_t& get_ef9367() const { return ef9367_; }
+    partner_gdp_keyboard& get_keyboard() { return keyboard_; }
     const partner_gdp_keyboard& get_keyboard() const { return keyboard_; }
     struct io_counters {
         uint64_t ef_rd = 0;

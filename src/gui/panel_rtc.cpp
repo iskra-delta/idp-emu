@@ -22,10 +22,14 @@ void draw_reg_row(const mm58167a_t &rtc, int base, int count)
 
 } // namespace
 
-void panels::render_rtc(partner &emu)
+void panels::render_rtc(partner &emu, bool *p_open)
 {
-    ImGui::Begin("MM58167 RTC", nullptr,
-                 ImGuiWindowFlags_NoCollapse);
+    if (!ImGui::Begin("MM58167 RTC", p_open,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
 
     const mm58167a_t &rtc = emu.get_rtc();
 

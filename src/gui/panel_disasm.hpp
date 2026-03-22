@@ -4,5 +4,5 @@
 class partner;
 
 namespace panels {
-    void render_disasm(partner &emu, bool &paused, dbg_action &action);
+    void render_disasm(partner &emu, bool &paused, dbg_action &action, bool *p_open);
 }

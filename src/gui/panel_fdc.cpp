@@ -33,10 +33,14 @@ const char *cmd_name(uint8_t code)
 
 } // anonymous namespace
 
-void panels::render_fdc(partner &emu)
+void panels::render_fdc(partner &emu, bool *p_open)
 {
-    ImGui::Begin("i8272 FDC", nullptr,
-                 ImGuiWindowFlags_NoCollapse);
+    if (!ImGui::Begin("i8272 FDC", p_open,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
 
     const i8272_t &fdc = emu.get_fdc();
 

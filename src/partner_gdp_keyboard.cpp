@@ -2,6 +2,7 @@
 
 namespace {
 constexpr uint8_t GDP_KEYBOARD_MODE_APPLY_MASK = 0x57;
+constexpr std::size_t GDP_KEYBOARD_MAX_PENDING_SOUNDS = 128;
 }
 
 void partner_gdp_keyboard::reset()
@@ -14,6 +15,7 @@ void partner_gdp_keyboard::reset()
     host_command_count_ = 0;
     sound_sequence_ = 0;
     last_sound_ = partner_gdp_keyboard_sound::none;
+    pending_sounds_.clear();
 }
 
 void partner_gdp_keyboard::update_leds_from_command(uint8_t value)
@@ -49,6 +51,10 @@ void partner_gdp_keyboard::emit_sound(partner_gdp_keyboard_sound kind)
 {
     last_sound_ = kind;
     sound_sequence_++;
+    pending_sounds_.push_back(kind);
+    if (pending_sounds_.size() > GDP_KEYBOARD_MAX_PENDING_SOUNDS) {
+        pending_sounds_.pop_front();
+    }
 }
 
 void partner_gdp_keyboard::host_write(uint8_t value)
@@ -70,4 +76,14 @@ void partner_gdp_keyboard::local_keypress()
     if (key_click_enabled_) {
         emit_sound(partner_gdp_keyboard_sound::key_click);
     }
+}
+
+bool partner_gdp_keyboard::pop_sound(partner_gdp_keyboard_sound &out)
+{
+    if (pending_sounds_.empty()) {
+        return false;
+    }
+    out = pending_sounds_.front();
+    pending_sounds_.pop_front();
+    return true;
 }

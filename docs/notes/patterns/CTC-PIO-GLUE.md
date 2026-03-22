@@ -29,3 +29,7 @@ gating, and interrupt routing.
 
 - GDP board PIO window is mapped and participating in chip enable/gating logic.
 - Further refinement is expected as AVDC/EF behavior is completed.
+
+## See Also
+
+- `docs/notes/patterns/SIO-PIO-TCP-VIRTUAL-DEVICES.md` (main-system PIO/SIO virtual-device behavior and TCP serial redirection)

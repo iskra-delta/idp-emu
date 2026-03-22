@@ -18,10 +18,14 @@ void draw_ir_row(const scn2674_t &avdc, int base, int count)
 
 } // namespace
 
-void panels::render_scn2674(partner &emu)
+void panels::render_scn2674(partner &emu, bool *p_open)
 {
-    ImGui::Begin("SCN2674 AVDC", nullptr,
-                 ImGuiWindowFlags_NoCollapse);
+    if (!ImGui::Begin("SCN2674 AVDC", p_open,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
 
     const auto *gdp = dynamic_cast<const partner_gdp*>(&emu);
     if (!gdp)

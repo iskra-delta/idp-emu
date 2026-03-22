@@ -6,11 +6,14 @@
 #include "panel_sio.hpp"
 #include "panel_pio.hpp"
 #include "panel_dma.hpp"
+#include "panel_monitor.hpp"
 #include "panel_rtc.hpp"
 #include "panel_scn2674.hpp"
 #include "panel_ef9367.hpp"
 #include "panel_xebec.hpp"
+#include "panel_devices.hpp"
 #include "../partner.hpp"
+#include "../partner_gdp.hpp"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -18,7 +21,9 @@
 #include <imgui_impl_opengl3.h>
 #include <SDL.h>
 #include <SDL_opengl.h>
+#include <algorithm>
 #include <cctype>
+#include <cmath>
 #include <cstdio>
 #include <iostream>
 #include <string>
@@ -71,9 +76,9 @@ static bool map_vt100_ctrl_key(SDL_Keycode key, SDL_Keymod mods, std::vector<uin
     }
 }
 
-// Minimal DEC VT100-style keyboard translation for non-text keys.
+// Partner serial keyboard translation for non-text keys in GDP mode.
 // Printable text still arrives via SDL_TEXTINPUT.
-static bool map_vt100_key(SDL_Keycode key, std::vector<uint8_t>& out, bool& local_only)
+static bool map_vt100_key(SDL_Keycode key, std::vector<uint8_t>& out, bool& local_only, bool has_setup_key)
 {
     local_only = false;
     switch (key) {
@@ -82,8 +87,7 @@ static bool map_vt100_key(SDL_Keycode key, std::vector<uint8_t>& out, bool& loca
         push_byte(out, 0x0D);
         return true;
     case SDLK_BACKSPACE:
-        // VT100 typically transmits DEL for Backspace.
-        push_byte(out, 0x7F);
+        push_byte(out, 0x08);
         return true;
     case SDLK_TAB:
         push_byte(out, 0x09);
@@ -92,52 +96,40 @@ static bool map_vt100_key(SDL_Keycode key, std::vector<uint8_t>& out, bool& loca
         push_byte(out, 0x1B);
         return true;
     case SDLK_UP:
-        push_cstr(out, "\x1B[A");
+        push_byte(out, 0x08);
         return true;
     case SDLK_DOWN:
-        push_cstr(out, "\x1B[B");
+        push_byte(out, 0x0A);
         return true;
     case SDLK_RIGHT:
-        push_cstr(out, "\x1B[C");
+        push_byte(out, 0x0C);
         return true;
     case SDLK_LEFT:
-        push_cstr(out, "\x1B[D");
-        return true;
-    case SDLK_HOME:
-        push_cstr(out, "\x1B[H");
-        return true;
-    case SDLK_END:
-        push_cstr(out, "\x1B[F");
-        return true;
-    case SDLK_INSERT:
-        push_cstr(out, "\x1B[2~");
+        push_byte(out, 0x0B);
         return true;
     case SDLK_DELETE:
-        push_cstr(out, "\x1B[3~");
-        return true;
-    case SDLK_PAGEUP:
-        push_cstr(out, "\x1B[5~");
-        return true;
-    case SDLK_PAGEDOWN:
-        push_cstr(out, "\x1B[6~");
+        push_byte(out, 0x7F);
         return true;
     case SDLK_F1:
-        push_cstr(out, "\x1BOP"); // PF1
+        push_byte(out, 0x04); // PF1
         return true;
     case SDLK_F2:
-        push_cstr(out, "\x1BOQ"); // PF2
+        push_byte(out, 0x05); // PF2
         return true;
     case SDLK_F3:
-        push_cstr(out, "\x1BOR"); // PF3
+        push_byte(out, 0x06); // PF3
         return true;
     case SDLK_F4:
-        push_cstr(out, "\x1BOS"); // PF4
+        push_byte(out, 0x07); // PF4
         return true;
     case SDLK_PAUSE:
     case SDLK_F12:
-        // DEC SET-UP is local on real VT100.
-        local_only = true;
-        return true;
+        if (has_setup_key) {
+            // DEC SET-UP is local on real VT100/Partner GDP keyboard.
+            local_only = true;
+            return true;
+        }
+        return false;
     default:
         return false;
     }
@@ -211,6 +203,109 @@ bool gui::is_host_key_blinking(const char *host_key)
         return false;
     }
     return true;
+}
+
+void gui::close_all_views()
+{
+    show_registers_ = false;
+    show_disasm_ = false;
+    show_fdc_ = false;
+    show_sio_ = false;
+    show_pio_ = false;
+    show_devices_ = false;
+    show_monitor_ = false;
+    show_dma_ = false;
+    show_xebec_ = false;
+    show_rtc_ = false;
+    show_scn2674_ = false;
+    show_ef9367_ = false;
+    show_keyboard_ = false;
+}
+
+void gui::queue_keyboard_tone(float freq_hz, float duration_ms, float amplitude, bool square_wave)
+{
+    if ((audio_device_ == 0) || (audio_spec_.freq <= 0) || (duration_ms <= 0.0f)) {
+        return;
+    }
+
+    const int sample_rate = audio_spec_.freq;
+    const int sample_count = std::max(1, (int)std::lround((duration_ms / 1000.0f) * (float)sample_rate));
+    std::vector<float> samples;
+    samples.resize((std::size_t)sample_count);
+
+    const double two_pi = 6.28318530717958647692;
+    const double step = two_pi * (double)freq_hz / (double)sample_rate;
+    double phase = 0.0;
+
+    for (int i = 0; i < sample_count; i++)
+    {
+        float v = std::sin((float)phase);
+        if (square_wave) {
+            v = (v >= 0.0f) ? 1.0f : -1.0f;
+        }
+        const float t = (float)i / (float)sample_count;
+        float env = 1.0f;
+        if (t < 0.04f) {
+            env = t / 0.04f;
+        } else if (t > 0.90f) {
+            env = std::max(0.0f, (1.0f - t) / 0.10f);
+        }
+        samples[(std::size_t)i] = v * amplitude * env;
+        phase += step;
+    }
+
+    const std::uint32_t queued = SDL_GetQueuedAudioSize(audio_device_);
+    const std::uint32_t max_queued = (std::uint32_t)(audio_spec_.freq * sizeof(float) / 2);
+    if (queued > max_queued && duration_ms <= 30.0f) {
+        return;
+    }
+    SDL_QueueAudio(audio_device_, samples.data(), (std::uint32_t)(samples.size() * sizeof(float)));
+}
+
+void gui::queue_keyboard_sound(partner_gdp_keyboard_sound sound)
+{
+    if (audio_device_ != 0) {
+        const std::uint32_t queued_bytes = SDL_GetQueuedAudioSize(audio_device_);
+        const std::uint32_t bytes_per_ms =
+            (audio_spec_.freq > 0)
+                ? (std::uint32_t)((audio_spec_.freq * (int)sizeof(float)) / 1000)
+                : 0u;
+        const std::uint32_t queued_ms = (bytes_per_ms > 0) ? (queued_bytes / bytes_per_ms) : 0u;
+        if ((sound == partner_gdp_keyboard_sound::short_beep || sound == partner_gdp_keyboard_sound::long_beep) &&
+            queued_ms > 80u) {
+            // Prefer current firmware beeps over stale queued tones.
+            SDL_ClearQueuedAudio(audio_device_);
+        }
+    }
+
+    switch (sound)
+    {
+    case partner_gdp_keyboard_sound::key_click:
+        queue_keyboard_tone(2200.0f, 14.0f, 0.10f, true);
+        break;
+    case partner_gdp_keyboard_sound::short_beep:
+        queue_keyboard_tone(980.0f, 70.0f, 0.15f, false);
+        break;
+    case partner_gdp_keyboard_sound::long_beep:
+        queue_keyboard_tone(740.0f, 180.0f, 0.18f, false);
+        break;
+    case partner_gdp_keyboard_sound::none:
+    default:
+        break;
+    }
+}
+
+void gui::service_keyboard_sound(partner &emu)
+{
+    auto *gdp = dynamic_cast<partner_gdp *>(&emu);
+    if (!gdp) {
+        return;
+    }
+    auto &kbd = gdp->get_keyboard();
+    partner_gdp_keyboard_sound sound = partner_gdp_keyboard_sound::none;
+    while (kbd.pop_sound(sound)) {
+        queue_keyboard_sound(sound);
+    }
 }
 
 bool gui::init(const std::string &title, int width, int height)
@@ -288,6 +383,29 @@ bool gui::init(const std::string &title, int width, int height)
     // Enable SDL text input events for terminal key injection.
     SDL_StartTextInput();
 
+    if (SDL_InitSubSystem(SDL_INIT_AUDIO) == 0)
+    {
+        SDL_AudioSpec want{};
+        want.freq = 44100;
+        want.format = AUDIO_F32SYS;
+        want.channels = 1;
+        want.samples = 1024;
+        want.callback = nullptr;
+        audio_device_ = SDL_OpenAudioDevice(nullptr, 0, &want, &audio_spec_, 0);
+        if (audio_device_ != 0)
+        {
+            SDL_PauseAudioDevice(audio_device_, 0);
+        }
+        else
+        {
+            std::cerr << "[warning] SDL_OpenAudioDevice failed: " << SDL_GetError() << "\n";
+        }
+    }
+    else
+    {
+        std::cerr << "[warning] SDL_InitSubSystem(AUDIO) failed: " << SDL_GetError() << "\n";
+    }
+
     display_.init();
 
     return true;
@@ -295,6 +413,11 @@ bool gui::init(const std::string &title, int width, int height)
 
 void gui::shutdown()
 {
+    if (audio_device_ != 0)
+    {
+        SDL_CloseAudioDevice(audio_device_);
+        audio_device_ = 0;
+    }
     display_.shutdown();
     SDL_StopTextInput();
 
@@ -306,23 +429,187 @@ void gui::shutdown()
         SDL_GL_DeleteContext(gl_context_);
     if (window_)
         SDL_DestroyWindow(window_);
+    SDL_QuitSubSystem(SDL_INIT_AUDIO);
     SDL_Quit();
 }
 
-bool gui::process_events(bool &paused, dbg_action &action)
+bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
 {
+    // Drain keyboard sound events whenever we pump the event loop. This keeps
+    // audio close to emulation timing rather than waiting for render only.
+    service_keyboard_sound(emu);
+
+    const Uint32 main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
+    const bool gdp_keyboard_model = dynamic_cast<partner_gdp *>(&emu) != nullptr;
+    const bool has_serial_mouse = emu.has_serial_mouse_attached();
+    const auto point_in_display = [&](int window_x, int window_y) -> bool {
+        int win_x = 0;
+        int win_y = 0;
+        if (window_)
+            SDL_GetWindowPosition(window_, &win_x, &win_y);
+        const int screen_x = win_x + window_x;
+        const int screen_y = win_y + window_y;
+        return (screen_x >= (int)std::floor(display_viewport_.x0)) &&
+               (screen_x <  (int)std::ceil(display_viewport_.x1)) &&
+               (screen_y >= (int)std::floor(display_viewport_.y0)) &&
+               (screen_y <  (int)std::ceil(display_viewport_.y1));
+    };
+    const auto release_mouse_buttons = [&]() {
+        if (mouse_left_down_ || mouse_right_down_ || mouse_middle_down_)
+            emu.inject_serial_mouse_motion(0, 0, false, false, false);
+        mouse_left_down_ = false;
+        mouse_middle_down_ = false;
+        mouse_right_down_ = false;
+    };
+    const auto deactivate_mouse_relative = [&]() {
+        if (mouse_relative_active_)
+        {
+            SDL_SetRelativeMouseMode(SDL_FALSE);
+            SDL_CaptureMouse(SDL_FALSE);
+            mouse_relative_active_ = false;
+        }
+    };
+    const auto activate_mouse_relative = [&]() {
+        if (!mouse_relative_active_)
+        {
+            if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0)
+            {
+                SDL_CaptureMouse(SDL_TRUE);
+                mouse_relative_active_ = true;
+            }
+        }
+    };
+    const auto release_mouse_mode = [&]() {
+        release_mouse_buttons();
+        deactivate_mouse_relative();
+        if (mouse_cursor_hidden_)
+        {
+            SDL_ShowCursor(SDL_ENABLE);
+            mouse_cursor_hidden_ = false;
+        }
+    };
+    if (!has_serial_mouse && (mouse_left_down_ || mouse_right_down_ || mouse_middle_down_))
+        release_mouse_buttons();
+    if (!has_serial_mouse && (mouse_cursor_hidden_ || mouse_relative_active_))
+        release_mouse_mode();
+
     SDL_Event event;
     while (SDL_PollEvent(&event))
     {
         ImGui_ImplSDL2_ProcessEvent(&event);
 
         if (event.type == SDL_QUIT)
+        {
+            close_all_views();
+            release_mouse_mode();
             return false;
+        }
+
+        if (event.type == SDL_WINDOWEVENT &&
+            event.window.event == SDL_WINDOWEVENT_CLOSE &&
+            event.window.windowID == main_window_id)
+        {
+            close_all_views();
+            release_mouse_mode();
+            SDL_Event quit_event;
+            quit_event.type = SDL_QUIT;
+            SDL_PushEvent(&quit_event);
+            return false;
+        }
+
+        if (event.type == SDL_WINDOWEVENT &&
+            event.window.windowID == main_window_id &&
+            (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
+             event.window.event == SDL_WINDOWEVENT_LEAVE))
+        {
+            release_mouse_mode();
+        }
+
+        if (event.type == SDL_MOUSEMOTION && has_serial_mouse)
+        {
+            if (mouse_relative_active_)
+            {
+                const int dx = event.motion.xrel;
+                const int dy = event.motion.yrel;
+                if ((dx != 0) || (dy != 0))
+                    emu.inject_serial_mouse_motion(dx, dy, mouse_left_down_, mouse_right_down_, mouse_middle_down_);
+                continue;
+            }
+
+            const bool inside = point_in_display(event.motion.x, event.motion.y);
+            if (!inside)
+            {
+                if (mouse_cursor_hidden_)
+                    SDL_ShowCursor(SDL_ENABLE);
+                mouse_cursor_hidden_ = false;
+                continue;
+            }
+
+            if (inside && !mouse_cursor_hidden_)
+            {
+                SDL_ShowCursor(SDL_DISABLE);
+                mouse_cursor_hidden_ = true;
+            }
+
+            const int dx = event.motion.xrel;
+            const int dy = event.motion.yrel;
+            if ((dx != 0) || (dy != 0))
+            {
+                emu.inject_serial_mouse_motion(dx, dy, mouse_left_down_, mouse_right_down_, mouse_middle_down_);
+            }
+            continue;
+        }
+
+        if ((event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP) &&
+            has_serial_mouse)
+        {
+            const bool down = (event.type == SDL_MOUSEBUTTONDOWN);
+            if (event.button.windowID != main_window_id)
+            {
+                continue;
+            }
+
+            const bool inside = point_in_display(event.button.x, event.button.y);
+            if (!inside && down)
+                continue;
+
+            if (inside && down)
+                activate_mouse_relative();
+
+            if (inside && !mouse_cursor_hidden_)
+            {
+                SDL_ShowCursor(SDL_DISABLE);
+                mouse_cursor_hidden_ = true;
+            }
+
+            switch (event.button.button)
+            {
+            case SDL_BUTTON_LEFT:
+                mouse_left_down_ = down;
+                break;
+            case SDL_BUTTON_MIDDLE:
+                mouse_middle_down_ = down;
+                break;
+            case SDL_BUTTON_RIGHT:
+                mouse_right_down_ = down;
+                break;
+            default:
+                break;
+            }
+            emu.inject_serial_mouse_motion(0, 0, mouse_left_down_, mouse_right_down_, mouse_middle_down_);
+            continue;
+        }
 
         if (event.type == SDL_KEYDOWN)
         {
             const SDL_Keycode sym = event.key.keysym.sym;
             const SDL_Keymod mods = (SDL_Keymod)event.key.keysym.mod;
+
+            if (mouse_relative_active_ && (sym == SDLK_LCTRL || sym == SDLK_RCTRL))
+            {
+                release_mouse_mode();
+                continue;
+            }
 
             if (sym >= SDLK_a && sym <= SDLK_z) {
                 char host[2] = { (char)std::toupper((int)('a' + (sym - SDLK_a))), '\0' };
@@ -360,9 +647,6 @@ bool gui::process_events(bool &paused, dbg_action &action)
             // Always allow debugger hotkeys even when ImGui has keyboard navigation focus.
             switch (sym)
             {
-            case SDLK_F5:
-                action = dbg_action::SWITCH_TO_GDP;
-                break;
             case SDLK_SPACE:
                 paused = !paused;
                 break;
@@ -388,7 +672,7 @@ bool gui::process_events(bool &paused, dbg_action &action)
                         continue;
 
                     bool local_only = false;
-                    if (map_vt100_key(sym, key_buf_, local_only))
+                    if (map_vt100_key(sym, key_buf_, local_only, gdp_keyboard_model))
                     {
                         if (local_only)
                         {
@@ -400,8 +684,6 @@ bool gui::process_events(bool &paused, dbg_action &action)
 
                 switch (sym)
                 {
-                case SDLK_ESCAPE:
-                    return false;
                 case SDLK_RETURN:
                     key_buf_.push_back(0x0D);
                     break;
@@ -458,6 +740,13 @@ bool gui::process_events(bool &paused, dbg_action &action)
             }
         }
     }
+    if (has_serial_mouse && !mouse_relative_active_ && mouse_cursor_hidden_ && !display_viewport_.hovered)
+    {
+        SDL_ShowCursor(SDL_ENABLE);
+        mouse_cursor_hidden_ = false;
+        if (mouse_left_down_ || mouse_right_down_ || mouse_middle_down_)
+            release_mouse_buttons();
+    }
     return true;
 }
 
@@ -471,6 +760,7 @@ void gui::begin_frame()
 void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 {
     display_.update();
+    const bool gdp_keyboard_model = dynamic_cast<partner_gdp *>(&emu) != nullptr;
 
     // Menu bar
     if (ImGui::BeginMainMenuBar())
@@ -487,8 +777,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
                 display_.update();
             }
             ImGui::Separator();
-            const char *quit_shortcut = (terminal_profile_ == terminal_profile::vt100_ansi) ? "Ctrl+Q" : "Esc";
-            if (ImGui::MenuItem("Quit", quit_shortcut))
+            if (ImGui::MenuItem("Quit", "Ctrl+Q"))
             {
                 SDL_Event quit_event;
                 quit_event.type = SDL_QUIT;
@@ -510,20 +799,11 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             ImGui::MenuItem("EF9367 GDP", nullptr, &show_ef9367_);
             ImGui::EndMenu();
         }
-        if (ImGui::BeginMenu("Tools"))
+        if (ImGui::BeginMenu("Devices"))
         {
+            ImGui::MenuItem("Device Routing", nullptr, &show_devices_);
+            ImGui::MenuItem("Monitor", nullptr, &show_monitor_);
             ImGui::MenuItem("Virtual Keyboard", nullptr, &show_keyboard_);
-            if (ImGui::BeginMenu("Monitor Type"))
-            {
-                const auto mode = display_.get_phosphor_type();
-                if (ImGui::MenuItem("Green CRT", nullptr, mode == display::phosphor_type::green))
-                    display_.set_phosphor_type(display::phosphor_type::green);
-                if (ImGui::MenuItem("Orange CRT", nullptr, mode == display::phosphor_type::orange))
-                    display_.set_phosphor_type(display::phosphor_type::orange);
-                if (ImGui::MenuItem("LCD (Game Boy)", nullptr, mode == display::phosphor_type::lcd))
-                    display_.set_phosphor_type(display::phosphor_type::lcd);
-                ImGui::EndMenu();
-            }
             ImGui::EndMenu();
         }
         ImGui::EndMainMenuBar();
@@ -549,47 +829,58 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
     }
 
     // Panels
-    panels::render_display(display_);
+    panels::render_display(display_, &display_viewport_);
 
     if (show_registers_)
-        panels::render_registers(emu);
+        panels::render_registers(emu, &show_registers_);
 
     if (show_sio_)
-        panels::render_sio(emu, key_buf_);
+        panels::render_sio(emu, key_buf_, &show_sio_);
 
     if (show_pio_)
-        panels::render_pio(emu);
+        panels::render_pio(emu, &show_pio_);
+
+    if (show_devices_)
+        panels::render_devices(emu, &show_devices_);
+
+    if (show_monitor_)
+        panels::render_monitor(display_, &show_monitor_);
 
     if (show_dma_)
-        panels::render_dma(emu);
+        panels::render_dma(emu, &show_dma_);
 
     if (show_rtc_)
-        panels::render_rtc(emu);
+        panels::render_rtc(emu, &show_rtc_);
 
     if (show_scn2674_)
-        panels::render_scn2674(emu);
+        panels::render_scn2674(emu, &show_scn2674_);
 
     if (show_ef9367_)
-        panels::render_ef9367(emu);
+        panels::render_ef9367(emu, &show_ef9367_);
 
     if (show_xebec_)
-        panels::render_xebec(emu);
+        panels::render_xebec(emu, &show_xebec_);
 
     if (show_disasm_)
-        panels::render_disasm(emu, paused, action);
+        panels::render_disasm(emu, paused, action, &show_disasm_);
 
     if (show_fdc_)
-        panels::render_fdc(emu);
+        panels::render_fdc(emu, &show_fdc_);
 
     if (show_keyboard_)
     {
         // Keep this panel floating by default (not initially docked) because it benefits from horizontal space.
+        const ImGuiViewport* vp = ImGui::GetMainViewport();
+        const float menu_h = ImGui::GetFrameHeight();
+        const ImVec2 vk_default_pos(vp->WorkPos.x + 8.0f, vp->WorkPos.y + menu_h + 8.0f);
+        const ImVec2 vk_default_size(
+            std::min(1560.0f, vp->WorkSize.x - 16.0f),
+            std::min(530.0f, vp->WorkSize.y - (menu_h + 24.0f))
+        );
         ImGui::SetNextWindowDockID(0, ImGuiCond_Appearing);
-        ImGui::SetNextWindowSize(ImVec2(1560.0f, 530.0f), ImGuiCond_Appearing);
-        ImGui::SetNextWindowPos(ImVec2(140.0f, 120.0f), ImGuiCond_Appearing);
+        ImGui::SetNextWindowSize(vk_default_size, ImGuiCond_Appearing);
+        ImGui::SetNextWindowPos(vk_default_pos, ImGuiCond_Appearing);
         ImGui::Begin("Virtual Keyboard", &show_keyboard_);
-        ImGui::TextUnformatted("DEC VT100-style mapping (click to inject):");
-        ImGui::Separator();
         ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.90f, 0.90f, 0.90f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.96f, 0.96f, 0.96f, 1.00f));
         ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.82f, 0.82f, 0.82f, 1.00f));
@@ -600,6 +891,8 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 
         const float key_scale = 1.25f;
         const float key_h = 42.0f * key_scale;
+        const bool show_host_hints = !gdp_keyboard_model;
+        int key_uid = 0;
         static char last_click_info[128] = "";
         auto clicked_info = [&](const char* dec_key, const char* host_key, const char* tx_desc) {
             std::snprintf(last_click_info, sizeof(last_click_info), "%s <- %s (%s)", dec_key, host_key, tx_desc);
@@ -616,7 +909,8 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
         auto key_button = [&](const char* dec_key, const char* host_key, const char* tx_bytes, float w, float h = -1.0f) {
             if (h <= 0.0f) h = key_h;
             const bool blinked = push_blink_style(host_key);
-            std::string label = std::string(dec_key) + "\n[" + host_key + "]";
+            const std::string visible = show_host_hints ? (std::string(dec_key) + "\n[" + host_key + "]") : std::string(dec_key);
+            const std::string label = visible + "##kbd_" + std::to_string(key_uid++);
             if (ImGui::Button(label.c_str(), ImVec2(w, h))) {
                 blink_host_key(host_key);
                 if (tx_bytes && tx_bytes[0]) {
@@ -629,18 +923,12 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             if (blinked) {
                 ImGui::PopStyleColor(3);
             }
-            if (ImGui::IsItemHovered()) {
-                ImGui::BeginTooltip();
-                ImGui::Text("DEC key: %s", dec_key);
-                ImGui::Text("Host key: %s", host_key);
-                ImGui::Text("Transmit: %s", (tx_bytes && tx_bytes[0]) ? tx_bytes : "(local only)");
-                ImGui::EndTooltip();
-            }
         };
         auto char_button = [&](const char* dec_key, const char* host_key, uint8_t ch, float w = 46.0f, float h = -1.0f) {
             if (h <= 0.0f) h = key_h;
             const bool blinked = push_blink_style(host_key);
-            std::string label = std::string(dec_key) + "\n[" + host_key + "]";
+            const std::string visible = show_host_hints ? (std::string(dec_key) + "\n[" + host_key + "]") : std::string(dec_key);
+            const std::string label = visible + "##kbd_" + std::to_string(key_uid++);
             if (ImGui::Button(label.c_str(), ImVec2(w, h))) {
                 blink_host_key(host_key);
                 push_byte(key_buf_, ch);
@@ -664,8 +952,6 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
         const float kp_zero_w = 90.0f * key_scale;
         const float inter_group_gap_1 = 14.0f * key_scale;
         const float inter_group_gap_2 = 18.0f * key_scale;
-
-        // Center the full keyboard block in the available content width.
         const auto row_w = [&](std::initializer_list<float> widths) -> float {
             float sum = 0.0f;
             int count = 0;
@@ -675,149 +961,316 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             }
             return sum + (count > 1 ? (float)(count - 1) * sx : 0.0f);
         };
-        const float left_group_w = std::max(
-            std::max(
+
+        if (gdp_keyboard_model)
+        {
+            const float setup_w = 72.0f * key_scale;
+            const float caps_w = 86.0f * key_scale;
+            const float shift_w = 96.0f * key_scale;
+            const float backspace_w = 96.0f * key_scale;
+            const float break_w = 74.0f * key_scale;
+            const float delete_w = 78.0f * key_scale;
+            const float return_w = 96.0f * key_scale;
+            const float linefeed_w = 76.0f * key_scale;
+            const float noscroll_w = 68.0f * key_scale;
+            const float space_w_vt100 = 520.0f * key_scale;
+            const float side_gap = 24.0f * key_scale;
+            const float arrows_w = row_w({k, k, k, k});
+            const float keypad_w = std::max(
+                row_w({k, k, k, k}),
+                row_w({kp_zero_w, k, k}));
+            const float main_w = std::max(
                 std::max(
                     std::max(
-                        row_w({wide}),
-                        row_w({mod, k, k, k, k, k, k, k, k, k, k, k, k})),
-                    row_w({mod, k, k, k, k, k, k, k, k, k, k, k, k})),
-                row_w({mod, mod, k, k, k, k, k, k, k, k, k, k, k})),
-            std::max(
-                row_w({mod, shift, k, k, k, k, k, k, k, k, k, k, shift}),
-                row_w({space_w})));
-        const float nav_group_w = std::max(
-            std::max(row_w({k, k, k, k}), row_w({k, k, k, wide, mod})),
-            std::max(row_w({wide, k}), row_w({ret_w, mod})));
-        const float keypad_group_w = std::max(
-            std::max(row_w({k, k, k, k}), row_w({k, k, k, k})),
-            std::max(row_w({k, k, k, k}), row_w({kp_zero_w, k, k})));
-        const float keyboard_total_w = left_group_w + inter_group_gap_1 + nav_group_w + inter_group_gap_2 + keypad_group_w;
-        const float avail_w = ImGui::GetContentRegionAvail().x;
-        if (avail_w > keyboard_total_w) {
-            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail_w - keyboard_total_w) * 0.5f);
+                        row_w({k, k, k, k, k, k, k, k, k, k, k, k, k, backspace_w, break_w}),
+                        row_w({mod, k, k, k, k, k, k, k, k, k, k, k, k, delete_w})),
+                    row_w({mod, caps_w, k, k, k, k, k, k, k, k, k, k, return_w, k})),
+                std::max(
+                    row_w({noscroll_w, shift_w, k, k, k, k, k, k, k, k, k, shift_w, linefeed_w}),
+                    row_w({space_w_vt100})));
+            const float keyboard_total_w = main_w + side_gap + arrows_w + side_gap + keypad_w;
+            const float avail_w = ImGui::GetContentRegionAvail().x;
+            if (avail_w > keyboard_total_w) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail_w - keyboard_total_w) * 0.5f);
+            }
+
+            key_button("SET UP", "Pause/F12", "", setup_w, h);
+            ImGui::Spacing();
+            if (auto *gdp = dynamic_cast<partner_gdp *>(&emu))
+            {
+                const auto &kbd = gdp->get_keyboard();
+                const float led_size = 14.0f;
+                const float led_gap = 18.0f;
+                const float led_strip_w = (8.0f * led_size) + (7.0f * led_gap);
+                const float led_avail = ImGui::GetContentRegionAvail().x;
+                if (led_avail > led_strip_w) {
+                    ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (led_avail - led_strip_w) * 0.5f);
+                }
+                for (int i = 0; i < 8; i++)
+                {
+                    ImGui::PushID(i + 5000);
+                    if (i > 0) ImGui::SameLine();
+                    const bool on = kbd.led(i);
+                    const ImU32 fill_col = ImGui::GetColorU32(on ? ImVec4(0.95f, 0.22f, 0.22f, 1.0f)
+                                                                  : ImVec4(0.24f, 0.24f, 0.24f, 1.0f));
+                    const ImU32 ring_col = ImGui::GetColorU32(ImVec4(0.09f, 0.09f, 0.09f, 1.0f));
+                    ImGui::InvisibleButton("##led", ImVec2(led_size, led_size));
+                    const ImVec2 p = ImGui::GetItemRectMin();
+                    const ImVec2 c(p.x + (led_size * 0.5f), p.y + (led_size * 0.5f));
+                    const float r = (led_size * 0.5f) - 1.0f;
+                    ImDrawList* dl = ImGui::GetWindowDrawList();
+                    dl->AddCircleFilled(c, r, fill_col, 24);
+                    dl->AddCircle(c, r, ring_col, 24, 1.0f);
+                    ImGui::PopID();
+                }
+            }
+            ImGui::Spacing();
+
+            ImGui::BeginGroup();
+            char_button("ESC", "Esc", 0x1B, k); ImGui::SameLine();
+            char_button("!\n1", "1", '1', k); ImGui::SameLine();
+            char_button("@\n2", "2", '2', k); ImGui::SameLine();
+            char_button("#\n3", "3", '3', k); ImGui::SameLine();
+            char_button("$\n4", "4", '4', k); ImGui::SameLine();
+            char_button("%\n5", "5", '5', k); ImGui::SameLine();
+            char_button("^\n6", "6", '6', k); ImGui::SameLine();
+            char_button("&\n7", "7", '7', k); ImGui::SameLine();
+            char_button("*\n8", "8", '8', k); ImGui::SameLine();
+            char_button("(\n9", "9", '9', k); ImGui::SameLine();
+            char_button(")\n0", "0", '0', k); ImGui::SameLine();
+            char_button("_\n-", "-", '-', k); ImGui::SameLine();
+            char_button("+\n=", "=", '=', k); ImGui::SameLine();
+            char_button("~\n`", "`", '`', k); ImGui::SameLine();
+            char_button("BACK\nSPACE", "Backspace", 0x08, backspace_w, h); ImGui::SameLine();
+            key_button("BREAK", "Break", "", break_w, h);
+
+            key_button("TAB", "Tab", "\x09", mod, h); ImGui::SameLine();
+            char_button("Q", "Q", 'q', k); ImGui::SameLine();
+            char_button("W", "W", 'w', k); ImGui::SameLine();
+            char_button("E", "E", 'e', k); ImGui::SameLine();
+            char_button("R", "R", 'r', k); ImGui::SameLine();
+            char_button("T", "T", 't', k); ImGui::SameLine();
+            char_button("Y", "Y", 'y', k); ImGui::SameLine();
+            char_button("U", "U", 'u', k); ImGui::SameLine();
+            char_button("I", "I", 'i', k); ImGui::SameLine();
+            char_button("O", "O", 'o', k); ImGui::SameLine();
+            char_button("P", "P", 'p', k); ImGui::SameLine();
+            char_button("{\n[", "[", '[', k); ImGui::SameLine();
+            char_button("}\n]", "]", ']', k); ImGui::SameLine();
+            char_button("DELETE", "Delete", 0x7F, delete_w, h);
+
+            key_button("CTRL", "Ctrl", "", mod, h); ImGui::SameLine();
+            key_button("CAPS\nLOCK", "CapsLock", "", caps_w, h); ImGui::SameLine();
+            char_button("A", "A", 'a', k); ImGui::SameLine();
+            char_button("S", "S", 's', k); ImGui::SameLine();
+            char_button("D", "D", 'd', k); ImGui::SameLine();
+            char_button("F", "F", 'f', k); ImGui::SameLine();
+            char_button("G", "G", 'g', k); ImGui::SameLine();
+            char_button("H", "H", 'h', k); ImGui::SameLine();
+            char_button("J", "J", 'j', k); ImGui::SameLine();
+            char_button("K", "K", 'k', k); ImGui::SameLine();
+            char_button("L", "L", 'l', k); ImGui::SameLine();
+            char_button(":\n;", ";", ';', k); ImGui::SameLine();
+            char_button("\"\n'", "'", '\'', k); ImGui::SameLine();
+            key_button("RETURN", "Enter", "\r", return_w, h); ImGui::SameLine();
+            char_button("|\n\\", "\\", '\\', k);
+
+            key_button("NO\nSCROLL", "ScrollLock", "", noscroll_w, h); ImGui::SameLine();
+            key_button("SHIFT", "LShift", "", shift_w, h); ImGui::SameLine();
+            char_button("Z", "Z", 'z', k); ImGui::SameLine();
+            char_button("X", "X", 'x', k); ImGui::SameLine();
+            char_button("C", "C", 'c', k); ImGui::SameLine();
+            char_button("V", "V", 'v', k); ImGui::SameLine();
+            char_button("B", "B", 'b', k); ImGui::SameLine();
+            char_button("N", "N", 'n', k); ImGui::SameLine();
+            char_button("M", "M", 'm', k); ImGui::SameLine();
+            char_button("<\n,", ",", ',', k); ImGui::SameLine();
+            char_button(">\n.", ".", '.', k); ImGui::SameLine();
+            char_button("?\n/", "/", '/', k); ImGui::SameLine();
+            key_button("SHIFT", "RShift", "", shift_w, h); ImGui::SameLine();
+            key_button("LINE\nFEED", "Ctrl+J", "\n", linefeed_w, h);
+
+            key_button("SPACE", "Space", " ", space_w_vt100, h);
+            ImGui::EndGroup();
+
+            ImGui::SameLine(0.0f, side_gap);
+            ImGui::BeginGroup();
+            char_button("UP", "Up", 0x08, k, h); ImGui::SameLine();
+            char_button("DOWN", "Down", 0x0A, k, h); ImGui::SameLine();
+            char_button("LEFT", "Left", 0x0B, k, h); ImGui::SameLine();
+            char_button("RIGHT", "Right", 0x0C, k, h);
+            ImGui::EndGroup();
+
+            ImGui::SameLine(0.0f, side_gap);
+            ImGui::BeginGroup();
+            char_button("PF1", "F1", 0x04, k, h); ImGui::SameLine();
+            char_button("PF2", "F2", 0x05, k, h); ImGui::SameLine();
+            char_button("PF3", "F3", 0x06, k, h); ImGui::SameLine();
+            char_button("PF4", "F4", 0x07, k, h);
+
+            char_button("7", "KP7", '7', k); ImGui::SameLine();
+            char_button("8", "KP8", '8', k); ImGui::SameLine();
+            char_button("9", "KP9", '9', k); ImGui::SameLine();
+            char_button("-", "KP-", '-', k);
+
+            char_button("4", "KP4", '4', k); ImGui::SameLine();
+            char_button("5", "KP5", '5', k); ImGui::SameLine();
+            char_button("6", "KP6", '6', k); ImGui::SameLine();
+            char_button(",", "KP,", ',', k);
+
+            char_button("1", "KP1", '1', k); ImGui::SameLine();
+            char_button("2", "KP2", '2', k); ImGui::SameLine();
+            char_button("3", "KP3", '3', k); ImGui::SameLine();
+            key_button("ENTER", "KP Enter", "\r", k, h);
+
+            char_button("0", "KP0", '0', kp_zero_w); ImGui::SameLine();
+            char_button(".", "KP.", '.', k);
+            ImGui::EndGroup();
         }
+        else
+        {
+            const float left_group_w = std::max(
+                std::max(
+                    std::max(
+                        std::max(
+                            row_w({wide}),
+                            row_w({mod, k, k, k, k, k, k, k, k, k, k, k, k})),
+                        row_w({mod, k, k, k, k, k, k, k, k, k, k, k, k})),
+                    row_w({mod, mod, k, k, k, k, k, k, k, k, k, k, k})),
+                std::max(
+                    row_w({mod, shift, k, k, k, k, k, k, k, k, k, k, shift}),
+                    row_w({space_w})));
+            const float nav_group_w = std::max(
+                std::max(row_w({k, k, k, k}), row_w({k, k, k, wide, mod})),
+                std::max(row_w({wide, k}), row_w({ret_w, mod})));
+            const float keypad_group_w = std::max(
+                std::max(row_w({k, k, k, k}), row_w({k, k, k, k})),
+                std::max(row_w({k, k, k, k}), row_w({kp_zero_w, k, k})));
+            const float keyboard_total_w = left_group_w + inter_group_gap_1 + nav_group_w + inter_group_gap_2 + keypad_group_w;
+            const float avail_w = ImGui::GetContentRegionAvail().x;
+            if (avail_w > keyboard_total_w) {
+                ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail_w - keyboard_total_w) * 0.5f);
+            }
 
-        // Left: main typing block
-        ImGui::BeginGroup();
-        key_button("SET-UP", "Pause/F12", "", wide, h);
+            ImGui::BeginGroup();
+            char_button("ESC", "Esc", 0x1B, mod);
+            ImGui::SameLine();
+            char_button("1", "1", '1', k); ImGui::SameLine();
+            char_button("2", "2", '2', k); ImGui::SameLine();
+            char_button("3", "3", '3', k); ImGui::SameLine();
+            char_button("4", "4", '4', k); ImGui::SameLine();
+            char_button("5", "5", '5', k); ImGui::SameLine();
+            char_button("6", "6", '6', k); ImGui::SameLine();
+            char_button("7", "7", '7', k); ImGui::SameLine();
+            char_button("8", "8", '8', k); ImGui::SameLine();
+            char_button("9", "9", '9', k); ImGui::SameLine();
+            char_button("0", "0", '0', k); ImGui::SameLine();
+            char_button("-", "-", '-', k); ImGui::SameLine();
+            char_button("=", "=", '=', k);
 
-        char_button("ESC", "Esc", 0x1B, mod); ImGui::SameLine();
-        char_button("1", "1", '1', k); ImGui::SameLine();
-        char_button("2", "2", '2', k); ImGui::SameLine();
-        char_button("3", "3", '3', k); ImGui::SameLine();
-        char_button("4", "4", '4', k); ImGui::SameLine();
-        char_button("5", "5", '5', k); ImGui::SameLine();
-        char_button("6", "6", '6', k); ImGui::SameLine();
-        char_button("7", "7", '7', k); ImGui::SameLine();
-        char_button("8", "8", '8', k); ImGui::SameLine();
-        char_button("9", "9", '9', k); ImGui::SameLine();
-        char_button("0", "0", '0', k); ImGui::SameLine();
-        char_button("-", "-", '-', k); ImGui::SameLine();
-        char_button("=", "=", '=', k);
+            key_button("TAB", "Tab", "\x09", mod, h); ImGui::SameLine();
+            char_button("Q", "Q", 'q', k); ImGui::SameLine();
+            char_button("W", "W", 'w', k); ImGui::SameLine();
+            char_button("E", "E", 'e', k); ImGui::SameLine();
+            char_button("R", "R", 'r', k); ImGui::SameLine();
+            char_button("T", "T", 't', k); ImGui::SameLine();
+            char_button("Y", "Y", 'y', k); ImGui::SameLine();
+            char_button("U", "U", 'u', k); ImGui::SameLine();
+            char_button("I", "I", 'i', k); ImGui::SameLine();
+            char_button("O", "O", 'o', k); ImGui::SameLine();
+            char_button("P", "P", 'p', k); ImGui::SameLine();
+            char_button("{", "[", '[', k); ImGui::SameLine();
+            char_button("}", "]", ']', k);
 
-        key_button("TAB", "Tab", "\x09", mod, h); ImGui::SameLine();
-        char_button("Q", "Q", 'q', k); ImGui::SameLine();
-        char_button("W", "W", 'w', k); ImGui::SameLine();
-        char_button("E", "E", 'e', k); ImGui::SameLine();
-        char_button("R", "R", 'r', k); ImGui::SameLine();
-        char_button("T", "T", 't', k); ImGui::SameLine();
-        char_button("Y", "Y", 'y', k); ImGui::SameLine();
-        char_button("U", "U", 'u', k); ImGui::SameLine();
-        char_button("I", "I", 'i', k); ImGui::SameLine();
-        char_button("O", "O", 'o', k); ImGui::SameLine();
-        char_button("P", "P", 'p', k); ImGui::SameLine();
-        char_button("{", "[", '[', k); ImGui::SameLine();
-        char_button("}", "]", ']', k);
+            key_button("CTRL", "Ctrl", "", mod, h); ImGui::SameLine();
+            key_button("CAPS", "CapsLock", "", mod, h); ImGui::SameLine();
+            char_button("A", "A", 'a', k); ImGui::SameLine();
+            char_button("S", "S", 's', k); ImGui::SameLine();
+            char_button("D", "D", 'd', k); ImGui::SameLine();
+            char_button("F", "F", 'f', k); ImGui::SameLine();
+            char_button("G", "G", 'g', k); ImGui::SameLine();
+            char_button("H", "H", 'h', k); ImGui::SameLine();
+            char_button("J", "J", 'j', k); ImGui::SameLine();
+            char_button("K", "K", 'k', k); ImGui::SameLine();
+            char_button("L", "L", 'l', k); ImGui::SameLine();
+            char_button(":", ";", ';', k); ImGui::SameLine();
+            char_button("\"", "'", '\'', k);
 
-        key_button("CTRL", "Ctrl", "", mod, h); ImGui::SameLine();
-        key_button("CAPS", "CapsLock", "", mod, h); ImGui::SameLine();
-        char_button("A", "A", 'a', k); ImGui::SameLine();
-        char_button("S", "S", 's', k); ImGui::SameLine();
-        char_button("D", "D", 'd', k); ImGui::SameLine();
-        char_button("F", "F", 'f', k); ImGui::SameLine();
-        char_button("G", "G", 'g', k); ImGui::SameLine();
-        char_button("H", "H", 'h', k); ImGui::SameLine();
-        char_button("J", "J", 'j', k); ImGui::SameLine();
-        char_button("K", "K", 'k', k); ImGui::SameLine();
-        char_button("L", "L", 'l', k); ImGui::SameLine();
-        char_button(":", ";", ';', k); ImGui::SameLine();
-        char_button("\"", "'", '\'', k);
+            key_button("NOSCRL", "ScrollLock", "", mod, h); ImGui::SameLine();
+            key_button("SHIFT", "LShift", "", shift, h); ImGui::SameLine();
+            char_button("Z", "Z", 'z', k); ImGui::SameLine();
+            char_button("X", "X", 'x', k); ImGui::SameLine();
+            char_button("C", "C", 'c', k); ImGui::SameLine();
+            char_button("V", "V", 'v', k); ImGui::SameLine();
+            char_button("B", "B", 'b', k); ImGui::SameLine();
+            char_button("N", "N", 'n', k); ImGui::SameLine();
+            char_button("M", "M", 'm', k); ImGui::SameLine();
+            char_button("<", ",", ',', k); ImGui::SameLine();
+            char_button(">", ".", '.', k); ImGui::SameLine();
+            char_button("?", "/", '/', k); ImGui::SameLine();
+            key_button("SHIFT", "RShift", "", shift, h);
 
-        key_button("NOSCRL", "ScrollLock", "", mod, h); ImGui::SameLine();
-        key_button("SHIFT", "LShift", "", shift, h); ImGui::SameLine();
-        char_button("Z", "Z", 'z', k); ImGui::SameLine();
-        char_button("X", "X", 'x', k); ImGui::SameLine();
-        char_button("C", "C", 'c', k); ImGui::SameLine();
-        char_button("V", "V", 'v', k); ImGui::SameLine();
-        char_button("B", "B", 'b', k); ImGui::SameLine();
-        char_button("N", "N", 'n', k); ImGui::SameLine();
-        char_button("M", "M", 'm', k); ImGui::SameLine();
-        char_button("<", ",", ',', k); ImGui::SameLine();
-        char_button(">", ".", '.', k); ImGui::SameLine();
-        char_button("?", "/", '/', k); ImGui::SameLine();
-        key_button("SHIFT", "RShift", "", shift, h);
+            key_button("SPACE", "Space", " ", space_w, h);
+            ImGui::EndGroup();
 
-        key_button("SPACE", "Space", " ", space_w, h);
-        ImGui::EndGroup();
+            ImGui::SameLine(0.0f, inter_group_gap_1);
+            ImGui::BeginGroup();
+            char_button("UP", "Up", 0x08, k, h); ImGui::SameLine();
+            char_button("DOWN", "Down", 0x0A, k, h); ImGui::SameLine();
+            char_button("LEFT", "Left", 0x0B, k, h); ImGui::SameLine();
+            char_button("RIGHT", "Right", 0x0C, k, h);
 
-        // Center-right: cursor/nav/edit cluster
-        ImGui::SameLine(0.0f, inter_group_gap_1);
-        ImGui::BeginGroup();
-        key_button("UP", "Up", "\x1B[A", k, h); ImGui::SameLine();
-        key_button("DOWN", "Down", "\x1B[B", k, h); ImGui::SameLine();
-        key_button("LEFT", "Left", "\x1B[D", k, h); ImGui::SameLine();
-        key_button("RIGHT", "Right", "\x1B[C", k, h);
+            char_button("-", "-", '-', k); ImGui::SameLine();
+            char_button("+", "=", '+', k); ImGui::SameLine();
+            char_button("`", "`", '`', k); ImGui::SameLine();
+            char_button("BACKSP", "Backspace", 0x08, wide, h); ImGui::SameLine();
+            key_button("BREAK", "Break", "", mod, h);
 
-        char_button("-", "-", '-', k); ImGui::SameLine();
-        char_button("+", "=", '+', k); ImGui::SameLine();
-        char_button("`", "`", '`', k); ImGui::SameLine();
-        key_button("BACKSP", "Backspace", "\x7F", wide, h); ImGui::SameLine();
-        key_button("BREAK", "Break", "", mod, h);
+            char_button("DELETE", "Delete", 0x7F, wide, h); ImGui::SameLine();
+            char_button("|", "\\", '\\', k);
 
-        key_button("DELETE", "Delete", "\x1B[3~", wide, h); ImGui::SameLine();
-        char_button("|", "\\", '\\', k);
+            key_button("RETURN", "Enter", "\r", ret_w, h); ImGui::SameLine();
+            key_button("LINEFD", "Ctrl+J", "\n", mod, h);
+            ImGui::EndGroup();
 
-        key_button("RETURN", "Enter", "\r", ret_w, h); ImGui::SameLine();
-        key_button("LINEFD", "Ctrl+J", "\n", mod, h);
-        ImGui::EndGroup();
+            ImGui::SameLine(0.0f, inter_group_gap_2);
+            ImGui::BeginGroup();
+            char_button("PF1", "F1", 0x04, k, h); ImGui::SameLine();
+            char_button("PF2", "F2", 0x05, k, h); ImGui::SameLine();
+            char_button("PF3", "F3", 0x06, k, h); ImGui::SameLine();
+            char_button("PF4", "F4", 0x07, k, h);
 
-        // Right: numeric / PF keypad block
-        ImGui::SameLine(0.0f, inter_group_gap_2);
-        ImGui::BeginGroup();
-        key_button("PF1", "F1", "\x1BOP", k, h); ImGui::SameLine();
-        key_button("PF2", "F2", "\x1BOQ", k, h); ImGui::SameLine();
-        key_button("PF3", "F3", "\x1BOR", k, h); ImGui::SameLine();
-        key_button("PF4", "F4", "\x1BOS", k, h);
+            char_button("7", "KP7", '7', k); ImGui::SameLine();
+            char_button("8", "KP8", '8', k); ImGui::SameLine();
+            char_button("9", "KP9", '9', k); ImGui::SameLine();
+            char_button("/", "KP/", '/', k);
 
-        char_button("7", "KP7", '7', k); ImGui::SameLine();
-        char_button("8", "KP8", '8', k); ImGui::SameLine();
-        char_button("9", "KP9", '9', k); ImGui::SameLine();
-        char_button("/", "KP/", '/', k);
+            char_button("4", "KP4", '4', k); ImGui::SameLine();
+            char_button("5", "KP5", '5', k); ImGui::SameLine();
+            char_button("6", "KP6", '6', k); ImGui::SameLine();
+            char_button("*", "KP*", '*', k);
 
-        char_button("4", "KP4", '4', k); ImGui::SameLine();
-        char_button("5", "KP5", '5', k); ImGui::SameLine();
-        char_button("6", "KP6", '6', k); ImGui::SameLine();
-        char_button("*", "KP*", '*', k);
+            char_button("1", "KP1", '1', k); ImGui::SameLine();
+            char_button("2", "KP2", '2', k); ImGui::SameLine();
+            char_button("3", "KP3", '3', k); ImGui::SameLine();
+            char_button("-", "KP-", '-', k);
 
-        char_button("1", "KP1", '1', k); ImGui::SameLine();
-        char_button("2", "KP2", '2', k); ImGui::SameLine();
-        char_button("3", "KP3", '3', k); ImGui::SameLine();
-        char_button("-", "KP-", '-', k);
-
-        char_button("0", "KP0", '0', kp_zero_w); ImGui::SameLine();
-        char_button(".", "KP.", '.', k); ImGui::SameLine();
-        key_button("ENTER", "KP Enter", "\r", k, h);
-        ImGui::EndGroup();
+            char_button("0", "KP0", '0', kp_zero_w); ImGui::SameLine();
+            char_button(".", "KP.", '.', k); ImGui::SameLine();
+            key_button("ENTER", "KP Enter", "\r", k, h);
+            ImGui::EndGroup();
+        }
 
         ImGui::PopStyleVar(3);
         ImGui::PopStyleColor(5);
 
         ImGui::Separator();
         ImGui::Text("Last: %s", last_click_info[0] ? last_click_info : "(none)");
-        ImGui::TextUnformatted("SET-UP host key: Pause or F12.");
-        ImGui::TextUnformatted("Quit: Ctrl+Q (VT100) or Esc (VT52).");
-        ImGui::TextUnformatted("Debugger keys reserved: F5, F10, F11.");
+        if (gdp_keyboard_model) {
+            ImGui::TextUnformatted("SET-UP host key: Pause or F12.");
+        }
+        ImGui::TextUnformatted("Quit: Ctrl+Q.");
+        ImGui::TextUnformatted("Debugger keys reserved: F10, F11.");
         ImGui::End();
     }
 }

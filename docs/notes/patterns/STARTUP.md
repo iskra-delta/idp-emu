@@ -11,7 +11,7 @@ behavior from reset to CP/M execution.
 
 ## Findings / Observations
 
-### 2026 Runtime Validation (GDP + TrdiDisk HDD path)
+### 2026 Runtime Validation (GDP + `hdd-partner-g.img` HDD path)
 
 - GDP ROM reaches the hard-disk bootstrap and successfully loads CP/M loader blocks through the Xebec/SASI path (transfer completes, no terminal error path).
 - Runtime text sequence observed in probe:
@@ -19,7 +19,7 @@ behavior from reset to CP/M execution.
   - `BNKBIOS3 SPR`, `RESBDOS3 SPR`, `BNKBDOS3 SPR`
   - `61K TPA`
   - `Partner Gdp V 1.0 wf`
-- On `TrdiDisk.img`, startup continues into an application banner (`PROGRAMGENERATOR FORMATIX...`) rather than immediately showing a plain `A>` prompt.
+- On `hdd-partner-g.img`, startup continues into an application banner (`PROGRAMGENERATOR FORMATIX...`) rather than immediately showing a plain `A>` prompt.
 - Practical implication:
   - The HDD boot-to-loader path is operational.
   - A missing immediate CCP prompt on this image is likely image/profile behavior plus remaining AVDC presentation gaps, not an early HDD transfer failure.

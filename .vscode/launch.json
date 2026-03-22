@@ -2,19 +2,19 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug Iskra Delta Partner Emulator (GDP)",
+      "name": "Debug Partner GDP (HDD)",
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/bin/idp-emu",
       "args": [
         "--model", "gdp",
         "--rom", "${workspaceFolder}/roms/partner_gdp.rom",
-        "--hdd", "${workspaceFolder}/disks/TrdiDisk.img"
+        "--hdd", "${workspaceFolder}/disks/hdd-partner-g.img"
       ],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
       "environment": [],
-      "externalConsole": true,
+      "externalConsole": false,
       "MIMode": "gdb",
       "miDebuggerPath": "/usr/bin/gdb",
       "setupCommands": [
@@ -27,19 +27,44 @@
       "preLaunchTask": "CMake Build"
     },
     {
-      "name": "Debug Iskra Delta Partner Emulator (CRT)",
+      "name": "Debug Partner GDP (Empty HDD)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/bin/idp-emu",
+      "args": [
+        "--model", "gdp",
+        "--rom", "${workspaceFolder}/roms/partner_gdp.rom",
+        "--hdd", "${workspaceFolder}/disks/hdd-partner-g-empty.img"
+      ],
+      "stopAtEntry": false,
+      "cwd": "${workspaceFolder}",
+      "environment": [],
+      "externalConsole": false,
+      "MIMode": "gdb",
+      "miDebuggerPath": "/usr/bin/gdb",
+      "setupCommands": [
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        }
+      ],
+      "preLaunchTask": "CMake Build"
+    },
+    {
+      "name": "Debug Partner P (Floppy)",
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/bin/idp-emu",
       "args": [
         "--model", "crt",
         "--rom", "${workspaceFolder}/roms/partner_crt.rom",
-        "--disk", "${workspaceFolder}/disks/boot.img"
+        "--disk", "${workspaceFolder}/disks/fdd-partner-p.img"
       ],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
       "environment": [],
-      "externalConsole": true,
+      "externalConsole": false,
       "MIMode": "gdb",
       "miDebuggerPath": "/usr/bin/gdb",
       "setupCommands": [

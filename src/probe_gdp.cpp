@@ -35,7 +35,7 @@ int main() {
     if (use_floppy) {
         emu.load_disk(0, floppy_path);
     } else if (!use_hdd) {
-        emu.load_disk(0, "disks/bootg.img");
+        emu.load_disk(0, "disks/fdd-partner-g.img");
     }
     if (use_hdd) {
         emu.load_hdd(hdd_path);

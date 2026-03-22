@@ -3,6 +3,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 
 enum class partner_gdp_keyboard_sound : uint8_t {
     none = 0,
@@ -17,6 +18,7 @@ public:
     void reset();
     void host_write(uint8_t value);
     void local_keypress();
+    bool pop_sound(partner_gdp_keyboard_sound &out);
 
     const std::array<bool, 8>& leds() const { return leds_; }
     bool led(int index) const { return (index >= 0) && (index < 8) ? leds_[static_cast<std::size_t>(index)] : false; }
@@ -29,6 +31,7 @@ public:
     uint64_t host_command_count() const { return host_command_count_; }
     uint64_t sound_sequence() const { return sound_sequence_; }
     partner_gdp_keyboard_sound last_sound() const { return last_sound_; }
+    size_t pending_sound_count() const { return pending_sounds_.size(); }
 
 private:
     void update_leds_from_command(uint8_t value);
@@ -43,4 +46,5 @@ private:
     uint64_t host_command_count_ = 0;
     uint64_t sound_sequence_ = 0;
     partner_gdp_keyboard_sound last_sound_ = partner_gdp_keyboard_sound::none;
+    std::deque<partner_gdp_keyboard_sound> pending_sounds_{};
 };

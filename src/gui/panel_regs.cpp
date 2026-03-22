@@ -2,10 +2,14 @@
 #include "../partner.hpp"
 #include <imgui.h>
 
-void panels::render_registers(partner &emu)
+void panels::render_registers(partner &emu, bool *p_open)
 {
-    ImGui::Begin("Z80 Registers", nullptr,
-                 ImGuiWindowFlags_NoCollapse);
+    if (!ImGui::Begin("Z80 Registers", p_open,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
 
     const z80_t &cpu = emu.get_cpu();
 

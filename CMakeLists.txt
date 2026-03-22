@@ -29,10 +29,12 @@ find_package(OpenGL REQUIRED)
 
 # --- Dear ImGui via FetchContent ---
 include(FetchContent)
+set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
     GIT_TAG        docking
+    GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(imgui)
 
@@ -54,3 +56,6 @@ target_link_libraries(imgui_lib PUBLIC SDL2::SDL2 OpenGL::GL)
 # Subdirectories
 add_subdirectory(lib/chipsex)
 add_subdirectory(src)
+
+enable_testing()
+add_subdirectory(tests)

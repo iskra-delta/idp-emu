@@ -178,15 +178,19 @@ extern "C"
         bool cts;               // Clear To Send
         bool tx_underrun;       // TX underrun/EOM
         bool break_abort;       // Break/Abort detected
+        bool sync_hunt;         // Sync/Hunt status (RR0 D4)
 
         // Status flags for RR1
         bool parity_error;      // Parity error
         bool rx_overrun;        // RX overrun error
         bool framing_error;     // Framing error
+        bool end_of_frame;      // End of frame (SDLC)
+        uint8_t residue_code;   // RR1 D1..D3
 
         // Control state
         bool rts;               // Request To Send (output)
         bool dtr;               // Data Terminal Ready (output)
+        bool rx_int_on_first_armed; // WR1 mode 1 state
     } z80sio_channel_t;
 
     /* SIO device */
@@ -256,15 +260,19 @@ void z80sio_reset(z80sio_t *sio)
         // Clear status flags
         ch->dcd = false;
         ch->cts = false;
-        ch->tx_underrun = false;
+        ch->tx_underrun = true; // RR0 D6 is set after reset
         ch->break_abort = false;
+        ch->sync_hunt = false;
         ch->parity_error = false;
         ch->rx_overrun = false;
         ch->framing_error = false;
+        ch->end_of_frame = false;
+        ch->residue_code = 0;
 
         // Reset control outputs
         ch->rts = false;
         ch->dtr = false;
+        ch->rx_int_on_first_armed = true;
     }
 }
 
@@ -273,27 +281,107 @@ static inline int _z80sio_select_channel(uint64_t pins)
     return (pins & Z80SIO_CS_B) ? Z80SIO_CHANNEL_B : Z80SIO_CHANNEL_A;
 }
 
+static inline bool _z80sio_odd_parity_u8(uint8_t v)
+{
+    v ^= (uint8_t)(v >> 4);
+    v ^= (uint8_t)(v >> 2);
+    v ^= (uint8_t)(v >> 1);
+    return (v & 1u) != 0;
+}
+
+static inline uint8_t _z80sio_rx_bits_per_char(const z80sio_channel_t *ch)
+{
+    switch ((ch->wr[3] >> 6) & 0x03u)
+    {
+    case 0: return 5;
+    case 1: return 7;
+    case 2: return 6;
+    default: return 8;
+    }
+}
+
+static inline uint8_t _z80sio_rx_int_mode(const z80sio_channel_t *ch)
+{
+    return (uint8_t)((ch->wr[1] >> 3) & 0x03u);
+}
+
+static inline bool _z80sio_parity_is_special(const z80sio_channel_t *ch)
+{
+    return _z80sio_rx_int_mode(ch) == 2;
+}
+
+static inline bool _z80sio_special_rx_condition(const z80sio_channel_t *ch)
+{
+    return ch->rx_overrun || ch->framing_error || ch->end_of_frame ||
+        (_z80sio_parity_is_special(ch) && ch->parity_error);
+}
+
+static inline bool _z80sio_special_rx_condition_no_parity(const z80sio_channel_t *ch)
+{
+    return ch->rx_overrun || ch->framing_error || ch->end_of_frame;
+}
+
+static inline void _z80sio_maybe_raise_rx_interrupt(z80sio_channel_t *ch, bool special_without_parity)
+{
+    switch (_z80sio_rx_int_mode(ch))
+    {
+    case 0:
+        // RX interrupts disabled.
+        break;
+    case 1:
+        // Interrupt on first character only; after the first, only special RX
+        // conditions (except parity) may interrupt until re-armed.
+        if (ch->rx_int_on_first_armed)
+        {
+            ch->int_state |= Z80SIO_INT_NEEDED;
+            ch->rx_int_on_first_armed = false;
+        }
+        else if (special_without_parity)
+        {
+            ch->int_state |= Z80SIO_INT_NEEDED;
+        }
+        break;
+    case 2:
+    case 3:
+        ch->int_state |= Z80SIO_INT_NEEDED;
+        break;
+    default:
+        break;
+    }
+}
+
 /* Update RR0 status register */
 static inline void _z80sio_update_rr0(z80sio_channel_t *ch, uint64_t pins, int chn_id)
 {
+    const bool dcd_pin = (chn_id == Z80SIO_CHANNEL_A) ?
+        ((pins & Z80SIO_DCDA) != 0) : ((pins & Z80SIO_DCDB) != 0);
+    const bool cts_pin = (chn_id == Z80SIO_CHANNEL_A) ?
+        ((pins & Z80SIO_CTSA) != 0) : ((pins & Z80SIO_CTSB) != 0);
+    ch->dcd = dcd_pin;
+    ch->cts = cts_pin;
+
     ch->rr[0] = 0;
     if (ch->rx_ready) ch->rr[0] |= (1 << 0);        // RX character available
-    if (ch->int_state) ch->rr[0] |= (1 << 1);       // Interrupt pending
+    if ((chn_id == Z80SIO_CHANNEL_A) && ch->int_state)
+        ch->rr[0] |= (1 << 1);                       // Interrupt pending (Ch A only)
     if (ch->tx_ready) ch->rr[0] |= (1 << 2);        // TX buffer empty
     if (ch->dcd) ch->rr[0] |= (1 << 3);             // DCD
-    if (ch->break_abort) ch->rr[0] |= (1 << 4);     // Break/Abort
+    if (ch->sync_hunt) ch->rr[0] |= (1 << 4);       // Sync/Hunt
     if (ch->cts) ch->rr[0] |= (1 << 5);             // CTS
     if (ch->tx_underrun) ch->rr[0] |= (1 << 6);     // TX underrun/EOM
+    if (ch->break_abort) ch->rr[0] |= (1 << 7);     // Break/Abort
 }
 
 /* Update RR1 status register */
 static inline void _z80sio_update_rr1(z80sio_channel_t *ch)
 {
     ch->rr[1] = 0;
+    if (ch->tx_ready) ch->rr[1] |= (1 << 0);        // All sent (approximation)
+    ch->rr[1] |= (uint8_t)((ch->residue_code & 0x07u) << 1); // SDLC residue
     if (ch->parity_error) ch->rr[1] |= (1 << 4);    // Parity error
     if (ch->rx_overrun) ch->rr[1] |= (1 << 5);      // RX overrun error
     if (ch->framing_error) ch->rr[1] |= (1 << 6);   // CRC/Framing error
-    // Bit 7 unused in async mode
+    if (ch->end_of_frame) ch->rr[1] |= (1 << 7);    // End of frame
 }
 
 /* Write to control register */
@@ -301,36 +389,82 @@ static inline void _z80sio_write_control(z80sio_t *sio, int chn_id, uint8_t data
 {
     z80sio_channel_t *ch = &sio->chn[chn_id];
 
-    if (ch->reg_index == 0 && (data & 0x07) != 0)
+    if (ch->reg_index == 0)
     {
-        // WR0: Point to register (bits 0-2)
-        ch->reg_index = data & 0x07;
+        ch->wr[0] = data;
+        const uint8_t ptr = data & 0x07u;
+        const uint8_t cmd = (uint8_t)((data >> 3) & 0x07u);
+        const uint8_t crc_reset_code = (uint8_t)((data >> 6) & 0x03u);
 
-        // WR0 commands (bits 3-7)
-        uint8_t cmd = (data >> 3) & 0x07;
         switch (cmd)
         {
-        case 2: // Reset external/status interrupts
-            ch->break_abort = false;
-            ch->tx_underrun = false;
+        case 0: // Null command
             break;
-        case 3: // Send abort (SDLC)
+        case 1: // Send abort (SDLC)
+            ch->break_abort = true;
+            if (ch->wr[1] & (1u << 0))
+                ch->int_state |= Z80SIO_INT_NEEDED;
             break;
-        case 4: // Enable interrupt on next RX character
+        case 2: // Reset External/Status interrupts
+            // Re-arm External/Status detection; keep line-status bits intact.
+            break;
+        case 3: // Channel reset
+            {
+                z80sio_channel_t keep_vec = *ch;
+                memset(ch, 0, sizeof(*ch));
+                ch->tx_ready = true;
+                ch->tx_underrun = true;
+                ch->sync_hunt = false;
+                ch->rx_int_on_first_armed = true;
+                if (chn_id == Z80SIO_CHANNEL_B)
+                    ch->int_vector = keep_vec.int_vector;
+                else
+                    ch->int_vector = sio->chn[Z80SIO_CHANNEL_B].int_vector;
+            }
+            break;
+        case 4: // Enable interrupt on next receive character
+            ch->rx_int_on_first_armed = true;
             break;
         case 5: // Reset TX interrupt pending
-            ch->int_state &= ~Z80SIO_INT_NEEDED;
+            // Keep any receive-driven request active.
+            if (!ch->rx_ready && !_z80sio_special_rx_condition(ch))
+                ch->int_state &= (uint8_t)~(Z80SIO_INT_NEEDED | Z80SIO_INT_REQUESTED);
             break;
-        case 6: // Error reset
+        case 6: // Error reset (latches)
             ch->parity_error = false;
             ch->rx_overrun = false;
             ch->framing_error = false;
+            ch->end_of_frame = false;
+            ch->residue_code = 0;
             break;
-        case 7: // Return from interrupt (reset highest IUS)
+        case 7: // Return from interrupt (Channel A command path)
+            if (chn_id == Z80SIO_CHANNEL_A)
+            {
+                if (sio->chn[Z80SIO_CHANNEL_A].int_state & Z80SIO_INT_SERVICED)
+                    sio->chn[Z80SIO_CHANNEL_A].int_state &= (uint8_t)~Z80SIO_INT_SERVICED;
+                else if (sio->chn[Z80SIO_CHANNEL_B].int_state & Z80SIO_INT_SERVICED)
+                    sio->chn[Z80SIO_CHANNEL_B].int_state &= (uint8_t)~Z80SIO_INT_SERVICED;
+            }
             break;
         }
 
-        // Bit 6-7: CRC reset commands (ignored in async mode)
+        // CRC reset command bits are shared with WR0 and always decoded.
+        switch (crc_reset_code)
+        {
+        case 1: // Reset receive CRC checker
+            ch->framing_error = false;
+            ch->end_of_frame = false;
+            break;
+        case 2: // Reset transmit CRC generator
+            break;
+        case 3: // Reset TX underrun/EOM latch
+            ch->tx_underrun = false;
+            break;
+        default:
+            break;
+        }
+
+        ch->reg_index = ptr;
     }
     else
     {
@@ -342,13 +476,8 @@ static inline void _z80sio_write_control(z80sio_t *sio, int chn_id, uint8_t data
         switch (reg)
         {
         case 1: // WR1: Transmit/receive interrupt and data transfer mode
-            // Bit 0: Ext INT enable
-            // Bit 1: TX INT enable
-            // Bit 2: Parity is special condition
-            // Bits 3-4: RX INT mode
-            // Bit 5: Wait/DMA request on receive/transmit
-            // Bit 6: Wait/DMA request function
-            // Bit 7: Wait/DMA request enable
+            if (_z80sio_rx_int_mode(ch) == 1)
+                ch->rx_int_on_first_armed = true;
             break;
 
         case 2: // WR2: Interrupt vector (only in channel B)
@@ -361,12 +490,8 @@ static inline void _z80sio_write_control(z80sio_t *sio, int chn_id, uint8_t data
             break;
 
         case 3: // WR3: Receive parameters and control
-            // Bit 0: RX enable
-            // Bits 1-2: Reserved
-            // Bit 3: Auto enables
-            // Bit 4: Enter hunt mode
-            // Bit 5: RX CRC enable
-            // Bits 6-7: RX bits/character (00=5, 01=7, 10=6, 11=8)
+            if (data & (1u << 4))
+                ch->sync_hunt = true;
             break;
 
         case 4: // WR4: Transmit/receive miscellaneous parameters and modes
@@ -383,6 +508,7 @@ static inline void _z80sio_write_control(z80sio_t *sio, int chn_id, uint8_t data
             // Bit 2: CRC-16/SDLC polynomial select
             // Bit 3: TX enable
             // Bit 4: Send break
+            ch->break_abort = (data & (1u << 4)) != 0;
             // Bits 5-6: TX bits/character
             // Bit 7: DTR
             ch->dtr = (data & (1 << 7)) != 0;
@@ -446,12 +572,6 @@ static inline void _z80sio_write(z80sio_t *sio, int chn_id, bool control, uint8_
         ch->tx_data = data;
         ch->tx_ready = false;
         ch->tx_underrun = false;
-
-        // If TX interrupts enabled, set interrupt
-        if (ch->wr[1] & (1 << 1))
-        {
-            ch->int_state |= Z80SIO_INT_NEEDED;
-        }
     }
 }
 
@@ -501,15 +621,15 @@ static inline uint8_t _z80sio_get_int_vector(z80sio_t *sio, int chn_id)
     }
 
     // Type bits (bits 1..2): 00=TX, 01=Ext/Status, 10=RX, 11=Special RX
-    if (ch->rx_ready && (ch->parity_error || ch->rx_overrun || ch->framing_error))
+    if (ch->rx_ready && _z80sio_special_rx_condition(ch))
     {
         modified |= (3u << 1);
     }
-    else if (ch->rx_ready && (ch->wr[1] & 0x18u))
+    else if (ch->rx_ready && (_z80sio_rx_int_mode(ch) != 0))
     {
         modified |= (2u << 1);
     }
-    else if (!ch->tx_ready && (ch->wr[1] & (1u << 1)))
+    else if (ch->tx_ready && (ch->wr[1] & (1u << 1)))
     {
         modified |= (0u << 1);
     }
@@ -677,22 +797,31 @@ void z80sio_rx_data(z80sio_t *sio, int channel, uint8_t data)
     if (ch->rx_ready)
     {
         ch->rx_overrun = true;
-        // Trigger special condition interrupt if enabled
-        if (ch->wr[1] & 0x18) // RX interrupt enabled
-        {
-            ch->int_state |= Z80SIO_INT_NEEDED;
-        }
+        _z80sio_maybe_raise_rx_interrupt(ch, true);
         return;
     }
+
+    const uint8_t rx_bits = _z80sio_rx_bits_per_char(ch);
+    const bool parity_enable = (ch->wr[4] & 0x01u) != 0;
+    const bool parity_even = (ch->wr[4] & 0x02u) != 0;
+    bool parity_error = false;
+
+    if (parity_enable && (rx_bits < 8))
+    {
+        const uint8_t data_mask = (uint8_t)((1u << rx_bits) - 1u);
+        const bool parity_bit = ((data >> rx_bits) & 0x01u) != 0;
+        const bool data_odd = _z80sio_odd_parity_u8((uint8_t)(data & data_mask));
+        const bool expected_parity_bit = parity_even ? data_odd : !data_odd;
+        parity_error = parity_bit != expected_parity_bit;
+    }
+
+    if (parity_error)
+        ch->parity_error = true;
 
     ch->rx_data = data;
     ch->rx_ready = true;
 
-    // Trigger RX interrupt if enabled (WR1 bits 3-4)
-    if (ch->wr[1] & 0x18)
-    {
-        ch->int_state |= Z80SIO_INT_NEEDED;
-    }
+    _z80sio_maybe_raise_rx_interrupt(ch, _z80sio_special_rx_condition_no_parity(ch));
 }
 
 /*

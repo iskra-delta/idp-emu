@@ -152,10 +152,14 @@ std::string io_comment(const partner &emu, uint16_t pc)
 
 } // anonymous namespace
 
-void panels::render_disasm(partner &emu, bool &paused, dbg_action &action)
+void panels::render_disasm(partner &emu, bool &paused, dbg_action &action, bool *p_open)
 {
-    ImGui::Begin("Disassembly", nullptr,
-                 ImGuiWindowFlags_NoCollapse);
+    if (!ImGui::Begin("Disassembly", p_open,
+                      ImGuiWindowFlags_NoCollapse | ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::End();
+        return;
+    }
 
     // Debug toolbar
     if (paused)

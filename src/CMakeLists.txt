@@ -15,6 +15,8 @@ set(IDP_GUI_SOURCES
     gui/panel_disasm.cpp
     gui/panel_display.cpp
     gui/panel_dma.cpp
+    gui/panel_devices.cpp
+    gui/panel_monitor.cpp
     gui/panel_ef9367.cpp
     gui/panel_fdc.cpp
     gui/panel_pio.cpp

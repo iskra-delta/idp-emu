@@ -24,7 +24,7 @@ void print_usage(const char *prog)
     std::cerr << "Options:\n";
     std::cerr << "  --help           Show this help\n";
     std::cerr << "  --rom FILE       ROM file (default: roms/partner_crt.rom)\n";
-    std::cerr << "  --disk FILE      Boot disk image for drive A: (default: disks/boot.img)\n";
+    std::cerr << "  --disk FILE      Boot disk image for drive A: (default: disks/fdd-partner-p.img)\n";
     std::cerr << "  --hdd FILE       Hard disk image for Xebec/SASI controller\n";
     std::cerr << "                   (not loaded unless explicitly requested)\n";
     std::cerr << "  --terminal TYPE  Terminal profile: vt52|vt100\n";
@@ -34,7 +34,7 @@ void print_usage(const char *prog)
 int main(int argc, char **argv)
 {
     std::string rom_file  = "roms/partner_crt.rom";
-    std::string disk_file = "disks/boot.img";
+    std::string disk_file = "disks/fdd-partner-p.img";
     std::string hdd_file;
     std::string model = "auto";
     bool disk_explicit = false;
@@ -181,12 +181,16 @@ int main(int argc, char **argv)
         auto pick_disk_for_model = [&](bool want_gdp) -> std::string {
             if (disk_explicit)
                 return disk_file;
-            const std::string preferred = resolve_existing_path(want_gdp ? "disks/bootg.img" : "disks/boot.img");
-            const std::string fallback = resolve_existing_path(want_gdp ? "disks/boot.img" : "disks/bootg.img");
-            if (std::filesystem::exists(preferred))
+            const std::string preferred = resolve_existing_path(
+                want_gdp ? "disks/fdd-partner-g.img" : "disks/fdd-partner-p.img");
+            const std::string fallback = resolve_existing_path(
+                want_gdp ? "disks/fdd-partner-p.img" : "disks/fdd-partner-g.img");
+            if (std::filesystem::exists(preferred)) {
                 return preferred;
-            if (std::filesystem::exists(fallback))
+            }
+            if (std::filesystem::exists(fallback)) {
                 return fallback;
+            }
             return preferred;
         };
 
@@ -258,8 +262,8 @@ int main(int argc, char **argv)
         dbg_action action = dbg_action::NONE;
 
         std::cout << "[info] Starting emulation (paused at PC=0000)...\n";
-        const char *quit_hint = (term_profile == terminal_profile::vt100_ansi) ? "Ctrl+Q=Quit" : "ESC=Quit";
-        std::cout << "[info] F5=Switch to GDP  Space=Run/Pause  F11=Step Into  F10=Step Over  " << quit_hint << "\n";
+        const char *quit_hint = "Ctrl+Q=Quit";
+        std::cout << "[info] Space=Run/Pause  F11=Step Into  F10=Step Over  " << quit_hint << "\n";
 
         auto push_key = [&](uint8_t ch) {
             if (auto *crt = dynamic_cast<partner_crt *>(emu.get()))
@@ -279,20 +283,9 @@ int main(int argc, char **argv)
 
         while (running)
         {
-            running = app_gui.process_events(paused, action);
+            running = app_gui.process_events(*emu, paused, action);
 
-            if (action == dbg_action::SWITCH_TO_GDP)
-            {
-                if (!gdp_model)
-                {
-                    gdp_model = true;
-                    emu = make_emu(true);
-                    paused = true;
-                    std::cout << "[info] Switched to GDP model (paused)\n";
-                }
-                action = dbg_action::NONE;
-            }
-            else if (!paused)
+            if (!paused)
             {
                 // Execute roughly a frame worth of emulation, but in smaller
                 // chunks so the window remains responsive.
@@ -306,7 +299,7 @@ int main(int argc, char **argv)
                     }
                     ticks_left -= slice;
 
-                    running = app_gui.process_events(paused, action);
+                    running = app_gui.process_events(*emu, paused, action);
                     if (!running || paused)
                         break;
 
@@ -369,7 +362,7 @@ int main(int argc, char **argv)
                         if ((i % STEP_OVER_EVENT_SLICE) == 0)
                         {
                             // Keep window responsive during long step-over spans.
-                            running = app_gui.process_events(paused, action);
+                            running = app_gui.process_events(*emu, paused, action);
                             if (!running)
                                 break;
                             // Defer any new debugger action to outer loop.

@@ -127,6 +127,7 @@ static inline void gdp_pio_write(z80pio_t* pio, uint8_t port, uint8_t data) {
 
 partner_gdp::partner_gdp(terminal_profile profile) : terminal_profile_(profile)
 {
+    set_sio_port_lock(sio_port_id::sio1_a, true, "Internal GDP keyboard (fixed)");
     ef9367_init(&ef9367_);
     scn2674_init(&avdc_);
     z80pio_init(&gdp_video_pio_);
@@ -145,20 +146,12 @@ void partner_gdp::sync_ef_mode_from_gdp_pio()
 {
     const uint8_t pa = gdp_video_pio_.port[Z80PIO_PORT_A].output;
     // GDP video PIO port A wiring (per board notes/schematic):
-    // A0=RBNK (read bank), A1=WRNK (write bank), A3/A4=mode bits.
+    // A0=RBNK (read bank), A1=WRNK (write bank), A2=XOR draw mode,
+    // A3=resolution (0=1024x256, 1=1024x512).
     ef9367_.read_bank = (uint8_t)(pa & 0x01u);
     ef9367_.write_bank = (uint8_t)((pa >> 1) & 0x01u);
-    const uint8_t b3 = (uint8_t)((pa >> 3) & 1u);
-    const uint8_t b4 = (uint8_t)((pa >> 4) & 1u);
-    // GDP board convention:
-    //  b4:b3 = 00 => EF 1024x256 logical (double-scan to 512 physical lines)
-    //  b4:b3 = 11 => EF 1024x512 logical
-    // Mixed states are transitional/invalid for mode select; keep last mode.
-    if (b3 == 0 && b4 == 0) {
-        ef9367_.mode_512_lines = false;
-    } else if (b3 == 1 && b4 == 1) {
-        ef9367_.mode_512_lines = true;
-    }
+    ef9367_.xor_mode = (pa & 0x04u) != 0;
+    ef9367_.mode_512_lines = (pa & 0x08u) != 0;
 }
 
 void partner_gdp::reset()
@@ -821,11 +814,13 @@ void partner_gdp::io_write(uint16_t port, uint8_t data)
         ef_bus_write(&ef9367_, (uint8_t)port, data);
         if (gdp_trace_enabled()) {
             std::fprintf(stderr,
-                "[gdp-ef] pc=%04x cmd=%02x x=%u y=%u chsz=%02x cr1=%02x cr2=%02x scroll=%02x\n",
-                cpu.pc, data, ef9367_.x, ef9367_.y, ef9367_.ch_size, ef9367_.cr1, ef9367_.cr2, gdp_scroll_);
+                "[gdp-ef] pc=%04x cmd=%02x x=%u y=%u dx=%u dy=%u chsz=%02x cr1=%02x cr2=%02x scroll=%02x\n",
+                cpu.pc, data, ef9367_.x, ef9367_.y, ef9367_.dx, ef9367_.dy,
+                ef9367_.ch_size, ef9367_.cr1, ef9367_.cr2, gdp_scroll_);
         }
-        // GDP text firmware emits both command bytes (<0x20) and glyph bytes.
-        if (data < 0x20)
+        // EF command space is 0x00..0x1F and 0x80..0xFF.
+        // Printable glyph path is 0x20..0x7F.
+        if ((data < 0x20) || (data >= 0x80))
             gdp_command(data);
         else
             gdp_put_char(data);

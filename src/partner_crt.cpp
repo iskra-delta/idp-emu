@@ -4,6 +4,7 @@
 
 partner_crt::partner_crt(terminal_profile profile) : terminal_profile_(profile)
 {
+    set_sio_port_lock(sio_port_id::sio1_a, true, "Internal CRT terminal (fixed)");
     terminal_ = make_terminal_emulator(terminal_profile_);
 }
 
