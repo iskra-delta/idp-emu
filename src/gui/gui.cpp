@@ -12,6 +12,11 @@
 #include "panel_ef9367.hpp"
 #include "panel_xebec.hpp"
 #include "panel_devices.hpp"
+#include "chrome_metrics.hpp"
+#include "chrome_style.hpp"
+#include "chrome_theme.hpp"
+#include "custom_title_bar.hpp"
+#include "window_chrome.hpp"
 #include "../partner.hpp"
 #include "../partner_gdp.hpp"
 
@@ -328,7 +333,7 @@ bool gui::init(const std::string &title, int width, int height)
         title.c_str(),
         SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED,
         width, height,
-        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI);
+        SDL_WINDOW_OPENGL | SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_BORDERLESS);
     if (!window_)
     {
         std::cerr << "[error] SDL_CreateWindow failed: " << SDL_GetError() << "\n";
@@ -362,12 +367,8 @@ bool gui::init(const std::string &title, int width, int height)
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
     ImGui::StyleColorsDark();
-    if (io.ConfigFlags & ImGuiConfigFlags_ViewportsEnable)
-    {
-        ImGuiStyle &style = ImGui::GetStyle();
-        style.WindowRounding = 0.0f;
-        style.Colors[ImGuiCol_WindowBg].w = 1.0f;
-    }
+    chrome_style::apply();
+    apply_chrome_theme();
 
     if (!ImGui_ImplSDL2_InitForOpenGL(window_, gl_context_))
     {
@@ -379,6 +380,46 @@ bool gui::init(const std::string &title, int width, int height)
         std::cerr << "[error] ImGui_ImplOpenGL3_Init failed\n";
         return false;
     }
+
+    SDL_SetWindowHitTest(
+        window_,
+        [](SDL_Window* window, const SDL_Point* point, void*) -> SDL_HitTestResult {
+            int width_px = 0;
+            int height_px = 0;
+            SDL_GetWindowSize(window, &width_px, &height_px);
+
+            const int border = chrome_metrics::resize_border;
+            const int corner = chrome_metrics::resize_corner;
+
+            if (point->x >= width_px - corner && point->y >= height_px - corner)
+                return SDL_HITTEST_RESIZE_BOTTOMRIGHT;
+            if (point->x < corner && point->y >= height_px - corner)
+                return SDL_HITTEST_RESIZE_BOTTOMLEFT;
+            if (point->x >= width_px - corner && point->y < corner)
+                return SDL_HITTEST_RESIZE_TOPRIGHT;
+            if (point->x < corner && point->y < corner)
+                return SDL_HITTEST_RESIZE_TOPLEFT;
+
+            if (point->x >= width_px - border)
+                return SDL_HITTEST_RESIZE_RIGHT;
+            if (point->x < border)
+                return SDL_HITTEST_RESIZE_LEFT;
+            if (point->y >= height_px - border)
+                return SDL_HITTEST_RESIZE_BOTTOM;
+            if (point->y < border)
+                return SDL_HITTEST_RESIZE_TOP;
+
+            if (point->y < static_cast<int>(chrome_metrics::title_bar_height) &&
+                point->x < width_px - static_cast<int>(chrome_metrics::close_btn_width)) {
+                if (custom_title_menu_hit(point->x, point->y) >= 0) {
+                    return SDL_HITTEST_NORMAL;
+                }
+                return SDL_HITTEST_DRAGGABLE;
+            }
+
+            return SDL_HITTEST_NORMAL;
+        },
+        nullptr);
 
     // Enable SDL text input events for terminal key injection.
     SDL_StartTextInput();
@@ -523,6 +564,28 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
              event.window.event == SDL_WINDOWEVENT_LEAVE))
         {
             release_mouse_mode();
+        }
+
+        if (event.type == SDL_MOUSEBUTTONDOWN &&
+            event.button.windowID == main_window_id &&
+            event.button.button == SDL_BUTTON_LEFT)
+        {
+            if (custom_title_close_hit(window_, event.button.x, event.button.y))
+            {
+                close_all_views();
+                release_mouse_mode();
+                SDL_Event quit_event;
+                quit_event.type = SDL_QUIT;
+                SDL_PushEvent(&quit_event);
+                return false;
+            }
+
+            const int menu_index = custom_title_menu_hit(event.button.x, event.button.y);
+            if (menu_index >= 0)
+            {
+                open_menu_ = menu_index;
+                continue;
+            }
         }
 
         if (event.type == SDL_MOUSEMOTION && has_serial_mouse)
@@ -762,61 +825,94 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
     display_.update();
     const bool gdp_keyboard_model = dynamic_cast<partner_gdp *>(&emu) != nullptr;
 
-    // Menu bar
-    if (ImGui::BeginMainMenuBar())
-    {
-        if (ImGui::BeginMenu("Emulation"))
-        {
-            if (ImGui::MenuItem(paused ? "Run" : "Pause", "Space"))
-                paused = !paused;
-            if (ImGui::MenuItem("Reset"))
-            {
-                emu.reset();
-                paused = true;
-                display_.clear_all();
-                display_.update();
-            }
-            ImGui::Separator();
-            if (ImGui::MenuItem("Quit", "Ctrl+Q"))
-            {
-                SDL_Event quit_event;
-                quit_event.type = SDL_QUIT;
-                SDL_PushEvent(&quit_event);
-            }
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("View"))
-        {
-            ImGui::MenuItem("Registers", nullptr, &show_registers_);
-            ImGui::MenuItem("Disassembly", nullptr, &show_disasm_);
-            ImGui::MenuItem("Floppy Disk Controller", nullptr, &show_fdc_);
-            ImGui::MenuItem("Z80 SIO", nullptr, &show_sio_);
-            ImGui::MenuItem("Z80 PIO", nullptr, &show_pio_);
-            ImGui::MenuItem("Z80 DMA", nullptr, &show_dma_);
-            ImGui::MenuItem("Xebec S1410", nullptr, &show_xebec_);
-            ImGui::MenuItem("MM58167 RTC", nullptr, &show_rtc_);
-            ImGui::MenuItem("SCN2674 AVDC", nullptr, &show_scn2674_);
-            ImGui::MenuItem("EF9367 GDP", nullptr, &show_ef9367_);
-            ImGui::EndMenu();
-        }
-        if (ImGui::BeginMenu("Devices"))
-        {
-            ImGui::MenuItem("Device Routing", nullptr, &show_devices_);
-            ImGui::MenuItem("Monitor", nullptr, &show_monitor_);
-            ImGui::MenuItem("Virtual Keyboard", nullptr, &show_keyboard_);
-            ImGui::EndMenu();
-        }
-        ImGui::EndMainMenuBar();
+    draw_custom_title_bar(window_);
+    const ImGuiViewport* vp = ImGui::GetMainViewport();
+    const float title_bar_h = chrome_metrics::title_bar_height;
+
+    ImGui::SetNextWindowPos({vp->WorkPos.x, vp->WorkPos.y + title_bar_h});
+    ImGui::SetNextWindowSize({vp->WorkSize.x, vp->WorkSize.y - title_bar_h});
+    ImGui::SetNextWindowViewport(vp->ID);
+
+    const ImGuiWindowFlags host_flags =
+        ImGuiWindowFlags_NoTitleBar |
+        ImGuiWindowFlags_NoCollapse |
+        ImGuiWindowFlags_NoResize |
+        ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoBringToFrontOnFocus |
+        ImGuiWindowFlags_NoNavFocus;
+
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.0f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.0f, 0.0f));
+    ImGui::Begin("##host", nullptr, host_flags);
+    ImGui::PopStyleVar(3);
+
+    static const char* popup_ids[] = {"##m_emulation", "##m_view", "##m_devices"};
+    if (open_menu_ >= 0) {
+        ImGui::OpenPopup(popup_ids[open_menu_]);
+        open_menu_ = -1;
     }
 
-    // Dockspace for dockable panels.
-    const ImGuiID dockspace_id = ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport(), ImGuiDockNodeFlags_None);
+    if (ImGui::IsPopupOpen("##m_emulation"))
+        ImGui::SetNextWindowPos(custom_title_menu_pos(0), ImGuiCond_Always);
+    if (ImGui::BeginPopup("##m_emulation"))
+    {
+        if (ImGui::MenuItem(paused ? "Run" : "Pause", "Space"))
+            paused = !paused;
+        if (ImGui::MenuItem("Reset"))
+        {
+            emu.reset();
+            paused = true;
+            display_.clear_all();
+            display_.update();
+        }
+        ImGui::Separator();
+        if (ImGui::MenuItem("Quit", "Ctrl+Q"))
+        {
+            SDL_Event quit_event;
+            quit_event.type = SDL_QUIT;
+            SDL_PushEvent(&quit_event);
+        }
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::IsPopupOpen("##m_view"))
+        ImGui::SetNextWindowPos(custom_title_menu_pos(1), ImGuiCond_Always);
+    if (ImGui::BeginPopup("##m_view"))
+    {
+        ImGui::MenuItem("Registers", nullptr, &show_registers_);
+        ImGui::MenuItem("Disassembly", nullptr, &show_disasm_);
+        ImGui::MenuItem("Floppy Disk Controller", nullptr, &show_fdc_);
+        ImGui::MenuItem("Z80 SIO", nullptr, &show_sio_);
+        ImGui::MenuItem("Z80 PIO", nullptr, &show_pio_);
+        ImGui::MenuItem("Z80 DMA", nullptr, &show_dma_);
+        ImGui::MenuItem("Xebec S1410", nullptr, &show_xebec_);
+        ImGui::MenuItem("MM58167 RTC", nullptr, &show_rtc_);
+        ImGui::MenuItem("SCN2674 AVDC", nullptr, &show_scn2674_);
+        ImGui::MenuItem("EF9367 GDP", nullptr, &show_ef9367_);
+        ImGui::EndPopup();
+    }
+
+    if (ImGui::IsPopupOpen("##m_devices"))
+        ImGui::SetNextWindowPos(custom_title_menu_pos(2), ImGuiCond_Always);
+    if (ImGui::BeginPopup("##m_devices"))
+    {
+        ImGui::MenuItem("Device Routing", nullptr, &show_devices_);
+        ImGui::MenuItem("Monitor", nullptr, &show_monitor_);
+        ImGui::MenuItem("Virtual Keyboard", nullptr, &show_keyboard_);
+        ImGui::EndPopup();
+    }
+
+    const ImGuiID dockspace_id = ImGui::GetID("##dockspace");
+    ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
+    ImGui::End();
+
     if (!startup_layout_applied_)
     {
         startup_layout_applied_ = true;
         ImGui::DockBuilderRemoveNode(dockspace_id);
         ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
-        ImGui::DockBuilderSetNodeSize(dockspace_id, ImGui::GetMainViewport()->Size);
+        ImGui::DockBuilderSetNodeSize(dockspace_id, ImVec2(vp->WorkSize.x, vp->WorkSize.y - title_bar_h));
 
         ImGuiID dock_main = dockspace_id;
         ImGuiID dock_right = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Right, 0.25f, nullptr, &dock_main);
@@ -871,11 +967,10 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
     {
         // Keep this panel floating by default (not initially docked) because it benefits from horizontal space.
         const ImGuiViewport* vp = ImGui::GetMainViewport();
-        const float menu_h = ImGui::GetFrameHeight();
-        const ImVec2 vk_default_pos(vp->WorkPos.x + 8.0f, vp->WorkPos.y + menu_h + 8.0f);
+        const ImVec2 vk_default_pos(vp->Pos.x + 8.0f, vp->Pos.y + title_bar_h + 8.0f);
         const ImVec2 vk_default_size(
             std::min(1560.0f, vp->WorkSize.x - 16.0f),
-            std::min(530.0f, vp->WorkSize.y - (menu_h + 24.0f))
+            std::min(530.0f, vp->WorkSize.y - (title_bar_h + 24.0f))
         );
         ImGui::SetNextWindowDockID(0, ImGuiCond_Appearing);
         ImGui::SetNextWindowSize(vk_default_size, ImGuiCond_Appearing);
@@ -1273,6 +1368,8 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
         ImGui::TextUnformatted("Debugger keys reserved: F10, F11.");
         ImGui::End();
     }
+
+    draw_window_chrome();
 }
 
 std::vector<uint8_t> gui::drain_keys()
@@ -1289,7 +1386,7 @@ void gui::end_frame()
     int display_w, display_h;
     SDL_GL_GetDrawableSize(window_, &display_w, &display_h);
     glViewport(0, 0, display_w, display_h);
-    glClearColor(0.06f, 0.06f, 0.06f, 1.0f);
+    glClearColor(chrome_theme().gl_clear[0], chrome_theme().gl_clear[1], chrome_theme().gl_clear[2], 1.0f);
     glClear(GL_COLOR_BUFFER_BIT);
 
     ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

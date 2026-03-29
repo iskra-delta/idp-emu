@@ -12,6 +12,10 @@ set(IDP_CORE_SOURCES
 set(IDP_GUI_SOURCES
     main.cpp
     gui/gui.cpp
+    gui/chrome_style.cpp
+    gui/chrome_theme.cpp
+    gui/custom_title_bar.cpp
+    gui/window_chrome.cpp
     gui/panel_disasm.cpp
     gui/panel_display.cpp
     gui/panel_dma.cpp

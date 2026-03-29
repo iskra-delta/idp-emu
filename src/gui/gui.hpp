@@ -54,6 +54,7 @@ private:
     bool show_keyboard_ = false;
     bool show_devices_ = false;
     bool show_monitor_ = false;
+    int open_menu_ = -1;
     bool startup_layout_applied_ = false;
     bool mouse_cursor_hidden_ = false;
     bool mouse_relative_active_ = false;
