@@ -30,3 +30,11 @@ add_executable(test_ef9367
 target_link_libraries(test_ef9367 PRIVATE chipsex)
 
 add_test(NAME ef9367_unit COMMAND test_ef9367)
+
+add_executable(test_scn2674
+    test_scn2674.cpp
+)
+
+target_include_directories(test_scn2674 PRIVATE ${CMAKE_SOURCE_DIR}/lib/chipsex/signetics)
+
+add_test(NAME scn2674_unit COMMAND test_scn2674)

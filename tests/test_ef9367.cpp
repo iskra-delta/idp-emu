@@ -219,6 +219,40 @@ static int test_xor_mode_toggles_with_pen_only()
     return fails;
 }
 
+static int test_partner_rom_observed_home_and_block_commands()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+
+    ef9367_t gdp{};
+    ef9367_init(&gdp);
+    pen_down(&gdp);
+
+    gdp.x = 123;
+    gdp.y = 77;
+    ef9367_command(&gdp, 0x05); // Partner GDP homes X while preserving Y
+    CHECK(gdp.x == 0);
+    CHECK(gdp.y == 77);
+
+    gdp.x = 10;
+    gdp.y = 20;
+    gdp.ch_size = 0x11; // P=1, Q=1
+    ef9367_command(&gdp, 0x0A); // 8x8 block
+    CHECK(gdp.x == 18);
+    CHECK(gdp.y == 20);
+    CHECK(count_lit(gdp, 10, 20, 17, 27) == 64);
+
+    ef9367_command(&gdp, 0x05);
+    ef9367_command(&gdp, 0x04); // clear current page
+    ef9367_command(&gdp, 0x0B); // 4x4 block
+    CHECK(gdp.x == 4);
+    CHECK(gdp.y == 20);
+    CHECK(count_lit(gdp, 0, 20, 3, 23) == 16);
+
+#undef CHECK
+    return fails;
+}
+
 } // namespace
 
 int main()
@@ -229,6 +263,7 @@ int main()
     fails += test_pen_up_moves_without_drawing();
     fails += test_reverse_erase_clears_vector();
     fails += test_xor_mode_toggles_with_pen_only();
+    fails += test_partner_rom_observed_home_and_block_commands();
 
     if (fails == 0) {
         std::printf("test_ef9367: all tests passed\n");

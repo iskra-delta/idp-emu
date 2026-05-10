@@ -263,16 +263,12 @@ int main(int argc, char** argv) {
     std::string rom_file = "roms/partner_crt.rom";
     std::string disk_file = "disks/fdd-partner-p.img";
     std::string hdd_file;
-    bool force_floppy = true;
     bool hdd_mode = false;
     for (int i = 1; i < argc; i++) {
         std::string arg = argv[i];
         if ((arg == "--hdd") && (i + 1 < argc)) {
             hdd_file = argv[++i];
-            force_floppy = false;
             hdd_mode = true;
-        } else if (arg == "--no-force-floppy") {
-            force_floppy = false;
         } else if ((arg == "--disk") && (i + 1 < argc)) {
             disk_file = argv[++i];
         } else if (arg.rfind("--", 0) != 0) {
@@ -303,7 +299,6 @@ int main(int argc, char** argv) {
     }
 
     partner_crt idp(terminal_profile::vt52);
-    idp.set_force_floppy_boot(force_floppy);
     idp.load_rom(rom_file);
     idp.load_disk(0, disk_file);
     if (!hdd_file.empty()) {

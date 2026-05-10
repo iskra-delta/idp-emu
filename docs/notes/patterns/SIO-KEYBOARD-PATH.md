@@ -34,6 +34,41 @@ Document how Partner ROM expects keyboard bytes during boot and why loops at
 - SIO polling/input path works for boot selection and text diagnostics.
 - Remaining GDP issues are not caused by basic SIO key ingress.
 
+## GDP Keyboard Local Codes
+
+The running GDP software contains its own keyboard ISR at `0xFEA7` which reads
+raw bytes from SIO A data port `0xD8` and handles several codes before they are
+placed into the normal key queue.
+
+Observed behavior from the ISR:
+
+- `0xB0`
+  - handled immediately by the ISR
+  - toggles bit 0 of RAM flag byte `0xFF19`
+  - this is the GDP keyboard's `SET UP` local-function code
+- `0xFE`
+  - handled immediately by the ISR
+  - toggles bit 1 of `0xFF19`
+  - this is the GDP keyboard's `NO SCROLL` local-function code
+- `0xEA`
+  - handled immediately by the ISR
+  - clears `0xFF19`
+  - also clears `0xF9D4` and vectors through `0xFA03`
+- `0xE0`
+  - consumed by the ISR and ignored
+- `0xFF`
+  - consumed by the ISR and ignored
+
+Implication for emulation:
+
+- `SET UP` is not an `ESC` sequence on the Partner GDP keyboard path.
+- `NO SCROLL` is not an `ESC` sequence either.
+- These local keyboard functions must be injected as raw keyboard bytes through
+  SIO A so the GDP ISR can process them.
+- `ESC`-prefixed sequences for cursor/application keys, when used, are a
+  higher-level convention consumed later by software and should not be confused
+  with the GDP keyboard's local-function codes.
+
 ## See Also
 
 - `docs/notes/patterns/SIO-PIO-TCP-VIRTUAL-DEVICES.md` (current virtual-device routing, mouse protocols, and TCP bridge behavior)

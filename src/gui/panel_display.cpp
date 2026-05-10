@@ -1,5 +1,6 @@
 #include "panel_display.hpp"
 #include "display.hpp"
+#include "chrome_theme.hpp"
 #include <imgui.h>
 #include <array>
 #include <cmath>
@@ -104,11 +105,11 @@ void panels::render_display(display &disp, display_viewport_info *out_info)
     const ImVec2 image_end = ImVec2(image_pos.x + img_w, image_pos.y + img_h);
     const bool image_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_None);
 
-    // Thin neutral curved border around the monitor viewport, drawn in ImGui
+    // Thin curved border around the monitor viewport, drawn in ImGui
     // space so it remains unaffected by the CRT/LCD shader pass.
     ImDrawList *dl = ImGui::GetWindowDrawList();
     const bool crt_curved = disp.get_phosphor_type() != display::phosphor_type::lcd;
-    add_curved_monitor_outline(dl, image_pos, image_end, crt_curved, IM_COL32(150, 150, 150, 255));
+    add_curved_monitor_outline(dl, image_pos, image_end, crt_curved, chrome_theme().close_hover_bg);
 
     if (out_info)
     {

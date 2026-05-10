@@ -100,6 +100,38 @@ static inline void z80sio_cpu_write(z80sio_t* sio, uint8_t port, uint8_t data) {
     (void)z80sio_tick(sio, pins);
 }
 
+static inline uint8_t z80sio_irq_vector(z80sio_t* sio, int chn_id) {
+    z80sio_channel_t *ch = &sio->chn[chn_id];
+    const uint8_t base_vector = sio->chn[Z80SIO_CHANNEL_B].int_vector;
+    const bool status_affects_vector = (sio->chn[Z80SIO_CHANNEL_B].wr[1] & (1 << 2)) != 0;
+    if (!status_affects_vector) {
+        return base_vector;
+    }
+
+    uint8_t modified = base_vector & 0xF1u;
+    if (chn_id == Z80SIO_CHANNEL_A) {
+        modified |= (1u << 3);
+    }
+    if (ch->rx_ready && (ch->rx_overrun || ch->framing_error || ch->end_of_frame ||
+        ((((ch->wr[1] >> 3) & 0x03u) == 2) && ch->parity_error)))
+    {
+        modified |= (3u << 1);
+    }
+    else if (ch->rx_ready && (((ch->wr[1] >> 3) & 0x03u) != 0))
+    {
+        modified |= (2u << 1);
+    }
+    else if (ch->tx_ready && (ch->wr[1] & (1u << 1)))
+    {
+        modified |= (0u << 1);
+    }
+    else
+    {
+        modified |= (1u << 1);
+    }
+    return modified;
+}
+
 static inline uint8_t z80pio_cpu_read(z80pio_t* pio, uint8_t port) {
     uint64_t pins = Z80PIO_CE | Z80PIO_IORQ | Z80PIO_RD;
     if (port & 0x01) pins |= Z80PIO_CDSEL;
@@ -1205,7 +1237,6 @@ void partner::reset()
     io_read_latched_addr_ = 0;
     io_read_latched_data_ = 0xFF;
     tick_count = 0;
-    auto_floppy_key_sent_ = false;
     restore_drive_ready_flags();
 
     for (sio_port_id port : { sio_port_id::sio1_a, sio_port_id::sio1_b, sio_port_id::sio2_a, sio_port_id::sio2_b })
@@ -1228,19 +1259,27 @@ void partner::tick()
     const bool cpu_ticked = !dma_owns_bus();
     if (cpu_ticked)
     {
+        const int daisy_vector = get_pending_daisy_vector();
+        const int external_im2_vector = get_external_im2_vector();
+
         // IM2 ack data is sampled by the CPU during internal step 1657.
-        // Present the external FDC vector on the bus one tick earlier so the
-        // sample sees the intended byte instead of stale bus residue.
-        if ((cpu.step == 1657) && fdc.irq_request)
+        // Present the highest-priority interrupt vector on the bus one tick
+        // earlier so the sample sees the intended byte instead of stale bus
+        // residue. This is required both for the external FDC vector latch
+        // and for daisy-chain devices such as the SIO keyboard interrupt.
+        if (cpu.step == 1657)
         {
-            const bool daisy_busy =
-                (dma.int_state != 0) ||
-                (ctc.chn[0].int_state != 0) || (ctc.chn[1].int_state != 0) ||
-                (ctc.chn[2].int_state != 0) || (ctc.chn[3].int_state != 0) ||
-                (sio.chn[0].int_state != 0) || (sio.chn[1].int_state != 0) ||
-                (sio2.chn[0].int_state != 0) || (sio2.chn[1].int_state != 0) ||
-                (pio.port[0].int_state != 0) || (pio.port[1].int_state != 0);
-            if (!daisy_busy)
+            if (daisy_vector >= 0)
+            {
+                Z80_SET_DATA(pins, (uint8_t)daisy_vector);
+                pins |= Z80_IORQ;
+            }
+            else if (external_im2_vector >= 0)
+            {
+                Z80_SET_DATA(pins, (uint8_t)external_im2_vector);
+                pins |= Z80_IORQ;
+            }
+            else if (fdc.irq_request)
             {
                 Z80_SET_DATA(pins, fdc_int_vector);
                 pins |= Z80_IORQ;
@@ -1342,18 +1381,38 @@ void partner::tick()
     pins &= ~Z80DMA_CE;
 
     // Second priority: CTC (ports 0xC8-0xCB)
+    pins &= ~(Z80CTC_CE | Z80CTC_CS0 | Z80CTC_CS1 |
+              Z80CTC_CLKTRG0 | Z80CTC_CLKTRG1 | Z80CTC_CLKTRG2 | Z80CTC_CLKTRG3);
     if ((pins & Z80_IORQ) && !(pins & Z80_M1) && (port >= 0xC8 && port <= 0xCB))
     {
         pins |= Z80CTC_CE;
         if (port & 0x01) pins |= Z80CTC_CS0;
         if (port & 0x02) pins |= Z80CTC_CS1;
+        // Trace CTC accesses to diagnose vector configuration.
+        static const bool ctc_trace = [] {
+            const char *s = std::getenv("IDP_TRACE_CTC");
+            return s && s[0] && s[0] != '0';
+        }();
+        if (ctc_trace) {
+            const bool is_wr = (pins & Z80_WR) != 0;
+            const bool is_rd = (pins & Z80_RD) != 0;
+            std::fprintf(stderr, "[ctc] pc=%04x port=%02x data=%02x %s vec=%02x %02x %02x %02x\n",
+                cpu.pc, port, (uint8_t)Z80_GET_DATA(pins),
+                is_wr ? "WR" : (is_rd ? "RD" : "??"),
+                ctc.chn[0].int_vector, ctc.chn[1].int_vector,
+                ctc.chn[2].int_vector, ctc.chn[3].int_vector);
+        }
     }
-    // The board docs describe a motor timeout signal generated from cascaded
-    // counters; feed channel 0 timeout into channel 1 as a simple cascade.
+    // CTC ch0 ZCTO0 → ch1 CLK (motor cascade).
     if (ctc.pins & Z80CTC_ZCTO0)
         pins |= Z80CTC_CLKTRG1;
+    // Note: AVDC VB → CTC ch3 is handled via get_external_im2_vector() (IM2
+    // injection) rather than CLKTRG3, because the BIOS never programs the CTC
+    // interrupt vector register for the floppy image. Pulsing CLKTRG3 during
+    // early boot (when I≠0xFA) would cause spurious interrupts.
     pins = z80ctc_tick(&ctc, pins);
-    pins &= ~(Z80CTC_CE | Z80CTC_CS0 | Z80CTC_CS1 | Z80CTC_CLKTRG1);
+    pins &= ~(Z80CTC_CE | Z80CTC_CS0 | Z80CTC_CS1 |
+              Z80CTC_CLKTRG0 | Z80CTC_CLKTRG1 | Z80CTC_CLKTRG2 | Z80CTC_CLKTRG3);
     if (pins & Z80CTC_ZCTO1)
     {
         fdc_motor_running = false;
@@ -1407,6 +1466,9 @@ void partner::tick()
 
     service_virtual_devices();
 
+    if (get_external_im2_vector() >= 0)
+        pins |= Z80_INT;
+
     // FDC interrupt participates in the Z80 daisy chain after the Zilog devices.
     service_fdc_daisy(pins, cpu_ticked);
 
@@ -1423,6 +1485,41 @@ void partner::restore_drive_ready_flags()
     {
         fdc.drive[1].ready = true;
     }
+}
+
+int partner::get_pending_daisy_vector() const
+{
+    if (dma.int_state & (Z80DMA_INT_NEEDED | Z80DMA_INT_REQUESTED))
+        return dma.int_vector;
+
+    for (int i = 0; i < Z80CTC_NUM_CHANNELS; i++)
+    {
+        if (ctc.chn[i].int_state & (Z80CTC_INT_NEEDED | Z80CTC_INT_REQUESTED))
+            return ctc.chn[i].int_vector;
+    }
+
+    for (int i = 0; i < Z80SIO_NUM_CHANNELS; i++)
+    {
+        if (sio.chn[i].int_state & (Z80SIO_INT_NEEDED | Z80SIO_INT_REQUESTED))
+            return z80sio_irq_vector(const_cast<z80sio_t*>(&sio), i);
+    }
+
+    for (int i = 0; i < Z80SIO_NUM_CHANNELS; i++)
+    {
+        if (sio2.chn[i].int_state & (Z80SIO_INT_NEEDED | Z80SIO_INT_REQUESTED))
+            return z80sio_irq_vector(const_cast<z80sio_t*>(&sio2), i);
+    }
+
+    for (int i = 0; i < 2; i++)
+    {
+        const z80pio_port_t &port = pio.port[i];
+        const bool request_pending = (port.int_state & (Z80PIO_INT_NEEDED | Z80PIO_INT_REQUESTED)) != 0;
+        const bool interrupt_armed = port.int_enabled || (port.int_state & Z80PIO_INT_REQUESTED);
+        if (request_pending && interrupt_armed)
+            return port.int_vector;
+    }
+
+    return -1;
 }
 
 void partner::service_cpu_bus(uint64_t &bus_pins)
@@ -1473,19 +1570,17 @@ void partner::service_cpu_bus(uint64_t &bus_pins)
     }
     else if ((bus_pins & (Z80_IORQ | Z80_M1)) == (Z80_IORQ | Z80_M1))
     {
+        const int external_im2_vector = get_external_im2_vector();
+
         // External 8272 IM2 acknowledge.
         // Keep this on the early CPU bus phase so the vector byte lands on the
         // same acknowledge cycle, but don't steal the cycle from daisy-chain
         // devices when they have a pending/requested/serviced interrupt.
-        const bool daisy_busy =
-            (dma.int_state != 0) ||
-            (ctc.chn[0].int_state != 0) || (ctc.chn[1].int_state != 0) ||
-            (ctc.chn[2].int_state != 0) || (ctc.chn[3].int_state != 0) ||
-            (sio.chn[0].int_state != 0) || (sio.chn[1].int_state != 0) ||
-            (sio2.chn[0].int_state != 0) || (sio2.chn[1].int_state != 0) ||
-            (pio.port[0].int_state != 0) || (pio.port[1].int_state != 0);
-
-        if (fdc.irq_request && !daisy_busy)
+        if ((external_im2_vector >= 0) && (get_pending_daisy_vector() < 0))
+        {
+            Z80_SET_DATA(bus_pins, (uint8_t)external_im2_vector);
+        }
+        else if (fdc.irq_request && (get_pending_daisy_vector() < 0))
         {
             Z80_SET_DATA(bus_pins, fdc_int_vector);
             fdc.irq_request = false;

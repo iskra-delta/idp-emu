@@ -15,12 +15,15 @@ void panels::render_monitor(display &disp, bool *p_open)
     if (ImGui::BeginCombo("Monitor Type",
                           mode == display::phosphor_type::green ? "Green CRT" :
                           mode == display::phosphor_type::orange ? "Orange CRT" :
+                          mode == display::phosphor_type::color ? "Color CRT" :
                           "LCD"))
     {
         if (ImGui::Selectable("Green CRT", mode == display::phosphor_type::green))
             disp.set_phosphor_type(display::phosphor_type::green);
         if (ImGui::Selectable("Orange CRT", mode == display::phosphor_type::orange))
             disp.set_phosphor_type(display::phosphor_type::orange);
+        if (ImGui::Selectable("Color CRT", mode == display::phosphor_type::color))
+            disp.set_phosphor_type(display::phosphor_type::color);
         if (ImGui::Selectable("LCD", mode == display::phosphor_type::lcd))
             disp.set_phosphor_type(display::phosphor_type::lcd);
         ImGui::EndCombo();

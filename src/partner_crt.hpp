@@ -2,6 +2,7 @@
 #include "partner.hpp"
 #include "terminal/terminal_emulator.hpp"
 #include "terminal/terminal_factory.hpp"
+#include <deque>
 #include <memory>
 
 class display;
@@ -29,5 +30,5 @@ private:
     terminal_profile terminal_profile_ = terminal_profile::vt52;
     std::unique_ptr<terminal_emulator> terminal_;
     std::string raw_serial_;
-    void maybe_auto_boot_floppy();
+    std::deque<uint8_t> key_fifo_{};
 };

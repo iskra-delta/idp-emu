@@ -152,6 +152,15 @@ GDP mode extends I/O with EF9367, AVDC, and a local PIO window.
 
 Important emulator behavior in GDP mode:
 
+- Port `0x30` mirrors GDP local PIO Port A board-control lines (`graphic common control`):
+  - bit0: `RBNK` (display/read page select)
+  - bit1: `WBNK` (write page select)
+  - bit2: `XORM` (XOR vs normal write mode)
+  - bit3: `FM0` (format 0)
+  - bit4: `FM1` (format 1)
+  - bit5: `GDPINT` (read-only status line)
+  - bit6: `AVDINT` (read-only status line)
+  - bit7: `SCRLM` (scroll mode line)
 - Port `0x36` is used as a board-level scroll/sync latch path:
   - read: sync bit source
   - write: scroll latch

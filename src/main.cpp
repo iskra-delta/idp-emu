@@ -208,8 +208,6 @@ int main(int argc, char **argv)
             if (want_gdp)
             {
                 auto gdp = std::make_unique<partner_gdp>(term_profile);
-                if (hdd_file.empty())
-                    gdp->set_force_floppy_boot(true);
                 gdp->load_rom(selected_rom);
                 if (auto_insert_floppy)
                     gdp->load_disk(0, selected_disk);
@@ -221,8 +219,6 @@ int main(int argc, char **argv)
             else
             {
                 auto crt = std::make_unique<partner_crt>(term_profile);
-                if (hdd_file.empty())
-                    crt->set_force_floppy_boot(true);
                 crt->load_rom(selected_rom);
                 if (auto_insert_floppy)
                     crt->load_disk(0, selected_disk);
@@ -258,7 +254,8 @@ int main(int argc, char **argv)
         }
 
         bool running = true;
-        bool paused = true;
+        const char *auto_run_env = std::getenv("IDP_AUTO_SETUP");
+        bool paused = !(auto_run_env && auto_run_env[0] && auto_run_env[0] != '0');
         dbg_action action = dbg_action::NONE;
 
         std::cout << "[info] Starting emulation (paused at PC=0000)...\n";

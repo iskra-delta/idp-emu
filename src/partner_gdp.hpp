@@ -48,6 +48,8 @@ public:
 protected:
     uint8_t io_read(uint16_t port) override;
     void io_write(uint16_t port, uint8_t data) override;
+    int get_external_im2_vector() const override;
+    bool get_avdc_vb_edge() const override { return avdc_vb_edge_; }
 
 private:
     terminal_profile terminal_profile_ = terminal_profile::vt100_ansi;
@@ -79,14 +81,19 @@ private:
     bool avdc_rowtbl_be_cache_ = false;
     int avdc_rowtbl_bias_cache_ = 0;
     std::deque<uint8_t> key_fifo_{};
-    uint16_t bios_key_write_ptr_ = 0;
     partner_gdp_keyboard keyboard_{};
     void sync_ef_mode_from_gdp_pio();
-    bool late_bios_queue_active() const;
-    bool enqueue_late_bios_key(uint8_t ch);
+
+    // AVDC VB → CTC ch3 clock edge flag (set in tick(), consumed by partner::tick).
+    bool avdc_vb_edge_ = false;
+
+    // Setup-key tracer: ring buffer of recent PCs + post-F12 trace.
+    static constexpr int kPcRingSize = 256;
+    std::array<uint16_t, kPcRingSize> pc_ring_{};
+    int pc_ring_head_ = 0;
+    int setup_trace_remain_ = 0; // instructions left to trace after F12
 
     void gdp_put_char(uint8_t ch);
     void gdp_newline();
     void gdp_command(uint8_t cmd);
-    void maybe_auto_boot_floppy();
 };

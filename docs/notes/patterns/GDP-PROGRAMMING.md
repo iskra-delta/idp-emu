@@ -19,6 +19,9 @@ define emulation rules that match ROM behavior.
   - `11` -> `1024x512`
   - `00` -> `1024x256`
   - mixed states are transitional/invalid and should not force random mode flips
+- Port `0x30` is the GDP common-control mirror of local PIO Port A lines:
+  - bit0=`RBNK`, bit1=`WBNK`, bit2=`XORM`, bit3=`FM0`, bit4=`FM1`,
+    bit5=`GDPINT` (read-only), bit6=`AVDINT` (read-only), bit7=`SCRLM`.
 - EF coordinate origin is bottom-left in logical drawing space:
   - `x` grows to the right
   - `y` grows upward
@@ -43,6 +46,10 @@ define emulation rules that match ROM behavior.
   - In practice, this produces the expected stacked startup layout
     (`banner`, then `boot version`, then `TESTING MEMORY ...`) without the
     lines erasing each other.
+- Partner ROM uses EF command `0x05` as an **X-home / left-edge** operation.
+  - Generic EF9367 tables may describe `0x05` as resetting both `X` and `Y`.
+  - On Partner, preserving `Y` is required for the boot banner and subsequent
+    newline/scroll sequence to land in the correct rows.
 
 ## Emulation Rules (Practical)
 

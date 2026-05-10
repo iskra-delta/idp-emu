@@ -1,0 +1,5317 @@
+Signetics
+
+SCN2674
+Advanced Video Display
+Controller (AVDC)
+Product Specification
+
+Microprocessor Products
+DESCRIPTION
+
+FEATURES
+
+The Signetics SCN2674 Advanced Video Display Controller (AVDC) is a programmable device designed for use in
+CRT terminals and display systems that
+employ raster scan techniques. The
+AVDC generates the vertical and horizontal timing signals necessary for the
+display of interlaced or non-interlaced
+data on a CRT monitor. It provides
+consecutive addressing to a user specified display buffer memory domain and
+controls the CPU display buffer interface
+for various buffer configuration modes. A
+variety of operating modes, display formats, and timing profiles can be implemented by programming the control registers in the AVDC.
+
+• 2.7MHz and 4MHz character rate
+• 1 to 256 characters per row
+• 1 to 16 raster lines per character
+row
+• 1 to 128 character rows per
+frame
+• Bit mapped graphics mode
+• Programmable horizontal and
+vertical sync generators
+- RS170 compatible sync
+• Interlaced or non-interlaced
+operation
+• Up to 64K RAM addressing for
+multiple page operation
+• Readable, writable and
+incrementable cursor
+- Programmable cursor size and
+blink
+• AC line lock
+• Automatic wraparound of RAM
+• Automatic split screen
+• Automatic bidirectional soft
+scrolling
+- Programmable scan line
+increment
+• Row table addressing mode
+• Double height tops and bottoms
+• Double width control output
+• Selectable buffer interface modes
+• Dynamic RAM refresh
+• Completely TTL compatible
+• Single + 5 volt power supply
+• Power on reset circuit
+
+A minimum CRT terminal system configuration consists of an AVDC, an
+SCN2671 Keyboard and Communication
+Controller (PKCC), an SCN2670 Display
+Character and Graphics Generator
+(DCGG), an SCB2675 Color/Monochrome Attributes Controller (CMAC), a
+single chip microcomputer such as the
+8048, a display buffer RAM, and a small
+amount of TTL for miscellaneous address decoding, interface, and control.
+Typically, the package count for a minimum system is between 15 and 20
+devices; system complexity can be enhanced by upgrading the microprocessor and expanding via the system address and data busses.
+
+PIN CONFIGURATION
+iijjl
+
+CURSOR
+
+1
+
+D2
+
+33
+
+g:ggl~
+
+32
+
+g:gg~5
+
+31 DADD3/LR
+DADD4/LAO
+
+~~~~ 18
+
+23
+
+HSYNC
+
+22 DADDl210DD
+
+gtl~'It"1
+
+21 DADDl3JLL
+TOP VIEW
+
+INDEX
+CORNER
+
+40
+
+a
+
+39
+
+PLCC
+17
+
+29
+18
+
+28
+TOP VIEW
+
+APPLICATIONS
+• CRT terminals
+• Word processing systems
+• Small business computers
+• Home computers
+
+COOO44PS
+
+Pin Function
+1 NC
+2RD
+3CE
+4 WR
+5 CTRLI
+6 CTRL2
+7CTRL3
+8 CURSOR
+9DO
+10 Dl
+11 02
+
+12 NC
+13 D3
+14 D4
+15 D5
+16 D6
+
+February 20, 1985
+
+2-123
+
+Pin Function
+17 D7
+
+18 ecrK
+19 BLANK
+20 VSVNC
+CSVNCI
+21 HSVNC
+22 GND
+23 NC
+24 DADD13/LL
+25 DADD121
+ODD
+26 DADD111
+BLINK
+27 DADD10/UL
+28 DADD9/DW
+29 DADD8/FL
+3D DADD7ILA3
+
+Pin Function
+31 DADD6/LA2
+32 DADD5/LA 1
+33 DADD4/LAO
+34 NC
+35 DADD3/LR
+36 DADD21
+DADD15
+37 DADD1I
+DADD14
+38 DADDO/LG
+39 iiiifi'!
+40 ACLL
+41 AO
+42 Al
+43 A2
+44 Vee
+
+853-0091 77351
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+ORDERING CODE
+Vee = 5V ± 5%, TA = DoC to 70°C
+
+PACKAGES
+4MHz
+
+2.7MHz
+
+Ceramic DIP
+
+SCN2674BC4140
+
+SCN2674BC3140
+
+Plastic DIP
+
+SCN2674BC4N40
+
+SCN2674BC3N40
+
+Plastic LCC
+
+SCN2674BC4A44
+
+SCN2674BC3A44
+
+BLOCK DIAGRAM
+
+er
+
+INTERFACE
+
+CONTROL
+
+READI
+WRITE
+CONTROL
+LOGIC
+
+INITIALIZATION.
+POINTER
+AND
+DISPLAY
+REGISTERS
+
+CTRL1
+
+1m
+WIi
+
+,
+
+...
+COMMAND
+DECODE
+LOGIC
+
+1
+
+,
+
+3 ...
+
+ADDRESS
+DECODER
+
+r---
+
+INTli
+
+DQ.7
+
+<
+
+-
+
+--,I
+
+INTERRUPT
+LOGIC
+STATUS
+REGISTER
+
+~
+
+/
+
+1
+1 8 ...
+
+DATA
+BUS
+DRIVERS
+
+DISPLAY
+SCROLL AND
+DOUBLE HEIGHT
+LOGIC
+
+CTRL3
+
+I
+DADI)O.13
+
+L-~
+
+.
+....
+
+...
+
+~
+
+--
+
+I.
+
+I>
+ADDRESS
+TIMING
+MULTIPLEXERS
+
+~
+
+"
+
+CTRL2
+
+/'--
+
+y-
+
+I
+
+AO-2
+
+l
+
+DISPLAY
+MEMORY
+HANDSHAKE
+LOGIC
+
+-"
+
+~
+
+CURSOR AND
+SCREEN START
+REGISTERS
+
+114
+
+I
+
+I
+CURSOR
+
+CURSOR
+AND
+COMPARE
+LOGIC
+
+Vee
+
+GND
+
+ACLL
+~
+
+HSYNC
+CLOCK
+BUFFER
+
+TIMING CHAIN
+AND
+DECODE LOGIC
+
+1---......
+
+VSYNC/CSYNC
+BLANK
+
+TIMING
+
+February 20, 1985
+
+2-124
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+PIN DESCRIPTION
+PIN NO.
+MNEMONIC
+
+TYPE
+
+NAME AND FUNCTION
+
+41-43
+
+I
+
+Address Lines: Used to select AVDC internal registers for read/write operations and for
+commands.
+
+8-15
+
+9-11
+13 -17
+
+I/O
+
+8·Bit Bidirectional Three·State Data Bus: Bit 0 is the LSB and bit 7 is the MSB. All data,
+command, and status transfers between the CPU and the AVDC take place over this bus.
+The direction of the transfer is controlled by the RD and WR inputs when the CE input is low.
+When the CE input is high, the data bus is in the three-state condition.
+
+RD
+
+1
+
+2
+
+I
+
+Read Strobe: Active low input. A Iowan this pin while CE is low causes the contents of the
+register selected by AO - A2 to be placed on the data bus. The read cycle begins on the
+leading (falling) edge of RD.
+
+WR
+
+3
+
+4
+
+I
+
+Write Strobe: Active low input. A Iowan this pin while CE is also low causes the contents of
+the data bus to be transferred to the register selected by AO - A2. The transfer occurs on the
+trailing (rising) edge of WR.
+
+CE
+
+2
+
+3
+
+I
+
+Chip Enable: Active low input. When low, data transfers between the CPU and the AVDC are
+enabled on DO - 07 as controlled by the WR, RD, and AO - A2 inputs. When CE is high,
+effectively, the AVDC is isolated from the data bus and DO - 07 are placed in the three-state
+condition.
+
+CCLK
+
+16
+
+18
+
+I
+
+Character Clock: Timing Signal derived from the video dot clock which is used to
+synchronize the AVDC's timing functions.
+
+HSYNC
+
+19
+
+21
+
+0
+
+Horizontal Sync: Active high output which provides video horizontal sync pulses. The timing
+parameters are programmable.
+
+VSYNC/
+CSYNC
+
+18
+
+20
+
+0
+
+Vertical Sync/Composite Sync: A control selects either vertical or composite sync pulses
+on this active high output. When CSYNC is selected, equalization pulses are included. The
+timing parameters are programmable.
+
+BLANK
+
+17
+
+19
+
+0
+
+Blank: This active high output defines the horizontal and vertical borders of the display.
+Display control signals which are output on DAD DO through DADD13 are valid on the trailing
+edge of BLANK.
+
+CURSOR
+
+7
+
+8
+
+0
+
+Cursor Gate: This output becomes active for a specified number of scan lines when the
+address contained in the cursor register matches the address output on DAD DO through
+DADD13 for displayable character addresses. The first and last lines of the cursor and a
+blink option are programmable. When the row table addressing mode is enabled, this output
+is active for a portion of the blanking interval prior to the first scan line of a character row,
+while the AVDC is fetching the starting address for that row.
+
+INTR
+
+35
+
+39
+
+0
+
+Interrupt Request: Open drain output which supplies an active low interrupt request from
+any of five maskable sources. This pin is inactive after a power on reset or a master reset
+command.
+
+ACLL
+
+36
+
+40
+
+I
+
+AC Line Lock: If this input is low after the programmed vertical front porch interval, the
+vertical front porch will be lengthened by increments of horizontal scan line times until this
+input goes high. This input should be pulled high if not being used.
+
+CTRL1
+
+4
+
+5
+
+I/O
+
+Handshake Control 1: In independent mode, provides an active low write data buffer (WDB)
+output which strobes data from the interface latch into the display memory. In transparent
+and shared modes, this is an active low processor bus request (PBREQ) input which
+indicates that the CPU desires to access the display memory.
+
+CTRL2
+
+5
+
+6
+
+0
+
+Handshake Control 2: In independent mode, provides an active low read data buffer (ROB)
+output which strobes data from the display memory into the interface latch. In transparent
+and shared modes, this is an active low bus external enable (BEXT) output which indicates
+that the AVDC has relinquished control of the display memory (DADDO- DADD13 are in the
+three-state condition) in response to a CPU bus request. BEXT also goes low in response to
+a 'display off and float DADO' command. In row buffer mode, it is an active low bus request
+(BREQ) output which halts the CPU during a line DMA.
+
+DIP
+
+PLCC
+
+AO-A2
+
+37 -39
+
+00-07
+
+February 20, 1985
+
+2·125
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+PIN DESCRIPTION (Continued)
+PIN NO.
+MNEMONIC
+
+TYPE
+
+NAME AND FUNCTION
+
+7
+
+0
+
+Handshake Control 3: In independent mode, provides the active low buffer chip enable
+(BCE) signal to the display memory. In transparent and shared modes, provides an active low
+bus acknowledge (BACK) output which serves as a ready signal to the CPU in response to a
+processor bus request. In row buffer mode, this is an active high memory bus control (MBC)
+output which configures the system for the DMA transfer of one row of character codes from
+system memory to the row display buffer.
+
+38-35
+33-24
+
+0
+
+Display Address: Used by the AVDC to address up to 16K of display memory directly, or up
+to 64K of memory by de·multiplexing DADD14 and DADDI5. These outputs are floated at
+various times depending on the buffer mode. Various control signals are multiplexed on
+DADDO through DADD13 and are valid at the trailing edge of BLANK. These control signals
+are:
+
+DIP
+
+PLCC
+
+CTRL3
+
+6
+
+DADDODADD13
+
+34·21
+
+DADDO/LG
+Line Graphics: Output which denotes bit mapped graphic mode.
+DADDlIDADD14
+Display Address 14: Multiplexed address bit used to extend addressing to 64K.
+DADD2/DADD15
+Display Address 15: Multiplexed address bit used to extend addressing to 64K.
+DADD3/LR
+Last Row: Output which indicates the last active character row of each field.
+DADD4·DADD7/LAO-LA3
+Line Address: Provides the number of the current scan line count for each character row.
+DADD8/FL
+First Line: Asserted during the blanking interval just prior to the first scan line of each
+character row.
+DADD9/DW
+Double Width: Output which denotes a double width character row.
+DADD10/UL
+Underline: Asserted during the blanking interval just prior to the scan line which matches the
+programmed underline position (line 0 through 15).
+DADDll/BLlNK
+Blink Frequency: Provides an output divided down from the vertical sync rate.
+DADD12/0DD
+Odd Field: Active high signal which is asserted before each scan line of the odd field when
+interlace is specified. Replaces DADD4/LAO as the least significant line address for
+interlaced sync and video applications.
+DADD13/LL
+Last Line: Asserted during the blanking interval just prior to the last scan line of each
+character row.
+Vee
+
+40
+
+44
+
+I
+
+Power Supply: + 5 volts power input.
+
+GND
+
+20
+
+22
+
+I
+
+Ground: Signal and power ground input.
+
+FUNCTIONAL DESCRIPTION
+As shown in the block diagram, the AVDC
+contains the following major blocks:
+- Data bus buffer
+- Interface Logic
+- Operation Control
+- Timing
+- Display Control
+- Buffer Control
+
+Data Bus Buffer
+The data bus buffer provides the interface
+between the external and internal data bus·
+ses. It is controlled by the operation control
+February 20, 1985
+
+block to allow read and write operations to
+take place between the controlling CPU and
+the AVDC.
+
+Interface Logic
+The interface logic contains address decoding and read and write circuits to permit
+communications with the microprocessor via
+the data bus buffer. The functions performed
+by the CPU read and write operations are
+shown in table 1.
+
+Operation Control
+The operation control section decodes configuration and operation commands from the
+
+2-126
+
+CPU and generates appropriate signals to
+other internal sections to control the overall
+device operation. It contains the timing and
+display registers which configure the display
+format and operating mode, the interrupt
+logic, and the status register which provides
+operational feedback to the CPU.
+
+Timing
+The timing section contains the counters and
+decoding logic necessary to generate the
+monitor timing outputs and to control the
+display format. These timing parameters are
+
+Product Specification
+
+Signetics Microprocessor Products
+
+SCN2674
+
+Advanced Video Display Controller (AVDC)
+
+selected by programming of the initialization
+registers.
+
+Display Control
+The display control section generates linear
+addressing for up to 16K bytes of display
+memory. Internal comparators limit the portion of the memory which is displayed to
+programmed values. Additional functions performed in this section include cursor positioning and address comparisons required for
+generation of timing signals, double height
+tops and bottoms, smooth scrolling, and the
+split screen interrupts.
+
+Buffer Control
+The buffer control section generates three
+signals which control the transfer of data
+between the CPU and the display buffer
+memory. Four system configurations requiring
+four different 'handshaking' schemes are
+supported. These are described below.
+
+SYSTEM CONFIGURATIONS
+Figure 1 illustrates the block diagram of a
+typical display terminal using the Signetics
+SCN267a, SCN2671, SCN2674, and
+SCB2675 CRT terminal devices. In this system, the CPU examines inputs from the data
+communications line and the keyboard and
+places the data to be displayed in the display
+buffer memory. This buffer is typically a RAM
+which holds the data for a single or multiple
+screenload (page) or for a single character
+row.
+The AVDC supports four common system
+configurations of display buffer memory: the
+independent, transparent, shared, and row
+buffer modes. The first three modes utilize a
+single or multiple page RAM and differ primarily in the means used to transfer display data
+between the RAM and the CPU. The row
+buffer mode makes use of a single row buffer
+(which can be a shift register or a small RAM)
+that is updated in real time to contain the
+appropriate display data.
+The user programs bits a and 1 of IRa to
+select the mode best suited for the system
+environment. The CNTRL 1 - 3 outputs perform different functions for each mode and
+are named accordingly in the description of
+each mode.
+
+Independent Mode
+The CPU to RAM interface configuration for
+this mode is illustrated in figure 2. Transfer of
+data between the CPU and display memory is
+accomplished via a bidirectional latched port
+and is controlled by read data buffer (RDB),
+write data buffer (WDB), and buffer chip
+enable (BCE). This mode provides a noncontention type of operation that does not require
+
+February 20, 1985
+
+Table 1. AVDC ADDRESSING
+A2
+
+A1
+
+Aa
+
+READ (RD=O)
+
+WRITE (WR = 0)
+
+a
+a
+a
+a
+1
+1
+1
+1
+
+a
+a
+1
+1
+a
+a
+1
+1
+
+a
+1
+a
+1
+a
+1
+0
+1
+
+Interrupt register
+Status register
+Screen start 1 lower register
+Screen start 1 upper register
+Cursor address lower register
+Cursor address upper register
+Screen start 2 lower register
+Screen start 2 upper register
+
+Initialization registers 1
+Command register
+Screen start 1 lower register
+Screen start 1 upper register
+Cursor address lower register
+Cursor address upper register
+Screen start 2 lower register
+Screen start 2 upper register
+
+1There are 15 Initialization registers which are accessed sequentially via a smgle address. The AVDC
+
+maintains an internal pointer to these registers which is incremented after each write at this address until
+the last register (lR14) is accessed. The pointer then continues to pOint to IR14 for additional accesses.
+
+Upon a power·on or a master reset command, the internal pOinter is reset to point to the first register (IRO)
+of the initialization register group. The internal pointer can also be preset to any register of the group via the
+'load IR address pointer' command.
+
+address multiplexers. The CPU does not
+address the memory directly - the read or
+write operation is performed at the address
+contained in the cursor address register or
+the pointer address register as specified by
+the CPU. The AVDC enacts the data transfers
+during blanking intervals in order to prevent
+visual disturbances of the displayed data.
+The CPU manages the data transfers by
+supplying commands to the AVDC. The commands used are:
+1. Read/write at pointer address.
+2. Read/write at cursor address (with optional increment of address).
+3. Read/write from cursor address to pointer address.
+The operational sequence for a write operation is:
+1. CPU checks RDFLG status bit to assure
+that any delayed commands have been
+completed.
+2. CPU loads data to be written to display
+memory into the interface latch.
+3. CPU writes address into cursor or pointer
+registers.
+4. CPU issues 'write at cursor with/without
+increment' or 'write at pointer' command.
+5. AVDC generates control signals and outputs specified address to perform requested operation. Data is copied from
+the interface latch into the memory.
+6. AVDC sets RDFLG status to indicate that
+the write is completed.
+Similarly, a read operation proceeds as follows:
+1. Steps 1 and 3 as above.
+2. CPU issues 'read at cursor with/without
+increment' or 'read at pointer' command.
+3. AVDC generates control signals and outputs specified address to perform requested operation. Data is copied from
+memory to the interface latch and AVDC
+sets RDFLG status to indicate that the
+read is completed.
+
+2-127
+
+4.
+5.
+
+CPU checks RDFLG status to see if
+operation is completed.
+CPU reads data from interface latch.
+
+Loading the same data into a block of display
+memory is accomplished via the 'write from
+cursor to pointer' command:
+1. CPU checks RDFLG status bit to assure
+that any delayed commands have been
+completed.
+2. CPU loads data to be written to display
+memory into the interface latch.
+3. CPU writes beginning address of memory
+block into cursor address register and
+ending address of block into pointer address register.
+4. CPU issues 'write from cursor to pointer'
+command.
+5. AVDC generates control signals and outputs block addresses to copy data from
+the interface latch into the specified
+block of memory.
+6. AVDC sets RDFLG status to indicate that
+the block write is completed.
+Similar sequences can be implemented on an
+interrupt driven basis using the READY interrupt output to advise the CPU that a previously asserted delayed command has been completed.
+Two timing sequences are possible for the
+'read/write at cursor/pointer' commands. If
+the command is given during the active display window (defined as first scan line of the
+first character row to the last scan line of the
+last character row), the operation takes place
+during the next horizontal blanking interval, as
+illustrated in figure 3. If the command is given
+during the vertical blanking interval, or while
+the display has been commanded blanked,
+the operation takes place immediately. In the
+latter case, the execution time for the command is approximately five character clocks
+(see figure 4).
+
+- - --
+
+-n
+
+-
+
+-
+
+-
+
+--
+
+-
+
+CD
+
+c-
+
+2
+
+0>
+
+OCr
+
+0
+
+:J
+
+s:o·
+
+CD
+
+"0
+
+<
+
+-<
+
+'"
+
+_0
+
+co
+
+0
+
+'"
+
+Q.
+
+CD
+
+~
+
+I\)
+
+co
+
+I'
+
+LOGIC
+
+rrl
+I '1
+
+SOFT
+SCROLL
+LOGIC
+
+CONT-FioL
+
+III I I
+
+Y
+
+II
+
+I
+
+I II I
+
+~
+
+T.I.'''II''! ~V"I'"
+
+I
+
+!
+
+ANU
+DOT
+
+MODULATION
+
+0
+
+II
+
+VIDEO TIMING & ATTRIBUTES
+
+0
+
+Q
+
+c::
+
+~
+
+"'0
+0
+
+MONITOR
+
+REFRESH
+RAM
+
+0
+0
+
+U;"
+
+~
+
+ATTRIBUTES
+AND
+COLOR
+LOGIC
+
+Q'
+
+0
+
+0
+
+DOUBLE
+HEIGHT
+LOGIC
+
+Ol
+
+s.
+
+a:CD< "~
+
+2615
+
+t
+
+2614
+
+Ul
+
+»
+Q.
+
+-<
+
+()
+
+0
+.....
+0
+CD
+.....
+
+:J
+
+~0
+
+D
+
+KEYBOARD
+
+I_
+Figure 1. CRT Terminal Block Diagram
+
+• DATA COMMUNICATIONS LINE
+
+"o
+en
+
+()
+Z
+~
+
+0'-J
+
+l:Io.
+
+Q
+
+c::
+~
+Ul
+
+alo
+
+=;;
+
+~
+
+o
+
+Ol
+
+Product Specification
+
+Signetics Microprocessor Products
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+REFRESH
+RAM
+
+AVDC
+DADD
+
+ADR
+
+DISPLAY ADDRESS
+
+iiCe
+
+CTRL3
+
+CE
+WR
+
+WDB
+
+CTRLI
+
+DATA 110
+CTRL2
+
+r-- iiiiB
+
+)
+
+DISPLAY DATA BUS
+
+--I~ 74LS364 J
+Rii
+FROM CPU
+
+TO
+VIDEO
+LOGIC
+
+OE
+CP 74LS364
+
+WR
+FROM CPU
+SYSTEM DATA BUS
+
+Figure 2. Independent Buffer Mode Configuration
+
+BLANK
+HORIZONTAL BLANKING INTERVAL
+
+,'-------
+
+DA~~~____~__~____~__~__-t(~l~____/~____~\~~~~~~J\
+I -REFRESH ADDAESS-
+
+n-____
+
+______
+
+~\_
+
+~--~~~------------------------------
+
+I I
+
+I~
+NOTES:
+1. Write waveforms shown in dotted lines.
+2. If command execution occurs just prior to the first scan line of a character row and row table addressing mode is enabled, execution of the command is delayed by
+two character clocks from the timing illustrated
+
+Figure 3. Read/Write at Cursor/Pointer Command Timing (Command Received During Active Display Window)
+
+February 20, 1985
+
+2-129
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+BLANK
+
+AVDC READ COMMAND
+
+DADO
+
+ADDRESS
+
+_REFRESH ADDRESSES-
+
+I
+
+•
+
+~----------~\
+
+L-.J~~r------------+-r----------
+
+ROB
+
+WDB
+
+BCE
+
+------------------------------~211~-----------------Figure 4. Read/Write at Cursor/Pointer Command Timing (Command Received While Display is Blanked)
+
+Timing for the 'read/write from cursor to
+pointer' operation is shown in figure 5. The
+memory is filled at a rate of one location per
+two character times. The command will execute only during blanking intervals and may
+require many horizontal or vertical blanking
+intervals to complete. Additional delayed
+commands can be asserted immediately after
+this command has completed.
+
+In transparent mode, the AVDC delays the
+granting of the buffer to the CPU until a
+vertical or horizontal blanking interval, thereby causing minimum disturbance of the dis·
+play. In shared mode, the AVDC will blank the
+display and grant immediate access to the
+CPU. Timing for these modes is illustrated in
+figures 7, 8, and 9.
+
+Immediate commands can be asserted at any
+time regardless of the state of the ready
+status/interrupt.
+
+Figures 10 and 11 show the timing and a
+typical hardware implementation for the row
+buffer mode. During the first scan line (line 0)
+of each character row, the AVDC halts the
+CPU and DMA's the next row of character
+data from the system memory to the row
+buffer memory. The AVDC then releases the
+CPU and displays the row buffer data for the
+programmed number of scan lines. The control signal BREQ informs the CPU that char·
+acter addresses and the MBC signal will start
+at the next falling edge of BLANK. The CPU
+must release the address and data busses
+before this time to prevent bus contention.
+After the row of character data is transferred
+to the row buffer RAM, BREQ returns high to
+grant memory control back to the CPU.
+
+Shared and Transparent Buffer
+Modes
+In these modes, the display buffer RAM is a
+part of the CPU memory domain and is
+addressed directly by the CPU. Both modes
+use the same hardware configuration with the
+CPU accessing the display buffer via three·
+state drivers (see figure 6). The processor
+bus request (PBREQ) control signal informs
+the AVDC that the CPU is requesting access
+to the display buffer. In response to this
+request, the AVDC raises bus acknowledge
+(BACK) until its bus external (BEXT) output
+has freed the display address and data busses for CPU access. BACK, which can be
+used as a 'hold' input to the CPU, is then
+lowered to indicate that the CPU can access
+the buffer.
+
+February 20, 1985
+
+Row Buffer Mode
+
+Row Table Addressing Mode
+In this mode, each character row in the
+screen image memory has a unique starting
+address. This provides greater flexibility with
+respect to screen operations, such as editing,
+than the sequential addressing mode. The
+
+2-130
+
+row table, figure 12, is a list of starting
+addresses for each character row and may
+reside anywhere in the AVDC's addressable
+memory space. Each entry in the table consists of two bytes: the first byte contains the 8
+LSBs of the row starting address and the
+second byte contains, in its 6 least significant
+bits, the 6 MSBs of the row starting address.
+The function of the two MSBs of the second
+byte is selected by programming IRO!7]. They
+may be used either as row attribute bits to
+control double width and double height for
+that character row, or as an additional two
+address bits to extend the usable display
+memory to 64K.
+The first address of the row table is designat·
+ed in screen start register two (SSR2). If row
+table addressing is enabled via IR2!7], and
+the display is on, the AVDC fetches the next
+row's starting address from the table during
+the blanking interval prior to the first scan line
+of each character row, while simultaneously
+incrementing the contents of SSR2 by two so
+as to point to the next table entry. The
+fetching of the row starting address from the
+row table is indicated by the assertion of the
+CURSOR output during BLANK. The address
+read from the table by the AVDC is loaded
+into screen start register 1 (SSR 1) for use
+internally. Since the contents of SSR2 chang·
+es as the table entries are fetched, it must be
+re-initialized to point to the first table entry
+during each vertical retrace interval.
+
+"Tl
+
+»
+0-
+
+'rr"
+2
+
+~
+
+<
+
+en
+
+cO"
+::J
+
+9l.
+~.
+
+I\)
+
+0
+
+;;:
+
+<0
+
+()
+(\)
+
+u
+
+p
+
+:J
+
+co
+01
+
+0BLANK
+
+"
+
+I
+
+-
+
+':
+
+HSYNC
+
+r----'
+
+HFP=OOO
+
+-\~.______
+
+(\)
+
+0
+
+~------------
+
+,;
+
+~
+0-
+
+0
+U;.
+
+o·
+
+a
+a
+()
+
+~
+~
+
+OJ
+
+a0-
+
+c
+()
+iii
+
+"'0
+
+0
+
+-<
+()
+0
+:J
+
+WOB
+
+........
+
+BCE
+
+I)J
+
+0
+
+ROB
+
+W
+~
+
+BLANK
+
+--- I~=EVEN
+.
+
+HSYNC
+
+,--
+
+I\-I _ _-....J.
+
+(\)
+....
+
+------,
+
+~
+
+~0
+
+.Q
+
+\ ~.
+
+- - - - - - - - - - - - - -
+
+OA00-=C:
+
+BLANK
+
+r~
+
+\~_________
+
+HSYNC
+
+OJ
+
+NOTES:
+1. If command execution occurs just prior to the first scan line of a character row and row table addressing mode is enabled, execution of the command is delayed by two character clocks from the timing
+illustrated.
+2. Read waveforms shown in dotted line.
+
+Figure 5. Read/Write from Cursor to Pointer Command Timing
+
+en
+
+()
+
+Z
+
+I\)
+()o.
+
+""-J
+
+::..
+
+a0c
+
+~
+en
+
+U
+CD
+()
+
+=;;
+
+o·
+
+9-
+
+()'
+::J
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+REFRESH
+RAM
+
+2674
+AVDC
+
+CPU
+
+DISPLAY ADDRESS
+
+ADR
+
+~------------~CE
+r-------------~WR
+
+PiiREa ---~CTRt1
+{ __
+BACK
+
+SCN2674
+
+DATA 1/0
+
+CTRL3
+
+BEXTr---1~--i CTRL2
+
+SYSTEM DATA BUS
+
+Figure 6, AVeC Shared or Transparent Buffer Modes
+
+~
+
+;;;-"'\ (1)
+
+PiiREa
+
+[(2-) ------------~{2_----------------.
+
+'----t~r__--+_--_+----_?c____J ________ ,
+
+(4)
+
+/1
+BLANK
+
+I,., \.<,
+
+:'
+
+I ___ J:----------~'-----------------
+
+.1/r-------H-O-R-IZ-O-N-T-AL-B-LA{2~·~K-IN-G-IN-T-E-R-VA-L-----""\\'--------- - -~~--- - - \
+.
+,-----------
+
+---_?2~
+
+DADD~~,~~~J
+
+SYSTEM ADDRESSES
+
+NOTES:
+
+1. PBREQ must be asserted prior to the rising~ of BLANK in order for sequence to begin during that blanking period.
+2. If PBREQ is negated after the next to last CCLK of the horizontal blanking interval, the next scan line will also be blanked.
+3. Accesses during vertical blank or "display off" aTe granted only at the beginning of the horizontal front porch.
+4. If TOW table addressing is -enabled, CPU access is delayed by two character clocks prior to the first scan line of each character row.
+
+Figure 7, Transparent Buffer Mode Timing
+
+February 20, 1985
+
+2·132
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+'--__+-__
+
+PBREa
+
+BAC_K____________
+
+SCN2674
+
+~ 0D---------~~-------------I-_-+_~~
+
+-- ______ J
+
+~
+
+r----
+
+IBEXi'
+
+r--------~r-------------
+
+\..-__~~-------.J
+
+(1)
+
+\---- ----~r_ - ---''..... ________ _
+
+BLANK
+
+DADD
+
+NDTE:
+1. If PBREa is negated after the next to last CCCK of the horizontal blanking interval, the next scan line will also be blanked.
+
+Figure 8. Shared Buffer Mode Timing
+
+PBRE~
+
+_______________
+
+~(-
+
+________________ •
+
+BACK~_ _ _ _ _ _ _~II~~--------_
+
+BEXT·________________~II~I-----------------
+
+1/
+
+VBLANK OR DBLANK
+BLANK
+
+~
+
+DAD
+•
+
+REFRESH
+ADDRESSES
+
+-1
+
+SYSTEM PROCESSOR HAS
+
+~
+
+a. During Vertical Blank or after 'display off' command In
+shared mode only. See figure 7 for transparent timing.
+
+L
+
+b. After 'display off and 3-state' command.
+
+Figure 9. Shared and Transparent Mode Timing
+
+February 20, 1985
+
+~ONTINUOUS BUS CONTROL
+
+DADD'\.._ _ _ _ _~i<__I--------Jr
+
+REFRESH
+
+.,
+
+2-133
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+2 X 2112
+
+ROW
+
+I-~==:E~~~£Q~~::::~REFRESH
+RAM
+
+SYSTEM DATA BUS
+
+Figure 10. Row Buffer Mode Configuration
+
+CCLK~
+
+----rT
+I
+
+BLANK
+
+BRED
+
+I
+
+~
+
+~~
+
+MBC
+
+n
+
+\JlJL!'U
+I
+
+I
+
+~
+
+(LINE 0 ONLY)
+
+U
+
+U
+
+~
+
+n
+
+1
+
+~
+
+I
+
+\
+
+NOTE:
+If row table addressing is enabled, BREQ will be asserted at the middle of the last scan line of the prior row, and MBC will be asserted at the beginning of BLANK.
+
+Figure 11. Row Buffer Mode Timing
+Row table addressing is intended primarily for
+use in conjunction with the row buffer mode
+of operation and requires no additional circuit·
+ry in that case. It may also be used with the
+independent and transparent buffer modes,
+but circuitry must be added to route the data
+from the display memory to the data bus
+inputs of the AVDC. Additionally, when not
+operating in row buffer mode, care must be
+taken to assure that the CPU does not
+attempt to access the AVDC while it is
+reading the row table. One way of preventing
+this is to latch the last line output which is
+multiplexed on DADD13 and to test this latch
+prior to reading or writing the AVDC. The
+
+February 20, 1985
+
+AVDC should only be accessed if the latch is
+low, indicating that the last line of the row is
+not active.
+Figure 13 illustrates a typical hardware implementation for use in conjunction with independent and transparent modes, and figure
+14 shows the timing for row table operation.
+
+OPERATION
+After power is applied, the AVDC will be in an
+inactive state. Two consecutive 'master reset' commands are necessary to release this
+circuitry and ready the AVDC for operation.
+Two register groups exist within the AVDC:
+
+2-134
+
+the initialization registers and the display
+control registers. The initialization registers
+select the system configuration, monitor tim·
+ing, cursor shape, display memory domain,
+pointer address, scrolling region, double
+height and width condition, and screen for·
+mat. These are loaded first and normally
+require no modification except for certain
+special visual effects. The display control
+registers specify the memory address of the
+base character (upper left corner of screen),
+the cursor position, and the spl~ screen
+addresses associated with the scrolling area
+or an alternate memory. These may require
+modification during operation.
+
+Product Specification
+
+Signetics Microprocessor Products
+
+Advanced Video Display Controller (AVDC)
+
+Initialization Registers
+
+~
+A
+
+ROW TABLE
+IN MEMORY
+
+1
+
+B
+C
+D
+E
+F
+
+1st CHAR
+
+DATATHIRD
+ROW
+
+1
+
+SSR2
+
+}}-
+
+c-
+
+}t-
+
+2nd CHAR
+
+0
+0
+0
+LAST CHAR
+
+DATAFIRST
+ROW
+
+1
+
+1st CHAR
+2nd CHAR
+
+I--
+
+0
+0
+0
+LAST CHAR
+
+SECOND
+DATA
+ROW
+
+1st CHAR
+2nd CHAR
+
+1
+
+0
+0
+0
+LAST CHAR
+
+Figure 12. Row Table Address Format
+After initial loading of the two register groups,
+the AVDC is ready to control the monitor
+screen. Prior to executing the AVDC com·
+mands which turn on the display and cursor,
+the user should load the display memory with
+the first data to be displayed. During operation, the AVDC will sequentially address the
+display memory within the limits programmed
+into its registers. The memory outputs character codes to the system character and graphics generation logic, where they are converted to the serial video stream necessary to
+display the data on the CRT. The user effects
+changes to the display by modifying the
+contents of the display memory, the AVDC
+display control and command registers, and
+the initialization registers, if required. Interrupts and status conditions generated by the
+AVDC supply the 'handshaking' information
+necessary for the CPU to effect real time
+display changes in the proper time frame if
+required.
+
+February 20, 1985
+
+There are 15 initialization registers
+(IRO -IR14) which are accessed sequentially
+via a single address. The AVDC maintains an
+internal pointer to these registers which is
+incremented after each write at this address
+until the last register (IR14) is accessed. The
+pointer then continues to point to IR14 for
+further accesses. Upon a power-on or a
+master reset command, the internal pointer is
+reset to point to the first register (IRO) of the
+initialization register group. The internal pointer can also be preset to any register of the
+group via the 'load IR address pointer' com·
+mand. These registers are write only and are
+used to specify parameters such as the
+system configuration, display format, cursor
+shape, and monitor timing. Register formats
+are shown in table 2.
+IRO[7] - Double Height/Width Enable
+When this bit is set, the value in IR14[7:6] is
+used to control the double height and width
+conditions of each character row. Assertion
+of this bit also allows IR14[7:6] to be programmed in two ways:
+1. By the CPU writing to IR14 directly.
+2. When the contents of screen start register 1 (SSR1) upper are changed, either
+by the CPU writing to this register or by
+the automatic loading of SSR 1 when
+operating in row table mode, the two
+MSBs of SSR 1 upper are copied into
+IR14[7:6]. Thus, the MSBs of each row
+table entry can be used to control double
+height and double width attributes on a
+row by row basis.
+IR14[5:4] are not active when this bit is set.
+When this bit is reset, the double height and
+width attributes operate as described in
+IR[14].
+IRO[6:3]- Scan Lines Per Character Row
+Both interlaced and non-interlaced scanning
+are supported by the AVDC. For interlaced
+mode, two different formats can be implemented, depending on the interconnection
+between the AVDC and the character generator (see IR1 [7]). This field defines the number
+of scan lines used to compose a character
+row for each technique. As scanning occurs,
+the scan line count is output on the LAO-LA3
+and ODD pins.
+IRO[2]- VSYNC/CSYNC Enable
+This bit selects either vertical sync pulses or
+composite sync pulses on the VSYNC/
+CSYNC output (pin 18). The composite sync
+waveform conforms to EIA RS170 standards,
+with the vertical interval composed of six
+
+2-135
+
+SCN2674
+
+equalizing pulses, six vertical sync pulses,
+and six more equalizing pulses.
+IRO[ 1:0] - Buller Mode Select
+Four buffer memory modes may be selectively enabled to accommodate the desired system configuration. See System Configurations.
+IR 1[7]- Interlace Enable
+Specifies interlaced or noninterlaced timing
+operation. Two modes of interlaced operation
+are available, depending on whether
+LAO - LA3 or ODD, LAO - LA2 are used as
+the line address for the character generator.
+The resulting displays are shown in figure 15.
+For 'interlaced sync' operation, the same
+information is displayed in both odd and even
+fields, resulting in enhanced readability. The
+AVDC outputs successive line numbers in
+ascending order on the LAO-LA3 lines, one
+per scan line for each field.
+The 'interlaced sync and video' format doubles the character density on the screen. The
+AVDC outputs successive line numbers in
+ascending order on the ODD and LAO - LA2
+lines, one per scan line for each field. The
+number of scan lines per character row is
+always even. Assume that the first character
+row is row 0 (even). When scanning through
+the odd field, the scan line numbers being
+displayed are odd ior both the even and odd
+character rows. When scanning through the
+even field, the scan line numbers being displayed are even for both even and odd
+character rows (see figure 15).
+IR1[6:0]- Equalizing Constant
+This field indirectly defines the horizontal
+front porch and is used internally to generate
+the equalizing pulses for the RS170 compatible CSYNC. The value for this field is the total
+number of character clocks (CCLKs) during a
+horizontal line period divided by two, minus
+two times the number of character clocks in
+the horizontal sync pulse:
+HACT + HFP + HSYNC + Hsp
+EC
+2
+2(HsYNC)
+the definition of the. individual parameters is
+illustrated in figure 16. The minimum value of
+HFP is three character clocks, four CCLK' s for
+row table addressing. Note that when using
+the 2675 CMAC, it will delay the blank pulse
+three CCLKs relative to the HSYNC pulse.
+Because of this delay, the actual HFP and
+HBP values will be different from the values
+programmed into the AVDC. The actual HFP
+will be decreased by 3 character clocks. The
+actual HBP will be increased by 3 character
+clocks.
+
+•
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+RAM
+DADD~~
+
+____________~~~~~~______________V1ADD
+
+2674
+AVDC
+DATA 110
+CCLK .......:>O-I
+BLANK 1 - - - - 1
+7474
+CURSOR
+
+CURSOR~-------------+----~
+
+00-07
+
+.."'"
+
+OEr.--------------------~
+
+~~=:::::::::::::74LS2441/'->''-=--------------=D'''IS-=P'-LA-:-Y:-:D:-:A-=T-:-A-=B''''US~-------'>£---------'\.
+
+i!l,'
+SELECT
+DECODE
+
+~
+
+Figure 13, Row Table Mode Configuration (non-Row Buffer Modes)
+IR2[7]- Row Table Mode Enable
+Assertion/negation of this bit causes the
+AVDC to begin/terminate operating in row
+table mode starting at the next character row.
+See Row Table Addressing Mode section. By
+using the split interrupt capability of the
+AVDC, this mode can be enabled and disabled on a particular character row. This
+allows a combination of row table and sequential addressing to be utilized to provide
+maximum flexibility in generating the display.
+IR2[6:3]- Horizontal Sync Pulse Width
+This field specifies the width of the HSYNC
+pulse in CCLK periods.
+IR2[2:0]- Horizontal Back Porch
+This field defines the number of CCLKs
+between the trailing edge of HSYNC and the
+trailing edge of BLANK.
+IR3[7:S]- Vertical Front Porch
+Specifies the number of scan line periods
+between the rising edges of BLANK and
+VSYNC during the vertical retrace interval.
+The vertical front porch will be extended in
+
+February 20, 1985
+
+increments of scan lines ij the ACLL input is
+low at the end of the programmed value.
+IR3[ 4:0] - Vertical Back Porch
+This field determines the number of scan line
+periods between the falling edges of the
+VSYNC and BLANK outputs.
+IR4[7]- Character Blink Rate
+Specifies the frequency for the character
+blink attribute timing. The blink rate can be
+specified as 1/64 or 1/128 of the vertical field
+rate. The timing signill has a duty cycle of
+50% and is multiplexed onto the DADD11/
+BLINK output at the faliing edge of each
+BLANK.
+IR4[6:0]- Character Rows Per Screen
+This field defines the number of character
+rows to be displayed. This value multiplied by
+the scan lines per. character row, plus the
+vertical front porch, the vertical back porch
+values, and the vertical sync pulse width is
+the vertical scan period in scan lines.
+
+2-136
+
+IRS[7:0] - Active Characters Per Row
+This field determines the number of characters to be displayed on each row of the CRT
+screen. The sum of this value, the horizontal
+front porch, the horizontal sync width, and the
+horizontal back porch is the horizontal scan
+period in CCiJ(s.
+IR8[7:4], IR6[3:0]- First and Last Scan
+Line of Cursor
+These two fields specify the height and position of the cursor on the character block. The
+'first' line is the topmost line when scanning
+from the top to the bottom of the screen. The
+value of the 'first line of cursor' must be less
+than the 'last line of cursor' value.
+IR7[7:6]- Vertical Sync Pulse Width
+This field specifies the width of the VSYNC
+pulse in scan line periods.
+IR7[S]- Cursor Blink Enable
+This bit controls whether or not the cursor
+output pin will be blinked at the selected rate
+(IR7[4Jl. The blink duty cycle for the cursor is
+50%.
+
+Product Specification
+
+Signetics Microprocessor Products
+
+Advanced Video Display Controller (AVDC)
+
+CClK
+
+SCN2674
+
+1JUU1Jl
+,
+
+1J1JlIUUU1J1JlJ
+"
+
+BLANK
+
+I_ ',
+
+LAST LINE OF ROW
+
+II,
+_.
+
+In
+
+I
+I
+
+II
+
+,I
+
+I
+
+11----
+
+HSYNCJl
+1---EC-+-2-H-S-W-C-C-L-K-.-I--=-----""I..I
+BREO
+
+I
+
+ROW BUFFER
+MODE
+
+L
+
+"III----.
+
+FIRST LINE OF ROW
+_
+....,!--~~;.;..;.;..=.;.;.....
+..... I
+
+......----"-'=;...;.;.;;..;;.;.......--' I
+
+~
+
+I
+
+SSR2
+SSR2+1
+I,
+
+MBC_ _ _ _ _ _ _ _ _ _ _ _ _ _--I
+
+REFRESH,
+DADD
+
+A
+
+LAST LINE ADDRESSES
+
+FIRST LINE ADDRESSES
+
+CURSOR
+
+DADD
+
+III " I
+
+AI
+
+FIRSTLINEADDRESSES
+
+,3.STATE
+BREO____
+TRANSPARENT
+BUFFER MODE
+
+.---n
+I
+
+BACK
+
+r--
+
+,
+
+I
+
+~I--~I
+"
+
+\3.STATEII AI
+
+i
+
+BUS REOUEST
+DURING
+FETCH CYCLE
+
+NO FETCH BUS
+,
+REOUEST
+,
+
+,
+
+I
+
+L..r
+
+(CURSOR OR POINTER ADDRESSES
+FOR DELAYED COMMANDS)
+DADD
+
+INDEPENDENT
+BUFFER MODE
+
+WDB
+
+FIRST LINE ADDRESSES
+
+u
+
+NOTES:
+A""' Multiplexed control signals (LG,DW. etc.)
+EC so Equalizing constant
+
+HSW - Horizon'" sync widlh
+
+FIgure 14. Raw Table Mode TImIng
+
+February 20, 1985
+
+2-137
+
+RDB
+
+u
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+Table 2. INITIALIZATION REGISTER BIT FORMATS
+
+BIT7
+
+BIT6
+
+HTIWD
+
+O=OFF
+1 =ON
+
+BIT7 .
+
+BIT7
+
+BUFFER MODE
+SELECT
+
+0000 = 1 LINE
+0001 = 2 LINES
+0010 = 3 LINES
+
+0000 = 2 LINES
+0001 = 4 LINES
+0010 = 6 LINES
+
+o =VSYNC
+
+00 = INDEPENDENT
+01 = TRANSPARENT
+10= SHARED
+11 = ROW
+
+..
+
+..
+
+1 =CSYNC
+
+1110=30 LINES
+1111 = UNDEFINED
+
+BIT5
+
+BIT4
+
+BIT3
+
+BITl
+
+BIT2
+
+00000000 = 1 CCLK
+00000001 = 2 CCLK
+
+..
+
+CALCULATED FROM:
+EC = 0.5(HACT + HFP + HSYNC + Hap) - 2(HSYNC)
+
+11111110 = 127 CCLK
+11111111 = 128 CCLK
+
+BIT6
+
+BITS
+
+BIT4
+
+BIT3
+
+BITl
+
+BIT2
+
+0000 = 2 CCLK
+0001 = 4 CCLK
+
+000 = NOT ALLOWED
+001 = 3 CCLK
+
+1110=30 CCLK
+1111 = 32 CCLK
+
+110 = 23 CCLK
+111 = 27 CCLK
+
+..
+
+O=OFF
+1 =ON
+
+BIT6
+
+BIT5
+
+..
+
+BIT4
+
+BIT3
+
+BIT2
+
+VERTICAL FRONT PORCH
+
+VERTICAL BACK PORCH
+
+000 = 4 SCAN LINES
+001 = 8 SCAN LINES
+
+00000 = 4 SCAN LINES
+00001 = 6 SCAN LINES
+
+110 = 28 SCAN LINES
+111 = 32 SCAN LINES
+
+11110 = 64 SCAN LINES
+11111 = 66 SCAN LINES
+
+BIT7
+
+0=1/64
+VSYNC
+1 = 1/128
+VSYNC
+
+February 20, 1985
+
+BIT6
+
+BITl
+
+BITO
+
+BIT1
+
+BITO
+
+..
+
+..
+
+CHARACTER
+BLINK
+RATE
+
+BITO
+
+HORIZONTAL BACK PORCH
+
+HORIZONTAL SYNC WIDTH
+
+IR3
+
+BITO
+
+EQUALIZING CONSTANT
+
+ROW
+TABLE
+
+BIT7
+
+BITO
+
+SYNC
+SELECT
+
+IRl
+0= NON-I NT
+1 = INTER
+
+BITl
+
+INTERLACED
+
+BIT6
+
+INTERLACE
+ENABLE
+
+IR4
+
+BIT2
+
+NON-INTERLACED
+
+1110 =15 LINES
+1111 = 16 LINES
+
+IR2
+
+BIT3
+
+BIT4
+
+SCAN LINES PER CHARACTER ROW
+
+DOUBLE
+
+IRO
+
+BIT5
+
+BIT5
+
+BIT4
+
+BIT3
+
+BIT2
+
+ACTIVE CHARACTER ROWS PER SCREEN
+00000000 = 1 ROW
+00000001 = 2 ROWS
+
+..
+
+11111110 = 127 ROWS
+11111111 = 128 ROWS
+
+2-138
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+Table 2. INITIALIZATION REGISTER BIT FORMATS (Continued)
+
+BIT7
+
+BIT6
+
+BIT5
+
+BIT4
+
+BIT3
+
+BIT2
+
+BIT1
+
+BITO
+
+BIT2
+
+BIT1
+
+BITO
+
+ACTIVE CHARACTERS PER ROW
+00000010 = 3 CHARACTERS
+00000011 = 4 CHARACTERS
+IR5
+11111110 = 255 CHARACTERS
+11111111 = 256 CHARACTERS
+
+BIT7
+
+BIT6
+
+BIT4
+
+BIT3
+
+LAST LINE OF CURSOR
+
+0000 = SCAN LINE 0
+0001 = SCAN LINE 1
+
+0000 = SCAN LINE 0
+0001 = SCAN LINE 1
+
+1110 = SCAN LINE 14
+1111=SCAN LINE 15
+
+1110 = SCAN LINE 14
+1111 = SCAN LINE 15
+
+··
+
+··
+
+IR6
+
+BIT7
+
+BIT6
+
+VSYNC WIDTH
+
+IR7
+
+BIT5
+
+FIRST LINE OF CURSOR
+
+BIT5
+
+BIT4
+
+CURSOR
+BLINK
+
+CURSOR
+RATE
+
+O=OFF
+1 =ON
+
+0=1/32
+1 = 1/64
+
+BIT5
+
+BIT4
+
+00= 3 SCAN LN
+01 = 1 SCAN LN
+10 = 5 SCAN LN
+11 = 7 SCAN LN
+
+BIT7
+
+BIT6
+
+BIT3
+
+BIT2
+
+Bin
+
+BITO
+
+UNDERLINE POSITION
+0000 = SCAN LINE 0
+0001 = SCAN LINE 1
+
+··
+
+1110 = SCAN LINE 14
+1111 = SCAN LINE 15
+
+BIT3
+
+BIT2
+
+BIT1
+
+BITO
+
+DISPLAY BUFFER FIRST ADDRESS LSB'S
+H'OOO = 0
+H'001 = 1
+NOTE: MSB'S ARE IN
+IR9[3:0]
+
+IR8
+H'FFE = 4,094
+H'FFF = 4,095
+
+BIT7
+
+BIT6
+
+BIT5
+
+BIT4
+
+DISPLAY BUFFER LAST ADDRESS
+
+BIT3
+
+BIT2
+
+Bin
+
+0000 = 1,023
+0001 = 2,047
+IR9
+
+··
+
+SEE IR8
+
+1110 = 15,359
+1111 = 16,383
+
+February 20, 1985
+
+BITO
+
+DISPLAY BUFFER FIRST ADDRESS MSB'S
+
+2-139
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+Table 2. INITIALIZATION REGISTER BIT FORMATS (Continued)
+
+BIT7
+
+BITS
+
+BIT5
+
+BIT4
+
+BIT3
+
+BIT2
+
+BIT1
+
+BITO
+
+BIT2
+
+BIT1
+
+BITO
+
+BIT2
+
+BIT1
+
+BITO
+
+BIT2
+
+BIT1
+
+BITO
+
+BIT2
+
+BIT1
+
+BITO
+
+DISPLAY POINTER ADDRESS LOWER
+SEE IR11
+IR10
+
+BIT7
+
+BIT6
+
+LZ DOWN
+
+LZ UP
+
+O=OFF
+1 =ON
+
+O=OFF
+1 =ON
+
+BIT5
+
+BIT4
+
+BIT3
+
+DISPLAY POINTER ADDRESS UPPER
+H'OOOO' = 0
+H'0001' = 1
+
+..
+
+IR11
+
+H'3FFF' = 16,383
+
+BIT7
+
+BIT6
+
+BIT5
+
+BIT4
+
+IR12
+
+BIT3
+SPLIT REGISTER 1
+
+SCROLL
+START
+
+00000000 = ROW 1
+00000001 = ROW 2
+
+O=OFF
+1 =ON
+
+··
+
+11111111 = ROW 128
+
+BIT7
+
+BIT6
+
+BIT5
+
+BIT4
+
+IR13
+
+BIT3
+SPLIT REGISTER 2
+
+SCROLL
+END
+
+00000000 = ROW 1
+00000001 = ROW 2
+
+O=OFF
+1 =ON
+
+··
+
+11111111 = ROW 128
+
+BIT7
+
+IR14
+
+BIT6
+
+BIT5
+
+BIT4
+
+BIT3
+
+DOUBLE 1
+
+DOUBLE 2
+
+LINES TO SCROLL
+
+00= NORMAL
+01 = DOUBLE WIDTH
+10 = DB WD & TOPS
+11 = DB WD & BOTS
+
+00 = NORMAL
+01 = DOUBLE WIDTH
+10 = DB WD & TOPS
+11=DB WD & BOTS
+
+0000 = 1
+0001 = 2
+
+SCAN LINE 0
+SCAN LINE 1
+
+1110=15
+1111 = 16
+
+SCAN LINE 14
+SCAN LINE 15
+
+February 20, 1985
+
+2-140
+
+..
+
+..
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+LSB
+
+l-~:~=ILSB
+
+r------------------------------------.------- - , :
+MS
+LINE ADDRESS
+TO CHAR GEN
+
+~:::::: ~
+
+LINE ADDRESS
+TO CHAR GEN
+
+c
+c
+o
+
+LINE ADDRESS
+TO CHAR GEN
+
+ill>
+
+w
+
+ill> cc
+
+7
+
+w 0
+
+1
+
+2
+
+9SCAN
+LlNESI
+ROW
+
+0--------1 -e-e-e-e-e--
+
+-e-e-e-e-e-----
+
+-e-------2 - 0-------3 e--------
+
+- e --------------
+
+3
+
+-e--------
+
+4
+
+-e-e-e------
+
+2
+
+18SCAN
+L1NESI
+
+ROW
+
+4
+
+1-00000-----
+
+2
+10SCAN [
+LlNESJ
+ROW
+
+6
+
+4 -0-0-0------
+
+8
+
+6
+
+-e--------
+
+7
+
+-e-.-e-e-e---
+
+7
+
+-
+
+e ------------
+
+3-0 - - - - - - - 4
+
+3 - 0--------
+
+-e-e-e------
+
+-e-------5 -0-------6 -e--------
+
+s -e--------
+
+0
+
+1 -0-0-0-0-0--
+
+-eee~e=====
+5-0-
+
+-e------7-00000-------
+
+5
+
+1
+
+7 -0-0-0-0-0--
+
+00000
+
+e
+
+6 -0--------
+
+-e-e-e-e-e--
+
+3-0-------4
+
+e e e ----------
+
+-
+
+5- 0 -------------
+
+0---------
+
+1
+
+-e-e-e-e-e---
+
+2
+
+-e--------
+
+1 -0-.-.-0-8-1 -0-0-0-0-0-2
+
+-e-------
+
+3
+
+4
+
+-e-e-e------
+
+-e-------6 -e------5
+
+7
+
+-e-e-e-e-e - - -
+
+4
+
+-e-------2 -0--------e-------
+
+~~~====:::
+
+6
+
+- 7-00000
+e
+
+2
+
+-
+
+1
+
+e --------------
+
+3 -0---------
+
+4
+
+-eee------
+
+4 - 0 - 0 - 0 ----------
+
+6
+
+-e--------
+
+-
+
+e- e - e-----------
+
+-e-------5 -0-------6 -e-------6 -0--------
+
+5 - 0 ------------7-00000-----
+
+5
+
+7
+
+00000
+
+3 - 0 ---------------
+
+-e-e-e-e-e-7 -0-0-0-0-0---
+
+1-00000------
+
+e ------------
+
+2
+
+-
+
+4
+
+-
+
+6
+
+-e--------
+
+3-0 - - - - - - - -
+
+e e e----------
+
+5-0--------
+
+NON INTERLACED
+
+IRO=1000; TOTAL LlNESJROW=9
+
+INTERLACED SYNC
+IRO= 1000; TOTAL LINES/ROW = 18
+
+INTERLACED SYNC AND VIDEO
+IRO=0100; TOTAL LlNES/ROW=10
+
+Figure 15. Interlaced Display Modes
+IR7(4) - Cursor Blink Rate
+The cursor blink rate can be specified at 1/32
+or 1/64 of the vertical scan frequency. Blink
+is effective only if blink is enabled by IR7[5].
+IR7[3:0]- Underline Position
+This field defines which scan line of the
+character row will be used for the underline
+attribute by the 2675 CMAC. The timing signal
+
+February 20, 1985
+
+is multiplexed onto the DADD10/UL output
+during the falling edge of BLANK.
+IR9[3:0], IR8[7:0]- Display Buffer First
+Address
+IR9[7:4]- Display Buffer Last Address
+These two fields define the area within the
+buffer memory where the display data will
+reside. When the data at the 'display buffer
+last address' is displayed, the AVDC will
+
+2-141
+
+wraparound and obtain the data to be displayed at the next screen position from the
+'display buffer first address'. If 'last address'
+is the end of a character row and a new
+screen start address has been loaded into
+the screen start register, or if 'last address' is
+the last character position of the screen, the
+next data is obtained from the address contained in the screen start register.
+
+•
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+~
+
+___________ CH~~~OW ____________~
+
+r-----,
+
+HBLANK~
+
+r-
+
+SCN2674
+
+~----,
+
+I
+
+--l I---lIlL.._____________. .I
+. IL.._ __
+
+--j
+
+FRONTPORCH(IR1)
+
+BACKPORCH(IR2)
+
+HSYNC _ _
+
+r-
+
+-j
+VBLANK
+
+HSYNC (IR2) CHAR ROWS/SCREEN (IRO) --------1
+
+~AN
+
+LINES PER ROW (IRO)
+
+L
+
+~r----------'
+
+--j
+I-r
+--lnL-._______________----JnL..____
+
+--j
+
+BACK PORCH (IRJ)
+
+FRONT PORCH (IRJ)
+
+VSYNC _ _ _
+
+---j
+
+r
+
+VSYNC (IR7)
+EOUALIZING
+CONSTANT
+
+LINES/ROW
+IRl
+
+IRO
+HSYNC
+WIDTH
+
+HBACK
+PORCH
+
+VFRONT
+PORCH
+
+VSYNC
+WIDTH
+
+VBACK
+PORCH
+
+r-'-I
+
+IR2
+
+II
+
+IR3
+
+CHAR ROWs/SCREEN
+IRO
+
+IR7
+
+II I I I I I
+
+CHARACTERS PER ROW
+IRS
+
+Figure 16. Horizontal and Vertical Timing
+Note that there is no restriction in displaying
+data from other areas of the addressable
+memory. Normally, the area between these
+two bounds is used for data which can be
+overwritten (e.g., as a result of scrolling),
+while data that is not to be overwritten would
+be contained outside these bounds and accessed by means of the automatic split
+screen or split screen interrupt feature of the
+AVDC.
+IR10[7:0] - Display Pointer Address
+Lower
+IRll[5:0] - Display Pointer Address
+Upper
+These two fields define a buffer memory
+address for AVDC controlled accesses in
+response to 'read/write at pointer' commands. They also define the last buffer memory address to be written for the 'write from
+cursor to pointer' command.
+In the independent mode, the RDFLG bit of
+the status register should be checked for the
+ready state (bit 5 equal to a logic one) before
+writing to the display pointer address registers. Checking the status register will prevent
+the pointer address from being changed while
+a delayed command (e.g. write from cursor to
+pointer) is still being executed.
+February 20, 1985
+
+IR11[7] - Scan Line Zero During Scroll
+Down
+During a scroll down operation, the new
+character row will appear at the top of the
+scrolling region. If this bit is set (logic one),
+the scan line count pins (LAO through LA3)
+will be forced to zero for every scan line of
+the partial row. If the character generator
+provides blanks for scan line zero, the new
+row being scrolled into the screen will be
+blanked. This feature can be used to blank
+the new row to give the CPU time to load the
+new data in the display buffer. When this bit is
+set to a logic zero, the new data will be
+displayed.
+IRll [6] - Scan Line Zero During Scroll
+Up
+During a scroll up operation, the new character row will appear at the bottom of the
+scrolling region. If this bit is set (logic one),
+the scan line count pins (LAO through LA3)
+will be forced to zero for every scan line of
+the partial row. If the character generator
+provides blanks for scan line zero, the new
+row being scrolled into the screen will be
+blanked. This feature can be used to blank
+the new row to give the CPU time to load the
+new data in the display buffer. When this bit is
+
+2-142
+
+set to a logic zero, the new data will be
+displayed.
+IRI2[7] - Scroll Start
+This bit is asserted when soft scroll is to take
+place. The scrolling area begins at the row
+specified in split register 1 (IRI2[6:0]). If set,
+the first row to scroll scan line count will be
+reduced by the value in the lines to scroll
+register (IRI4[3:0J). The scan line count of
+this row will start at the programmed offset
+value. When this bit is asserted, scroll end
+IRI3[7] must be set before split 2.
+IR 12[6:0] - Split Register 1
+Split register 1 can be used to provide special
+screen effects such as soft (scan line by scan
+line) scrolling, double height/width rows, or to
+change the normal addressing sequence of
+the display memory. The contents of this field
+are compared, in real time, to the current row
+number. Upon a match, the AVDC sets the
+split screen 1 status bit, and issues an interrupt request if so programmed. The status
+change/interrupt request is made at the beginning of scan line zero of the split screen
+character row. If enabled by the SPL 1 bit of
+screen start register 2, an automatic split
+screen to the address specified in screen
+start register 2 will be made for the designated character row. During a scroll operation,
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+this field defines the first character row of the
+scrolling area.
+IR13[7j- Scroll End
+This field specifies that the row programmed
+in split register 2 (IR13[6:0]) is to be the last
+scrolling row of the scrolling area. Note that
+this bit must be asserted for a valid row only
+when the scroll start bit IR12[7] is also
+asserted.
+IR13[6:0j- Split Register 2
+This field is similar to the split register 1 field
+except for the following:
+1. Split screen 2 status bit is set.
+2. During a scroll operation, this field defines the last character row of the scrolling area. This row will be followed by a
+partial row. The LTSR (IR14) value replaces the normal scan lines/row value
+for the partial row, thus keeping the total
+scan lines/screen the same.
+3. If enabled by the SPL2 bit of screen start
+register 2, an automatic split to the address contained in screen start register 2
+will occur in one of two ways: a) If not
+scrolling an automatic split will occur for
+the next character row. b) If scrolling, the
+automatic split will occur after the partial
+row being scrolled onto or off the screen.
+4. The specified double width and height
+conditions (IR14) are also asserted in two
+possible ways: a) Automatic split will
+assert the programmed condition for the
+current row. b) During soft scroll operation the programmed conditions are asserted for the partial row scrolling onto or
+off the screen.
+IR 14[7:6j- Double 1
+This field specifies the conditions (double
+width/height or normal) of the row designated
+in split register 1 (IR12[6:0]). When double
+height tops or bottoms has been specified,
+the AVDC will automatically toggle between
+tops and bottoms until another split 1 or 2
+occurs which changes the double height!
+width condition. If a double height tops row is
+specified, the scan line count will start at zero
+and increment the scan line count every other
+scan line. If a double height bottom row is
+specified, the AVDC will start at one half the
+normal scan line total. If double width is
+specified, the AVDC will assert the DADD9/
+OW output at the falling edge of blank. This
+condition will also remain active until the next
+split 1 or 2. When IRO[7] = 1, the values
+written into bits 7 and 6 of screen start 1
+upper will also be written into IR14[7:6] and
+the automatic toggling between tops and
+bottoms is disabled.
+The AVDC still addresses the RAMs on a
+single width character basis. The clock rate of
+the AVDC does not change. The display
+RAMs must have data as if two Single wide
+characters are to be displayed. The first data
+February 20, 1985
+
+bits addressed by the AVDC will specify the
+double wide character. The next data bits
+addressed are not displayed. The 2675
+CMAC will ignore the second clock cycle data
+when the ADOUBLE pin is high.
+IR14[5:4j- Double 2
+This field specifies the conditions (double
+width/height or normal) of the row designated
+in split register 2 (IR 13[6:0]). Not used when
+IRO[7] = 1.
+IR14[3:0j- Lines To Scroll
+This field defines the scan line increment to
+be used during a soft scroll operation. These
+4 bits control the scroll rate. When smooth
+scrolling up by scan line increments of one,
+the initial value is 0000 (scan line 0) and is
+increased every vertical frame according to
+the number of lines per character row. When
+smooth scrolling down by scan line increments of one, the initial value is 1110 hex
+(scan line 14, assuming 15 scan lines per
+character row) and is decreased by one every
+vertical frame. This value will only be used
+when scroll start (IR12[7]) and scroll end
+(IR13[7]) are enabled.
+Timing Considerations
+Normally, the contents of the initialization
+registers are not changed during normal operation. However, this may be necessary to
+implement special display features such as
+multiple cursors and horizontal scrolling. Table 3 describes timing details for these registers which should be considered when implementing these features.
+
+Display Control Registers
+There are seven registers in this group, each
+with an individual address. Their formats are
+illustrated in table 4. The command register is
+used to invoke one of 19 possible AVDC
+commands as described in the COMMANDS
+section of this data sheet. The remaining
+registers in the group store address values
+which specify the cursor location, the location
+of the first character to be displayed on the
+screen, and any split screen address locations. The user initializes these registers after
+powering on the system and changes their
+values to control the data which is displayed.
+Screen Start Registers 1 and 2
+The screen start "1 registers contain the
+address of the first character of the first row
+(upper left corner of the active display). At the
+beginning of the first scan line of the first row,
+this address is transferred to the row start
+register (RSR) and into the memory address
+counter (MAC). The counter is then advanced
+sequentially at the character clock rate for the
+number of times programmed into the active
+characters per row register (IR5), thus reaching the address of the last character of the
+row plus one. At the beginning of each
+subsequent scan line of the first row, the
+MAC is reloaded from the RSR and the above
+
+2-143
+
+SCN2674
+
+sequence is repeated. At the end of the last
+scan line of the first row, the contents of the
+MAC are loaded into the RSR to serve as the
+starting memory address for the second character row. This process is repeated for the
+programmed number of rows per screen.
+Thus, the data in the display memory is
+displayed sequentially starting from the address contained in the screen start register.
+After the ensuing vertical retrace interval, the
+contents of the screen start registers are
+reloaded into the RSR and MAC, and the
+process is repeated.
+During vertical blanking, the address counter
+operation is modified by stopping the automatic load of the contents of the RSR into the
+counter, thereby allowing the address outputs
+to free-run. This allows dynamic memory
+refresh to occur during the vertical retrace
+interval. The refresh addressing starts at the
+last address displayed on the screen and
+increments by one for each character clock
+during the retrace interval. If the display buffer
+last address is encountered, wraparound will
+occur. Refreshing will continue from the display buffer first address. In the independent
+mode, the refresh addressing will occur if no
+delayed commands are being executed. In
+the transparent and shared modes, refresh
+will occur during the blanking interval unless
+the CPU has control of the display address
+bus. In the row buffer mode, refresh will occur
+during all blanking intervals except for the first
+character clock time in the BLANK after the
+first scan line (scan line 0) of a character row.
+The sequential addressing operation described above will be modified upon the
+occurrence of the following:
+1. After reaching the 'display buffer last
+address.'
+2. Rewriting the contents of the screen start
+1 registers.
+3. Setting the split register 1 or split register
+2 bits of screen start register 2 upper.
+4. Enabling the row table addressing mode.
+First, if during the incrementing of the memory address counter the 'display buffer last
+address' (IR9[7:4]) is reached, the MAC will
+be loaded from the 'display buffer first address' register (lR9[3:0] and IR8[7:0]) at the
+next character clock. Sequential operation
+will then resume starting from this address.
+This wraparound operation allows portions of
+the display buffer to be used for purposes
+other than storage of displayable data and is
+completely automatic without any CPU intervention (see figure 17a).
+Second, if the contents of screen start register 1 (upper, lower, or both) are changed
+during any character row (e.g., row 'n'), the
+starting address of the next character row
+(row 'n + 1') will be the new value of the
+screen start register and addreSSing will con-
+
+Product Specification
+
+Signetics Microprocessor Products
+
+Advanced Video Display Controller (AVDC)
+
+tinue sequentially from there. This allows
+features such as split screen operation, par·
+tial scroll, or status line display to be imple·
+mented. The split screen interrupt feature of
+the AVDC is useful in controlling the CPU
+initiated operations. Note that in order to
+obtain the correct screen display, screen start
+register 1 must be reloaded with the original
+(origin of display) value prior to the end of the
+vertical retrace. See figure 17b.
+The screen start two registers contain a 14·bit
+display address. The SSR2 address is implemented on the occurrence of item 3 above. If
+bit 6 of SSR2 upper is set, the SSR2 contents
+will be automatically loaded into the RSR at
+the beginning of the first scan line of the row
+designated by split register 1 (IR12[6:0]). If bit
+7 of SSR2 upper is set, the SSR2 contents
+will be automatically loaded into the RSR at
+the beginning of the first scan line of the row
+specified by split register 2 (IR13[6:0]). SPL 1
+and SPL2 are write only bits and will read as
+zero when reading screen start register 2. If
+these bits are not used, they should be set to
+zeros after power up.
+Lastly, when row table addressing mode is
+enabled, the first address of the row table is
+designated in SSR2. The AVDC fetches the
+next row's starting address from the table
+during the blanking interval prior to the first
+scan line of each character row and loads it
+into SSR 1 for use as the starting address of
+the next row. Since the contents of SSR2
+change as the table entries are fetched, it
+must be re-initialized to point to the first table
+entry during each vertical retrace interval.
+The values in the two MSBs of SSR 1 upper
+are multiplexed onto the DADD1/DADD14
+and DADD2/DADD15 outputs during the failing edge of BLANK. If IRO[7] = 0, these two
+bits act as memory page select bits which
+may be used to extend the display memory
+addressing range of the AVDC up to 64K. In
+that case, these two bits act as a two-bit
+counter which is incremented each time that
+'wraparound' occurs (see above). Note that
+the counter is incremented at the falling edge
+of BLANK and that for proper display operation the wraparound address should be programmed to occur at the last character position of a row. Also, the first address accessed
+
+February 20, 1985
+
+SCN2674
+
+Table 3. TIMING CONSIDERATIONS
+TIMING CONSIDERATIONS
+
+PARAMETER
+
+First line of cursor
+Last line of cursor
+Underline line
+
+These parameters must be established at a
+minimum of two character times prior to their
+occurrence
+
+Double height character rows
+Double width character rows
+Rows to scroll
+
+Set/reset prior to the row specified in split 1
+or 2 registers
+
+Cursor blink
+Cursor blink rate
+Character blink rate
+
+New values become effective within one field
+after values are changed
+
+Split register 1
+Split register 2
+
+Change anytime prior to line zero of desired
+row
+
+Character rows per screen
+
+Change only during vertical blanking period
+
+Vertical front porch
+
+Change prior to first line of VFP
+
+Vertical back porch
+
+Change prior to fourth line after VSYNC
+
+Screen start register 1
+Row table mode enable
+
+Change prior to the horizontal blanking
+interval of the last line of character row
+before row where new value is to be used
+
+in the new page will be the address contained
+in the display buffer first address register
+(IR9[3:0] and IR8[7:0j). DADD14 and
+DADD15 should only be used in the bit
+mapped graphics mode.
+
+cursor address from being changed while a
+cursor delayed command (e.g., write from
+cursor to pointer) is still being executed.
+
+Interrupt/Status Registers
+
+Cursor Address Registers
+The contents of these registers define the
+buffer memory address of the cursor. The
+cursor output will be asserted when the
+memory address counter matches the value
+of the cursor address registers for the scan
+lines specified in IR6. The cursor address
+registers can be read or written by the CPU or
+incremented via the 'increment cursor address' command. In independent buffer
+mode, these registers define a buffer memory
+address for AVDC controlled access in response to 'read/write at cursor with/without
+increment' commands, or the first address to
+be used in executing the 'write from cursor to
+pointer' command.
+
+The interrupt and status registers provide
+information to the CPU to allow it to interact
+with the AVDC to effect desired changes that
+implement various display operations. The
+interrupt register provides information on five
+possible interrupting conditions, as shown in
+Table 5. These conditions can be selectively
+enabled or disabled (masked) from causing
+interrupts by certain AVDC commands. An
+interrupt condition which is enabled (mask bit
+equal to one) will cause the INTR output to be
+asserted and will cause the corresponding bit
+in the interrupt register to be set-upon the
+occurrence of the interrupting condition. An
+interrupt condition which is disabled (mask bit
+equal to zero) has no effect on either the
+INTR output or the interrupt register.
+
+In the independent mode, the RDFLG bit of
+the status register should be checked for the
+ready state (bit 5 equal to a logic one) before
+writing to the cursor address registers.
+Checking the status register will prevent the
+
+The status register provides six bits of status
+information: the five possible interrupting conditions plus the RDFLG bit. For this register,
+however, the contents are not affected by the
+state of the mask bits.
+
+2-144
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+Table 4. DISPLAY CONTROL REGISTER BIT FORMATS
+BIT7
+
+BIT6
+
+BITS
+
+BIT4
+
+BIT3
+
+BIT2
+
+BITI
+
+BITO
+
+COMMAND CODE
+SEE COMMANDS SECTION FOR COMMAND CODES
+
+COMMAND REGISTERS (WRITE ONLY)
+BIT7
+
+BIT6
+
+BITS
+
+BIT4
+
+BIT3
+
+BIT2
+
+BIT 1
+
+BITO
+
+BIT7
+
+BIT6
+
+Not used
+
+BITS
+
+BIT4
+
+BIT3
+
+BIT2
+
+BITI
+
+BITO
+
+LOWER REGISTER (LBS's)
+
+UPPER REGISTER
+
+H'OOOO' = 0
+H'OOOI' = 1
+
+MSB's
+
+Note: MSB's are In
+Upper Register [S:O]
+
+THRU
+H'3FFE' = 16,382
+H'3FFF' = 16,383
+NOTE:
+1. Bits 7 and 6 of upper register are not used in the cursor address register.
+
+CURSOR ADDRESS REGISTERS (READ AND WRITE)
+BIT7
+
+BIT6
+
+BITS
+
+BIT4
+
+BIT3
+
+BIT2
+
+BIT 1
+
+BIT7
+
+BITO
+
+BIT6
+
+UPPER REGISTER
+DADDIS
+
+DADD14
+
+BITS
+
+BIT4
+
+BIT3
+
+BIT2
+
+Bin
+
+BITO
+
+LOWER REGISTER (LSB)
+H'OOOO' =0
+H'OOOI' = 1
+THRU
+H'3FFE' = 16,382
+H'3FFF' = 16,383
+
+MSB's
+
+NOTE: MSB's ARE IN
+UPPER REGISTER [S:O]
+
+SCREEN START 1 REGISTERS (READ AND WRITE)
+NOTES:
+2. Bits 7 and 6 of upper register are always zero when read by the CPU.
+3. When IRO(7) = 1, the values written into bits 7 and 6 of screen start 1 upper will also be written into IRI4(7:6) to control the double width and
+double height attributes of the display as follows:
+
+Z II
+0
+0
+
+0
+1
+0
+1
+
+BIT7
+
+Attribute
+None
+Double width only
+Double width and double
+Double width and double
+
+BIT6
+
+BITS
+
+BIT4
+
+BIT3
+
+BIT2
+
+Bin
+
+BITO
+
+BIT7
+
+UPPER REGISTER
+SPL2
+O=OFF
+1 =ON
+
+SPLI
+O=OFF
+I=ON
+
+BIT6
+
+BIT5
+
+BIT4
+
+H'OOOO' = 0
+H'OOOI' = 1
+THRU
+H'3FFE' = 16,382
+H'3FFF' = 16,383
+
+MSB's
+
+SCREEN START 2 REGISTERS (READ AND WRITE)
+NOTES:
+1. Bit 7 and bit 6 are always zero when read by CPU.
+2. These bits should be set to zero after power up by the user.
+
+February 20, 1985
+
+BIT3
+
+BIT2
+
+BITI
+
+BITO
+
+LOWER REGISTER
+
+2-145
+
+NOTE: MSB's ARE IN
+UPPER REGISTER [5:0]
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+~~~~~~~ BOTTOM OF SCREEN"
+
+SCN2674
+
+DISPLAY BUFFER START
+
+p.::.:=.::.::.:=.::.::.:=q
+
+SCREEN START- 1<-0,"",,,,,,,,,,,<""""<"-,--<""""<.....-1
+
+•
+
+MONITOR
+DISPLAY
+
+1-"-""-'-"-""-'''''>''''>'''''>--1- DISPLAY BUFFER END
+
+16K ' - -_ _ _ _ _-'
+MEMORY
+(a) DISPLAY MEMORY WRAPAROUND
+
+~~28~~28~
+
+-
+
+DISPLAY BUFFER START
+
+SCREEN START 1"
+
+I""=====;.:"q - BOTTOM OF SCREEN
+m====>77:'77l
+
+SCREEN START 2 -
+
+h,""""""",=--"",,,,,=--,,~
+
+~~"--'>..~'--"--"-''''--'j -
+
+MONITOR
+DISPLAY
+
+DISPLAY BUFFER END
+
+16K L.._ _ _ _ _---'
+MEMORY
+(b) DISPLAY MEMORY SPLIT SCREEN WITH WRAPAROUND
+
+Figure 17. Display Addressing Operation
+
+Table 5. INTERRUPT AND STATUS REGISTER BIT FORMATS
+BIT7
+
+BIT6
+
+I
+
+NOT USED
+ALWAYS rAD AS 0
+
+BIT5
+
+BIT4
+
+BIT3
+
+BIT2
+
+BIT1
+
+BITO
+
+RDFLG
+
+VBLANK
+
+LINE
+ZERO
+
+SPLIT 1
+
+READY
+
+SPLIT 2
+
+O=BUSY
+1 = READY
+
+O=NO
+1 = YES
+
+O=NO
+1 = YES
+
+O=NO
+1 =YES
+
+0= BUSY
+1 = READY
+
+O=NO
+1 = YES
+
+.
+
+• Status register only. Always 0 when reading interrupt register.
+
+February 20, 1985
+
+2-146
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+Descriptions of each interrupt/status register
+bit follow. Unless otherwise indicated, a bit,
+once set, will remain set until reset by the
+CPU by issuing a 'reset interrupt/status bits'
+command. The bits are also reset by a
+'master reset' command and upon power-up.
+Sr[5]- RDFLG
+This bit is present in the status register only.
+A zero indicates that the AVDC is currently
+executing the previously issued delayed command. A one indicates that the AVDC is ready
+to accept a new delayed command. This bit is
+set to a one upon a master reset.
+IISR[ 4]- VBLANK
+Indicates the beginning of a vertical blanking
+interval. Set to one at the beginning of the
+first scan line of the vertical front porch.
+I/SR[3]- Line Zero
+Set to one at the beginning of the first scan
+line (line 0) of each active character row.
+I/SR[2] - Split Screen 1
+This bit is set when a match occurs between
+the current character row number and the
+value contained in split register 1, IR12[6:0].
+The equality condition is only checked at the
+beginning of line zero of each character row.
+I/SR[1]- Ready
+The delayed commands affect the display
+and may require the AVDC to wait for a
+blanking interval before enacting the command. This bit is set to one when execution of
+a delayed command has been completed. No
+other delayed command should be invoked
+until the prior delayed command is completed. This bit is set to a zero upon a master
+reset.
+I/SR[O]- Split Screen 2
+This bit is set when a match occurs between
+the current character row number and the
+value contained in split register 2 (IR13[6:0])
+when you are not scrolling. It is set for the
+value contained in (split screen register 2) + 1
+when scrolling.
+
+COMMANDS
+The AVDC commands are divided into two
+classes: the instantaneous commands which
+are executed immediately after they are invoked, and the delayed commands which
+may need to wait for a blanking interval prior
+to their execution. Command formats are
+shown in table 6. The commands are asserted by performing a write operation to the
+command register with the appropriate bit
+pattern as the data byte.
+
+Instantaneous Commands
+The instantaneous commands are executed
+immediately after the trailing edge of the WR
+pulse during which the command is issued.
+These commands do not affect the state of
+February 20, 1985
+
+SCN2674
+
+the RDFLG or READY interrupt/status bits
+and can be invoked at any time.
+
+row by 64 characters with 8 dots per character.
+
+Master Reset
+This command initializes the AVDC and can
+be invoked at any time to return the AVDC to
+its initial state. Upon power-up, two successive master reset commands must be applied
+to release the AVDC's internal power on
+circuits. In transparent and shared buffer
+modes, the CNTRL1 input must be high when
+the command is issued. The command causes the following:
+1. VSYNC and HSYNC are driven low for
+the duration of the command and BLANK
+goes high. After command completion,
+HSYNC and VSYNC will begin operation
+and BLANK will remain high until a 'display on' command is received.
+2. The interrupt and status bits and masks
+are set to zero, except for the RDFLG
+flag which is set to a one.
+3. The row buffer mode, cursor-off, displayoff, and the line graphics disable states
+are set.
+4. The initialization register pointer is set to
+address IRa.
+5. IR2[7] is reset.
+
+In the graphics mode, SSR1 should only be
+updated during the last scan line of the
+defined 'character row.'
+
+Load IR Address
+This command is used to preset the initialization register pointer with the value 'V' defined
+by 03 - DO. Allowable values are a to 14.
+Enable Graphics
+After invoking this command, the AVDC will
+increment the MAC to the next consecutive
+memory address for each scan line even if
+more than one scan line per row is programmed. In other words, each scan line
+begins with a consecutive address from the
+last displayed address of the previous scan
+line. This mode can be used for bit-mapped
+graphics where each location in the display
+buffer within the defined area contains the bit
+pattern to be displayed. The graphics mode
+will be enabled on the next character row
+after the 'graphics enable' command has
+been executed. This allows the user to enter
+and exit graphics mode on character row
+boundaries.
+To perform split screen operations while in
+graphics mode use SSR2 only.
+DADDO/LG is asserted during the trailing
+edge of BLANK for each scan line while this
+mode is active.
+The AVDC allows up to 128 character rows
+(initialization register 4) by 256 characters
+(initialization register 5). For a higher resolution bit mapped screen, the AVDC is programmed as if there are characters and
+character rows. For example, screen size of
+240 x 512 pixels is possible by programming
+the AVDC for 20 rows with 12 scan lines per
+
+2-147
+
+The bit mapped graphics mode will work only
+in the independent and transparent modes.
+Row table addressing will be available as an
+option with the graphics mode in version T of
+the AVDC.
+Disable Graphics
+Normal addressing resumes at the next row
+boundary.
+Display Off
+Asserts the BLANK output. The DADDO
+through DADD13 display address bus outputs
+can be optionally placed in the three-state
+condition by setting bit 2 to a '1' when
+invoking the command.
+Display On
+Restores normal blanking operation either at
+the beginning of the next field (bit 2 = 1) or at
+the beginning of the next scan line (bit 2 = 0).
+Also returns the DADDO - DADD13 drivers to
+their active state.
+Cursor Off
+Disables cursor operation. Cursor output is
+placed in the low state.
+Cursor On
+Enables normal cursor operation.
+Reset Interrupt/Status Bits
+This command resets the designated bits in
+the interrupt and status registers. The bit
+positions correspond to the bit positions in
+the registers:
+Bit a - Split 2
+Bit 1 - Ready
+Bit 2 - Split 1
+Bit 3 - Line zero
+Bit 4 - Vertical blank
+Disable Interrupts
+Sets .the interrupt mask to zeros for the
+designated conditions, thus disabling these
+conditions from being set in the interrupt
+register and asserting the INTR output. Bit
+pOSition correspondence is as above.
+Enable Interrupts
+This command writes the associated interrupt
+mask bits to a one. This enables the corresponding conditions to be set in the interrupt
+register and asserts the INTR output. Bit
+position correspondence is as above.
+
+Delayed Commands
+This group of commands is utilized for the
+independent buffer mode of operation, although the 'increment cursor' command can
+also be used in other modes. With the excep-
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+Table 6.
+07
+
+06
+
+AVDC COMMAND FORMATS
+05
+
+04
+
+03
+
+02
+
+01
+
+DO
+
+COMMAND
+
+Master reset
+Load IR pointer with value V
+(V=O to 14)
+Disable graphics
+Enable graphics
+Display off. Float DADD bus if N = 1
+Display on: Next field (N = 1) or scan
+line (N = 0)
+Cursor off
+Cursor on
+Reset interrupt/status: Bit reset
+where N = 1
+Disable interrupt: Disable where
+N= 1
+Enable interrupt: Enables interrupts
+where N = 1
+
+Instantaneous Commands:
+0
+0
+
+0
+0
+
+0
+0
+
+0
+1
+
+0
+V
+
+0
+V
+
+0
+V
+
+0
+V
+
+0
+0
+0
+0
+
+0
+0
+0
+0
+
+1
+1
+1
+1
+
+d
+d
+d
+d
+
+d
+d
+1
+1
+
+d
+d
+N
+N
+
+1
+1
+d
+d
+
+01
+12
+01
+12
+
+0
+0
+0
+
+0
+0
+1
+
+1
+1
+0
+
+1
+1
+N
+
+d
+d
+N
+
+d
+d
+N
+
+d
+d
+N
+
+01
+12
+N
+
+1
+
+0
+
+0
+
+N
+
+N
+
+N
+
+N
+
+N
+
+0
+
+1
+
+1
+
+N
+
+N
+
+N
+
+N
+
+N
+
+V
+B
+
+L
+Z
+
+S
+
+S
+
+P
+1
+
+R
+D
+Y
+
+Delayed Commands:
+
+Hex
+
+1
+1
+1
+1
+1
+1
+
+0
+0
+0
+0
+0
+0
+
+1
+1
+1
+1
+1
+1
+
+0
+0
+0
+0
+0
+0
+
+0
+0
+1
+1
+1
+1
+
+1
+0
+0
+1
+0
+1
+
+0
+1
+0
+0
+1
+0
+
+0
+0
+1
+0
+0
+1
+
+1
+
+0
+
+1
+
+0
+
+1
+
+0
+
+1
+
+1
+
+1
+
+0
+
+1
+
+1
+
+1
+
+0
+
+1
+
+1
+
+1
+
+0
+
+1
+
+1
+
+1
+
+1
+
+0
+
+1
+
+A4
+
+Read at pointer address
+A2 Write at pointer address
+A9 Increment cursor address
+AC Read at cursor address
+AA Write at cursor address
+AD Read at cursor address and
+increment address
+AB Write at cursor address and
+increment address
+BB Write from cursor address to pOinter
+address
+BD Read from cursor address to pointer
+address
+
+NOTES:
+1. Any combination of these three commands is valid.
+2. Any combination of these three commands is valid.
+3. d = don't care.
+
+tion of the 'write from cursor to pointer' and
+'increment cursor' commands, all the commands of this type will be executed immediately or will be delayed depending on when
+the command is invoked. If invoked during the
+active screen time, the command is executed
+at the next horizontal blanking intervai. If
+invoked doring a vertical retrace interval or a
+
+February 20, 1985
+
+command is not completed during the current
+blanking interval, the command will be held in
+suspension during the next active portion of
+the screen and continues during the next
+blanking interval until the command is completed.
+In all cases, the AVDC will assert the
+READY/RDFLG status to signify completion
+of the delayed command. No other delayed
+command should be given until the previous
+delayed command has completed. Therefore,
+the READY interrupt or RDFLG status flag
+should be used for handshaking control between the AVDC and CPU when using the
+delayed commands.
+Read/Write at Pointer
+Transfers data between the display buffer
+and the bus interface latch using the address
+contained in the pointer registers.
+Read/Write at Cursor
+Transfers data between the display buffer
+and the bus interface latch using the address
+contained in the cursor registers.
+
+Interrupt Bit
+Assignments
+
+P
+2
+
+SCN2674
+
+'display off' state, the command is executed
+immediately.
+The 'increment cursor' command is executed
+immediately after it is issued and requires
+approximately three CCLK periods for completion. The 'write from cursor to pointer'
+command executes during blanking intervals.
+The AVDC will execute as many writes as
+possible during each blanking intervai. If the
+
+2-148
+
+Increment Cursor
+Adds one (modulo 16K) to the cursor address
+registers.
+Read/Write at Cursor and Increment
+Transfers data between the display buffer
+and the bus interface latch using the address
+contained in the cursor registers and, then
+adds one (modulo 16K) to the cursor address
+registers.
+Write from Cursor to Pointer
+Writes the data contained in the bus interface
+latch into the block of display memory designated by the cursor address and pointer
+address registers, inclusive. After completion
+of the command, the pointer address will be
+unchanged, bu1 the cursor register contents
+will be equal to the pointer address.
+Read from Cursor to POinter
+Writes the data from the block of display
+memory designated by the cursor and pointer
+addresses inclusive into the bus interface
+latch. This command can be used for a DMA
+dump of memory into RAM from the cursor
+location to the pointer location. After completion of the command, the cursor register
+contents will equal the pointer register contents.
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+ABSOLUTE MAXIMUM RATINGSl
+PARAMETER
+
+Operating ambient temperature 2
+Storage temperature
+All voltages with respect to ground 3
+
+RATING
+
+UNIT
+
+o to +70
+
+°e
+°e
+
+-65 to + 150
+-0.5 to +6.0
+
+V
+
+DC ELECTRICAL CHARACTERISTICS TA = o·e to +7o·e, Vee = 5.0V ± 5%4.5.6
+LIMITS
+PARAMETER
+
+TEST CONDITIONS
+
+UNIT
+Min
+
+VIL
+VIH
+VOL
+VOH
+IlL
+ILL
+100
+lee
+
+Input low voltage
+Input high voltage
+Output low voltage
+Output high voltage
+(except INTR output)
+Input leakage current
+Data bus 3-state
+leakage current
+INTR open drain output
+leakage current
+Power supply current
+
+February 20, 1985
+
+Typ
+
+Max
+
+0.4
+
+V
+V
+V
+
+0.8
+2.0
+10L = 2.4mA
+10H = -2OOI1A
+VIN = 0 to Vee
+
+2.4
+-10
+
+10
+
+V
+I1A
+
+Vo = 0 to Vee
+
+-10
+
+10
+
+I1A
+
+10
+185
+
+mA
+
+Vo = 0 to Vce
+
+2-149
+
+I.lA
+
+Product Specification
+
+Signetics Microprocessor Products
+
+Advanced Video Display Controller (AVDC)
+
+SCN2674
+
+AC ELECTRICAL CHARACTERISTICS TA=O°C to + 70°C, Vcc=5.0V ±5%4,5,6,7
+PARAMETER
+
+TEST
+CONDITIONS8
+
+Bus timing (figure 18)9
+AD - A2 set·up time to WR, RD low
+tAS
+AD - A2 hold time from WR, RD high
+tAH
+CE set·up time to WR, RD low
+tcs
+CE hold time from WR, RD high
+tCH
+WR, RD pulse width
+tRW
+Data valid after RD low
+tDD
+Data bus floating after RD high
+tDF
+Data set·up time to WR high
+tDS
+Data hold time from WR high
+tDH
+High time from CE to CE
+tcc
+Consecutive commands
+Other accesses
+
+4.0MHz
+
+2.7MHz
+
+UNIT
+Min
+
+Max
+
+30
+0
+0
+0
+250
+
+Min
+30
+0
+0
+0
+200
+
+150
+10
+
+150
+5
+
+ns
+ns
+ns
+ns
+ns
+ns
+ns
+ns
+ns
+
+tccp
+300
+
+tccp
+300
+
+ns
+ns
+
+200
+100
+
+CCLK timing (figure 19, 20, 21)
+CCLK period
+tccp
+CCLK high time
+tCCH
+CCLK low time
+tCCl
+Output delay from CCLK edge 11
+DADDO - 13, MBC
+tCCDl
+BLANK, HSYNC, VSYNC/CSYNC,
+tCCD2
+CURSOR, BEXT, BREO, BACK,
+BCE, WDB, RDB 10
+Other timings (figure 20)
+READY IRDFLG low from WR high9
+tRDl
+BACK high from PBREO low
+tSAK
+BEXT high from PBREO high
+tSXT
+INTR low from CCLK low
+t'Rl
+INTR high from WR, RD high 9
+t'RH
+ACLL from HSYNC
+tAC
+
+200
+100
+
+370
+125
+125
+
+10,000
+
+250
+100
+100
+
+10,000
+
+ns
+ns
+ns
+
+40
+40
+
+175
+225
+
+40
+40
+
+150
+200
+
+ns
+ns
+
+tccp+30
+200
+200
+200
+600
+
+3xtccp
+
+3xtccp
+
+ns
+ns
+ns
+ns
+ns
+ns
+
+100
+60
+
+60
+60
+
+ns
+ns
+
+tccp+30
+225
+225
+225
+600
+
+Row table Input timing (figure 21)
+Data set·up time to CCLK low
+tDSRT
+Data hold time from CCLK low
+tDHRT
+
+Max
+
+NOTES:
+1. Stresses above those listed under Absolute Maximum Ratings may cause permanent damage to the device, This is a stress rating only and functional operation
+of the device at these or at any conditions above those in the operation section of this specification is not implied.
+2. For operating at elevated temperatures, the device must be derated based on + 150°C maximum junction temperature.
+3. This product includes Circuitry specifically designed for the protection of its internal devices from damaging effects of excessive static charge. Nonetheless, it is
+suggested that conventional precautions be taken to avoid applying any voltages larger than the rated maxima.
+4. Parameters are valid over specified temperature range.
+
+5. All voltage measurements are referenced to ground (GND).
+6. Typical values are at + 25°C, typical supply voltages, and typical processing parameters.
+7. For testing, aU input signals swing between O.4V and 2.4V with a transition time of 20ns maximum. AU time measurements are referenced at input voltages of 0.8V
+
+and 2.0V and output voltages of O.BV and 2.0V as appropriate.
+8. Test condition for outputs: CL = 150pF.
+9. Timing is illustrated and specified referenced to WR and RD inputs. Device may also be operated with CE as the 'strobing' input. In this case, all timing
+
+specifications apply referenced to falling and rising edges of GE.
+10. BCE, ii'VDil, and ADB delays track each other within 10nsec. Also, these output delays will tend to follow direction (minImax) of DADDO - t3 delays.
+11. These values were measured with a capacitance load of 150pF. To adjust the output delay, use the following correction factor:
+50pF<CL < 150pF: -0.15ns/pF
+
+February 20, 1965
+
+2-150
+
+Product Specification
+
+Signetics Microprocessor Products
+
+SCN2674
+
+Advanced Video Display Controller (AVDC)
+
+AO-A2~
+
+_
+
+_
+
+I-----.RW----l
+
+00·01
+(READ\
+
+~~~~~
+
+FLOAT
+
+FLOAT
+
+,J'~
+
+__________
+
+..J~'_
+
+r"'
+
+I..J~'________
+
+___V_A_L_.D_ _
+
+~ ~
+_----JA-.cc-L-
+
+CE.iiii.ViR'
+
+NOTE:
+1. Any two must be high for tee.
+
+Figure 18. Bus Timing
+
+OUTPUTS
+
+(NOTE')
+
+_
+
+.Q.!!!P.!U§
+
+WDB. ROB. BCE
+
+NOTES:
+
+1. DADDO - DADD.S. BLANK. HSYNC. CSYNCIVSYNC. CURSOR. 1iEX'f. 1lREll. lK:E:. MBC. liJICK.
+2. BCE changes state on both C'CIK edges - (see figures 3 and 4).
+
+Figure 19. CCLK Timing
+
+February 20, 1985
+
+2-151
+
+Product Specification
+
+Signetics Microprocessor Products
+
+SCN2674
+
+Advanced Video Display Controller (AVDC)
+
+BLANK
+
+r
+
+VERTICAL
+BLANKING
+INTERVAL
+
+_ _.....J
+
+1.,
+
+HSYNC
+OFVBLANK
+
+HSYNC
+
+VBLANK
+STATUS BIT
+
+BLANK
+
+DADDODADD13
+
+LINE ZERO AND SPLIT
+SCREEN STATUS BITS
+
+HSYNC~
+~~2------~----~-----
+
+BLANK_________
+NORMAL
+VSYNC
+
+---JI~"~---~~~~~~____________________~----------' "VFP = n SCAN LlNE~ II
+
+(ACLL = 1}------If----.?Z2C!---.......I
+
+-I
+
+~--------+--~~------------------------~~I------------22
+-
+
+ACLL_
+DELAYED
+
+VSYNC.____________
+
+-
+
+I
+
+I
+
+~--~~------------------------------~I_-1-----VFP=n+3SCAN
+Z2
+L l N E S - - - - - I..~I
+fo·
+
+Figure 20. Other Timings
+
+February 20. 1985
+
+2-152
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+WRFORA
+DELAYED
+COMMAND
+
+READY OR
+RDFLG
+STATUS BITS
+
+WRORRo
+WHICH RESETS
+INTERRUPT
+
+SCN2674
+
+~
+,----r---
+
+~
+
+"---.J I
+
+h
+
+..
+
+~
+
+ji-----
+
+INTR
+
+Figure 20. Other Timings (Continued)
+
+/
+
+LATCH DO-C7INTO
+
+lATCH DO-C7INTO
+SSRI LOWER
+
+SSR1 UPPER
+
+,...--......
+
+B~
+
+I
+
+I
+
+I
+I
+
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+I
+
+I
+
+I
+
+'CCo,-1 l MBC
+
+/
+l/
+
+'CC02~
+CURSOR
+
+tCC01-t
+DADO
+
+l-
+
+X
+
+SSR2 ADDRESS
+
+\
+
+X
+
+SSR2ADDRESS+l
+
+I
+
+X
+
+-t'OSRT\-'OHRT-l-l'OSRT\-'OHRT-j
+
+00-07
+
+Figure 21. Row Table Fetch 1/0 Timing
+
+February 20, 1985
+
+2-153
+
+X
+
+Signetics Microprocessor Products
+
+Product Specification
+
+Advanced Video Display Controller (AVDC)
+
+EYENFIELO
+
+~
+
++-
+
+-t
+
+LAST DISPLAYED
+SCANO
+PREVIOUS FIELD
+VERTICAL FRONT PORCH
+
+SCN2674
+
+F
+VERTICAL SYNC PULSE
+
+- l
+VERTICAL BACK PORCH
+
+I
+
+FIRST DISPLAYED SCAN
+OF EVEN FIELD
+HORIZONTAL
+
+/
+
+SYNC
+
+\
+
+CSYNC~
+
+~SES
+
+n
+
+~·~2-----------------------------42~
+
+BLANKU-~
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ VERTICAL BLANKING INTERVAL------------~-_IIL.J L -
+
+ODD FIELD
+LAST DISPLAYED
+SCAN OF
+EVEN FIELD
+
+I-I
+
+VERTICAL FRONT PORCH+112 H
+
++
+
+~
+
+VERTICAL SYNC PULSE
+
+CSYNC~
+
+-l.- VERTICAL BACK PORCH+112 H
+I
+112 H -l
+I-
+
+112 HORIZONTAL SYNC
+~2
+B L A N K - I_
+U
+_
+-_ _ _ _ _ _ _ _ _ _ _ VERTICALBLANKINGINTERVAL
+
+--11-
+
+FIRST DISPLAYED
+SCAN OF
+ODD FIELD
+
+/
+
+~
+I
+
+22--'--.
+
+I
+
+H PERIOD
+
+-~
+
+HORIZONTAL BLANKING INTERVAL
+
+NOTES:
+1. In non-interlaced operation the even field is repeated continuously.
+2. In Interlaced operation the even field alternates with the odd field.
+
+Figure 22. Composite Sync Timing
+
+February 20. 1985
+
+2-154
+
+

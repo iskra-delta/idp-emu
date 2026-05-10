@@ -147,8 +147,7 @@ static inline void _ef9367_flip_px(ef9367_t *gdp, int x, int y) {
 }
 
 static inline void _ef9367_clear(ef9367_t *gdp) {
-    memset(gdp->fb[0], 0, sizeof(gdp->fb[0]));
-    memset(gdp->fb[1], 0, sizeof(gdp->fb[1]));
+    memset(_ef9367_fb_page(gdp, gdp->write_bank), 0, sizeof(gdp->fb[0]));
 }
 
 static inline int _ef9367_p_factor(const ef9367_t *gdp) {
@@ -173,6 +172,38 @@ static inline void _ef9367_plot(ef9367_t *gdp, int x, int y) {
         return;
     }
     _ef9367_set_px(gdp, x, y, (gdp->cr1 & 0x02) != 0);
+}
+
+static inline void _ef9367_draw_block(ef9367_t *gdp, int cols, int rows) {
+    const int p_factor = _ef9367_p_factor(gdp);
+    const int q_factor = _ef9367_q_factor(gdp);
+    const bool vertical = (gdp->cr2 & 0x08) != 0;
+    const int base_x = (int)gdp->x;
+    const int base_y = (int)gdp->y;
+    for (int x_char = 0; x_char < cols; x_char++) {
+        for (int y_char = rows - 1; y_char >= 0; y_char--) {
+            for (int q = 0; q < q_factor; q++) {
+                for (int p = 0; p < p_factor; p++) {
+                    int px = 0;
+                    int py = 0;
+                    if (!vertical) {
+                        px = base_x + (x_char * p_factor) + p;
+                        py = base_y + (y_char * q_factor) + q;
+                    } else {
+                        px = base_x - ((y_char * q_factor) + q);
+                        py = base_y + ((x_char * p_factor) + p);
+                    }
+                    _ef9367_plot(gdp, px, py);
+                }
+            }
+        }
+    }
+
+    if (!vertical) {
+        gdp->x = (uint16_t)(gdp->x + cols * p_factor);
+    } else {
+        gdp->y = (uint16_t)(gdp->y + cols * p_factor);
+    }
 }
 
 static inline void _ef9367_draw_glyph(ef9367_t *gdp, uint8_t ch) {
@@ -458,7 +489,7 @@ void ef9367_command(ef9367_t *gdp, uint8_t cmd) {
         case 0x03: /* pen/eraser up */
             gdp->cr1 &= (uint8_t)~0x01;
             break;
-        case 0x05: /* Partner GDP startup uses this as left-edge reposition */
+        case 0x05: /* Partner GDP firmware uses this as X-home / left edge */
             gdp->x = 0;
             break;
         case 0x06: /* CLS + X=Y=0 */
@@ -466,56 +497,27 @@ void ef9367_command(ef9367_t *gdp, uint8_t cmd) {
             gdp->x = 0;
             gdp->y = 0;
             break;
-        case 0x07: /* clear + min size */
+        case 0x07: /* clear, min size, reset other registers */
             _ef9367_clear(gdp);
             gdp->ch_size = 0x11;
-            break;
-        case 0x0A: /* newline */
-            /* On Partner GDP, vertical text progression is handled by
-               board scroll logic (port 0x36) and explicit position writes.
-               Keep EF command-level newline as a non-moving command. */
-            break;
-        case 0x0D: /* X=0 */
+            gdp->cr1 = 0;
+            gdp->cr2 = 0;
+            gdp->dx = 0;
+            gdp->dy = 0;
             gdp->x = 0;
-            break;
-        case 0x0E: /* Y=0 */
             gdp->y = 0;
             break;
-        case 0x0B: /* draw-right filled band (used by Partner GDP line clear) */
-            {
-                const int p_factor = _ef9367_p_factor(gdp);
-                const int q_factor = _ef9367_q_factor(gdp);
-                const bool vertical = (gdp->cr2 & 0x08) != 0;
-                const int base_x = (int)gdp->x;
-                const int base_y = (int)gdp->y;
-                for (int x_char = 0; x_char < 5; x_char++) {
-                    /* Partner ROM scrolls by 12 logical pixels per GDP
-                       newline. The repeated 0x0B command clears one newly
-                       exposed text band, not a full 8-row character box. */
-                    for (int y_char = 3; y_char >= 0; y_char--) {
-                        for (int q = 0; q < q_factor; q++) {
-                            for (int p = 0; p < p_factor; p++) {
-                                int px = 0;
-                                int py = 0;
-                                if (!vertical) {
-                                    px = base_x + (x_char * p_factor) + p;
-                                    py = base_y + (y_char * q_factor) + q;
-                                } else {
-                                    px = base_x - ((y_char * q_factor) + q);
-                                    py = base_y + ((x_char * p_factor) + p);
-                                }
-                                _ef9367_plot(gdp, px, py);
-                            }
-                        }
-                    }
-                }
-                const int adv = 5 * p_factor;
-                if (!vertical) {
-                    gdp->x = (uint16_t)(gdp->x + adv);
-                } else {
-                    gdp->y = (uint16_t)(gdp->y + adv);
-                }
-            }
+        case 0x0A: /* EF9367 8x8 block draw */
+            _ef9367_draw_block(gdp, 8, 8);
+            break;
+        case 0x0B: /* 4x4 block */
+            _ef9367_draw_block(gdp, 4, 4);
+            break;
+        case 0x0D: /* X register reset to 0 */
+            gdp->x = 0;
+            break;
+        case 0x0E: /* Y register reset to 0 */
+            gdp->y = 0;
             break;
         default:
             break;

@@ -30,7 +30,6 @@ int main() {
     const char *floppy_path = std::getenv("IDP_FLOPPY");
     const bool use_hdd = (hdd_path && hdd_path[0]);
     const bool use_floppy = (floppy_path && floppy_path[0]);
-    emu.set_force_floppy_boot(!use_hdd);
     emu.load_rom("roms/partner_gdp.rom");
     if (use_floppy) {
         emu.load_disk(0, floppy_path);
@@ -44,6 +43,7 @@ int main() {
     emu.reset();
 
     uint64_t next_key_tick = 0;
+    uint64_t script_start_tick = 45000000ULL;
     bool saw_boot_banner = false;
     bool saw_cpm = false;
     bool saw_prompt = false;
@@ -62,6 +62,10 @@ int main() {
         const uint64_t parsed = std::strtoull(mt, nullptr, 10);
         if (parsed > 0) max_ticks = parsed;
     }
+    if (const char* st = std::getenv("IDP_SCRIPT_START_TICK")) {
+        const uint64_t parsed = std::strtoull(st, nullptr, 10);
+        script_start_tick = parsed;
+    }
 
     for (uint64_t i = 0; i < max_ticks; i++) {
         emu.tick();
@@ -73,7 +77,7 @@ int main() {
             emu.key_input('f');
             next_key_tick = emu.get_tick_count() + 200000;
         }
-        if ((emu.get_tick_count() > 45000000ULL) && script[script_pos] != '\0' && (i % 200000ULL) == 0) {
+        if ((emu.get_tick_count() > script_start_tick) && script[script_pos] != '\0' && (i % 200000ULL) == 0) {
             emu.key_input((uint8_t)script[script_pos++]);
         }
         if (saw_cpm && auto_cmd[auto_cmd_pos] != '\0' &&
@@ -127,6 +131,17 @@ int main() {
         if (out) {
             out.write((const char*)avdc.vram, sizeof(avdc.vram));
             std::cout << "[probe-gdp] wrote " << dump_avdc << "\n";
+        }
+    }
+
+    if (const char* dump_mem = std::getenv("IDP_DUMP_MEM")) {
+        std::ofstream out(dump_mem, std::ios::binary);
+        if (out) {
+            for (int a = 0; a < 0x10000; a++) {
+                const uint8_t b = emu.peek_mem((uint16_t)a);
+                out.put((char)b);
+            }
+            std::cout << "[probe-gdp] wrote " << dump_mem << "\n";
         }
     }
 

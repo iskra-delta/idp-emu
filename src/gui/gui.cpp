@@ -30,6 +30,7 @@
 #include <cctype>
 #include <cmath>
 #include <cstdio>
+#include <filesystem>
 #include <iostream>
 #include <string>
 
@@ -44,6 +45,34 @@ static inline void push_cstr(std::vector<uint8_t>& out, const char* s)
     while (*s) {
         out.push_back((uint8_t)*s++);
     }
+}
+
+static std::string resolve_asset_path(const std::string& relative)
+{
+    namespace fs = std::filesystem;
+    std::vector<fs::path> candidates;
+    std::error_code ec;
+
+    candidates.push_back(fs::current_path(ec) / relative);
+
+    char* base = SDL_GetBasePath();
+    if (base)
+    {
+        fs::path exe_dir(base);
+        SDL_free(base);
+        exe_dir = exe_dir.lexically_normal();
+        candidates.push_back(exe_dir / relative);
+        if (exe_dir.filename() == "bin")
+            candidates.push_back(exe_dir.parent_path() / relative);
+    }
+
+    for (const fs::path& p : candidates)
+    {
+        ec.clear();
+        if (fs::exists(p, ec) && !ec)
+            return p.lexically_normal().string();
+    }
+    return relative;
 }
 
 // VT100 control-key translation (Ctrl+A..Z etc.).
@@ -101,16 +130,36 @@ static bool map_vt100_key(SDL_Keycode key, std::vector<uint8_t>& out, bool& loca
         push_byte(out, 0x1B);
         return true;
     case SDLK_UP:
-        push_byte(out, 0x08);
+        if (has_setup_key) {
+            push_byte(out, 0x1B);
+            push_byte(out, 0x18);
+        } else {
+            push_byte(out, 0x08);
+        }
         return true;
     case SDLK_DOWN:
-        push_byte(out, 0x0A);
+        if (has_setup_key) {
+            push_byte(out, 0x1B);
+            push_byte(out, 0x19);
+        } else {
+            push_byte(out, 0x0A);
+        }
         return true;
     case SDLK_RIGHT:
-        push_byte(out, 0x0C);
+        if (has_setup_key) {
+            push_byte(out, 0x1B);
+            push_byte(out, 0x15);
+        } else {
+            push_byte(out, 0x0C);
+        }
         return true;
     case SDLK_LEFT:
-        push_byte(out, 0x0B);
+        if (has_setup_key) {
+            push_byte(out, 0x1B);
+            push_byte(out, 0x17);
+        } else {
+            push_byte(out, 0x0B);
+        }
         return true;
     case SDLK_DELETE:
         push_byte(out, 0x7F);
@@ -130,8 +179,17 @@ static bool map_vt100_key(SDL_Keycode key, std::vector<uint8_t>& out, bool& loca
     case SDLK_PAUSE:
     case SDLK_F12:
         if (has_setup_key) {
-            // DEC SET-UP is local on real VT100/Partner GDP keyboard.
-            local_only = true;
+            // Verified against the GDP keyboard ISR at 0xFEA7:
+            // SET UP is a raw keyboard local-function byte, not an ESC sequence.
+            push_byte(out, 0xB0);
+            return true;
+        }
+        return false;
+    case SDLK_SCROLLLOCK:
+        if (has_setup_key) {
+            // Verified against the GDP keyboard ISR at 0xFEA7:
+            // NO SCROLL is a raw keyboard local-function byte, not an ESC sequence.
+            push_byte(out, 0xFE);
             return true;
         }
         return false;
@@ -365,6 +423,17 @@ bool gui::init(const std::string &title, int width, int height)
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+
+    ImFont* ui_font = nullptr;
+    const std::string inter_path = resolve_asset_path("assets/fonts/Inter.ttf");
+    ui_font = io.Fonts->AddFontFromFileTTF(inter_path.c_str(), 16.0f);
+    if (!ui_font)
+    {
+        std::cerr << "[warning] Could not load Inter font from '" << inter_path
+                  << "', falling back to ImGui default\n";
+        ui_font = io.Fonts->AddFontDefault();
+    }
+    io.FontDefault = ui_font;
 
     ImGui::StyleColorsDark();
     chrome_style::apply();
@@ -1089,7 +1158,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail_w - keyboard_total_w) * 0.5f);
             }
 
-            key_button("SET UP", "Pause/F12", "", setup_w, h);
+            key_button("SET UP", "Pause/F12", "\xb0", setup_w, h);
             ImGui::Spacing();
             if (auto *gdp = dynamic_cast<partner_gdp *>(&emu))
             {
@@ -1170,7 +1239,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             key_button("RETURN", "Enter", "\r", return_w, h); ImGui::SameLine();
             char_button("|\n\\", "\\", '\\', k);
 
-            key_button("NO\nSCROLL", "ScrollLock", "", noscroll_w, h); ImGui::SameLine();
+            key_button("NO\nSCROLL", "ScrollLock", "\xfe", noscroll_w, h); ImGui::SameLine();
             key_button("SHIFT", "LShift", "", shift_w, h); ImGui::SameLine();
             char_button("Z", "Z", 'z', k); ImGui::SameLine();
             char_button("X", "X", 'x', k); ImGui::SameLine();
@@ -1190,10 +1259,10 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 
             ImGui::SameLine(0.0f, side_gap);
             ImGui::BeginGroup();
-            char_button("UP", "Up", 0x08, k, h); ImGui::SameLine();
-            char_button("DOWN", "Down", 0x0A, k, h); ImGui::SameLine();
-            char_button("LEFT", "Left", 0x0B, k, h); ImGui::SameLine();
-            char_button("RIGHT", "Right", 0x0C, k, h);
+            key_button("UP", "Up", "\x1b\x18", k, h); ImGui::SameLine();
+            key_button("DOWN", "Down", "\x1b\x19", k, h); ImGui::SameLine();
+            key_button("LEFT", "Left", "\x1b\x17", k, h); ImGui::SameLine();
+            key_button("RIGHT", "Right", "\x1b\x15", k, h);
             ImGui::EndGroup();
 
             ImGui::SameLine(0.0f, side_gap);

@@ -12,6 +12,7 @@ void partner_crt::reset()
 {
     partner::reset();
     raw_serial_.clear();
+    key_fifo_.clear();
     if (terminal_)
         terminal_->reset();
 }
@@ -19,7 +20,15 @@ void partner_crt::reset()
 void partner_crt::tick()
 {
     partner::tick();
-    maybe_auto_boot_floppy();
+
+    if (!key_fifo_.empty() && !sio.chn[Z80SIO_CHANNEL_A].rx_ready)
+    {
+        const uint8_t ch = key_fifo_.front();
+        const bool was_ready = sio.chn[Z80SIO_CHANNEL_A].rx_ready;
+        z80sio_rx_data(&sio, Z80SIO_CHANNEL_A, ch);
+        if (!was_ready && sio.chn[Z80SIO_CHANNEL_A].rx_ready)
+            key_fifo_.pop_front();
+    }
 
     // Consume bytes written to SIO channel A TX so the ROM sees TX-ready again,
     // and forward those bytes into the active terminal emulator.
@@ -43,54 +52,17 @@ void partner_crt::render_to(display &disp)
 
 void partner_crt::key_input(uint8_t ch)
 {
-    // If the previous floppy attempt stranded the 8272 in RESULT without a
-    // live IRQ, start the next explicit boot command from a clean controller
-    // state instead of reusing stale result bytes.
-    if ((ch == 'F') || (ch == 'f') || (ch == 'A') || (ch == 'a'))
-    {
-        if ((fdc.phase == I8272_PHASE_RESULT) && !fdc.irq_request && !fdc.int_pending)
-        {
-            fdc.phase = I8272_PHASE_IDLE;
-            fdc.cmd_idx = 0;
-            fdc.cmd_len = 0;
-            fdc.cmd_code = 0;
-            fdc.result_idx = 0;
-            fdc.result_len = 0;
-            fdc.irq_delay = 0;
-            fdc.irq_sets_sense = false;
-            fdc.irq_enters_result = false;
-            fdc.msr = I8272_MSR_RQM;
-        }
+    if (ch == '\n')
+        ch = '\r';
+
+    const bool was_ready = sio.chn[Z80SIO_CHANNEL_A].rx_ready;
+    if (!was_ready) {
+        z80sio_rx_data(&sio, Z80SIO_CHANNEL_A, ch);
+        if (!was_ready && sio.chn[Z80SIO_CHANNEL_A].rx_ready)
+            return;
     }
 
-    bool was_ready = sio.chn[0].rx_ready;
-    z80sio_rx_data(&sio, 0, ch);
-
-    // Debugger/host injection fallback:
-    // if channel A RX is not enabled yet, force one byte into RX so ROM
-    // polling on SIO status can still observe incoming input.
-    if (!sio.chn[0].rx_ready && !was_ready)
-    {
-        sio.chn[0].rx_data = ch;
-        sio.chn[0].rx_ready = true;
-        sio.chn[0].int_state |= Z80SIO_INT_NEEDED;
-    }
-}
-
-void partner_crt::maybe_auto_boot_floppy()
-{
-    if (!force_floppy_boot_ || hdc.present)
-        return;
-
-    const uint16_t pc = get_current_pc();
-    const bool in_rom_bootstrap_context =
-        rom_enabled && (cpu.sp >= 0xF000);
-    if (in_rom_bootstrap_context && ((pc == 0x017A) || (pc == 0x0209)))
-    {
-        cpu.pc = 0x020F;
-        cpu.wz = 0x020F;
-        auto_floppy_key_sent_ = true;
-    }
+    key_fifo_.push_back(ch);
 }
 
 std::string partner_crt::dump_terminal_text() const

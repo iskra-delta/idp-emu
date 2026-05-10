@@ -87,7 +87,6 @@ public:
     void load_rom(const std::string &path);
     void load_disk(int drive, const std::string &path);
     void load_hdd(const std::string &path);
-    void set_force_floppy_boot(bool enabled) { force_floppy_boot_ = enabled; }
     virtual void reset();
     virtual void tick();
 
@@ -180,19 +179,20 @@ protected:
     // Banking control
     bool rom_enabled = true;
     uint8_t ram_bank = 1;  // Bank 1 is default
-    bool force_floppy_boot_ = false;
-    bool auto_floppy_key_sent_ = false;
-
     virtual uint8_t read_mem(uint16_t addr);
     virtual void write_mem(uint16_t addr, uint8_t data);
     virtual uint8_t io_read(uint16_t port);
     virtual void io_write(uint16_t port, uint8_t data);
+    virtual int get_external_im2_vector() const { return -1; }
+    // AVDC vertical-blank edge for CTC ch3 clock — overridden by partner_gdp.
+    virtual bool get_avdc_vb_edge() const { return false; }
 
     void restore_drive_ready_flags();
     void service_cpu_bus(uint64_t &pins);
     void service_dma_read_bus(uint64_t &pins);
     void service_dma_write_bus(uint64_t &pins);
     void service_fdc_daisy(uint64_t &pins, bool cpu_ticked);
+    int get_pending_daisy_vector() const;
     bool dma_owns_bus() const;
     uint8_t peek_ram(uint16_t addr) const;
     void set_sio_port_lock(sio_port_id port, bool locked, const std::string &reason);

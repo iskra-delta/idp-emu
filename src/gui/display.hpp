@@ -13,6 +13,7 @@ public:
         green = 0,
         orange = 1,
         lcd = 2,
+        color = 3,
     };
 
     // Partner GDP visible text raster:
@@ -31,6 +32,8 @@ public:
     bool load_font(const std::string &path);
     void set_pixel(int x, int y, bool on);
     void add_pixel(int x, int y, uint8_t value);
+    void set_level_pixel(int x, int y, uint8_t value);
+    void set_index_pixel(int x, int y, uint8_t index4);
     void clear();
     void clear_all();
 
@@ -58,6 +61,9 @@ public:
     void set_monitor_persistence(float v);
     float get_monitor_persistence() const { return monitor_persistence_; }
     void reset_monitor_tuning();
+    void set_text_palette_rgb(float fg_r, float fg_g, float fg_b,
+                              float bg_r, float bg_g, float bg_b,
+                              bool reverse_video, bool force_background);
 
 private:
     uint8_t fb_[FB_W * FB_H]{};
@@ -79,6 +85,14 @@ private:
     float monitor_mask_strength_ = 1.00f;
     float monitor_vignette_ = 1.00f;
     float monitor_persistence_ = 0.78f;
+    float text_fg_r_ = 0.92f;
+    float text_fg_g_ = 0.94f;
+    float text_fg_b_ = 0.96f;
+    float text_bg_r_ = 0.00f;
+    float text_bg_g_ = 0.00f;
+    float text_bg_b_ = 0.00f;
+    bool text_reverse_video_ = false;
+    bool text_force_background_ = false;
 
     void apply_crt();
     GLuint compile_shader(const char *vert_src, const char *frag_src);

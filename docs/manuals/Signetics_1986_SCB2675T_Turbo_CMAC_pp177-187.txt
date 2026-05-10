@@ -1,0 +1,1809 @@
+Signetics
+
+SCB2675T
+Turbo Color/Monochrome
+Attributes Controller (TurboCMAC)
+
+Microprocessor Products
+DESCRIPTION
+HThe Signetics SCB2675T Turbo Color/
+Monochrome Attributes Controller (Tur·
+bo·CMAC) is a bipolar LSI device de·
+signed for CRT terminals and display
+systems that employ raster scan tech·
+niques. It contains a programmable dot
+clock divider to generate a character
+clock, a high speed shift register to
+serialize input dot data into a video
+stream, latches and logic to apply visual
+attributes to the resulting display, and
+logic to display a cursor on the display.
+The Turbo·CMAC provides control of
+visual attributes on a character by char·
+acter basis for two operating modes:
+monochrome and color. The mono·
+chrome mode provides reverse video,
+blank, highlight and two general purpose
+user definable attributes. In this mode,
+the display characters can be specified
+to appear on either a light or dark screen
+background. Retrace video suppression
+can be automatically or externally con·
+trolled. The color mode provides eight
+colors for foreground (character) video
+and eight colors for background video
+together with a luminance output for
+external color set selection or to simulta·
+neously drive a monochrome monitor.
+Additionally, both modes provide double
+width, underline, blink, dot stretChing
+and dot width attributes. In monochrome
+mode, the SCB2675T emulates the attri·
+bute characteristics of Digital Equipment
+Corporation's VT100 terminal.
+The horizontal dot frequency is the basic
+timing input to the Turbo·CMAC. This
+clock is divided internally to provide a
+character clock output for system syn·
+chronization. Up to nine bits of dot data
+are parallel loaded into the video shift
+register on each character boundary.
+The two TTL video data outputs in
+monochrome mode are encoded to pro·
+vide four video intensities (black, gray,
+white and highlight). The video data in
+color mode is encoded to provide eight
+foreground colors and shifted out on
+
+January 1986
+
+Preliminary SpeCification
+three TTL outputs, together with the
+luminance output.
+
+PIN CONFIGURATION
+
+FEATURES
+
+Vee
+
+• 40MHz video dot rate version
+• Four video intensities encoded
+on two TTL outputs (mono·
+chrome mode)
+• Eight foreground and background
+colors encoded on three TTL
+outputs (color mode)
+• Internally latched character
+attributes:
+- Reverse video
+- Blank
+- Blink
+- Underline
+- Highlight
+- Two general purpose
+- Eight foreground colors
+- Eight background colors
+- Dot width control
+- Double width characters
+• VT100 compatible attributes
+• Reverse video cursor with
+optional white cursor in color
+mode
+• Up to 10 dots per character
+• Light or dark background in
+monochrome mode
+- Automatic retrace blanking
+• Programmable dot stretching
+• Compatible with SCN2674 AVDC
+and SCN2670 DCGG
+
+DO
+02
+04
+06
+C1
+CO
+CCLK
+
+DClK
+
+M/C
+
+BLANK
+
+BLUElTTLV2
+
+ADOUBlE
+
+GREENIGP1
+
+RED/TTlV1
+
+RESET
+
+lUM/GP2
+
+ABLINK
+AGREENFI
+
+AREOF/AHILT
+ADOTM
+
+BKGND
+AGREENBI
+ARVID
+AUL
+
+ABlUEF/
+
+ABlANK
+ABlUE81AGP2
+
+GNO
+TOP VIEW
+
+INDEX
+CORNER
+
+40
+
+3.
+
+0
+
+PLCC
+
+2.
+
+17
+18
+
+28
+
+TOP VIEW
+CDOO44PS
+
+• TTL compatible
+• 40-pin dual in-line package
+
+APPLICATIONS
+• CRT terminals
+• Word processing systems
+• Small business computers
+
+Pin Function
+
+Pin Function
+
+2
+3
+4
+5
+6
+7
+B
+9
+10
+
+24
+25
+26
+27
+2B
+29
+30
+31
+32
+33
+35
+36
+37
+38
+39
+40
+41
+42
+43
+44
+
+11
+13
+
+14
+15
+16
+
+17
+18
+19
+20
+21
+22
+
+2-166
+
+VBB
+D1
+D3
+D5
+D7
+DB
+RBLANK
+CURSOR
+CMODE
+DOTS
+BLINK
+BLANK
+Ul
+ADOUBlE
+RESET
+ABLINK
+AGREENF/BKGND
+AGREENBI ARVID
+AUl
+GND
+
+AREDB/AGP1
+ABLUEB/AGP2
+ABLUEF/ABLANK
+ADOTM
+AREOF/AHILT
+LUM/GP2
+GREEN/GP1
+RED/TTLV1
+BlUE/TTlV2
+M/C
+DOTM
+DClK
+
+lXCK
+CO
+C1
+D6
+D4
+D2
+DO
+Vee
+
+Signetics Microprocessor Products
+
+Preliminary Specification
+
+Turbo Color/Monochrome Attributes Controller (Turbo-CMAC)
+
+SCB2675T
+
+ORDERING CODE
+PACKAGES
+
+Plastic DIP
+Plastic LCC
+
+DOTS PER
+CHARACTER
+7, 8, 9, 10
+
+Vcc
+
+=5V ± 5%, O·C to + 70·C
+
+•
+
+40MHz
+SCB2675TC4N40
+SCB2675TC4A44
+
+BLOCK DIAGRAM
+DCLK - - - - - - - - - - - ,
+
+~----------- ADOUBLE
+
+co
+r--:~:-...,~--------- DOTM
+......- - - - - - - - - - DOTS
+
+DO-DB
+
+__Jr~----------- ADOTM
++--+-----------------.. CCLK
+L-~~~
+
+UL
+BLINK
+CURSOR
+CMODE
+ABLINK
+AUL
+MIC
+ABLUEFIABLANK
+AGREENFIBKGND
+AREDFIAHILT
+ABLUEBIAGP2
+AGREENBIARVID
+AREDBIAGP1
+
+January 1986
+
+r---------~.------------RBLANK
+
+MONOCHROME
+AND COLOR
+ATTRIBUTE
+AND
+CURSOR
+LOGIC
+
+VIDEO
+AND
+ATTRIBUTE
+HIERARCHY
+LOGIC
+
+TTL
+DRIVERS
+
+REDITTLV1
+BLUElTTLV2
+GREENIGP1
+LUMIGP2
+
+~-----~~-------------BLANK
+~--------------------RESET
+
+- + - Vee
+-+- VBB
+_GND
+
+2-167
+
+Preliminary Specification
+
+Signetics Microprocessor Products
+
+Turbo Color/Monochrome Attributes Controller (Turbo-CMAC)
+
+SCB2675T
+
+PIN DESCRIPTION
+PIN NO.
+MNEMONIC 1----,-------1 TYPE
+DIP
+PLCC
+
+NAME AND FUNCTION
+
+Vee
+
+40
+
+44
+
+I
+
+Power Supply: + 5VDC
+
+Vss
+
+1
+
+2
+
+I
+
+Bias Supply: See figure 5
+
+GND
+
+20
+
+22
+
+I
+
+Ground: OV reference
+
+DCLK
+
+32
+
+36
+
+I
+
+Dot Clock: Dot frequency input. Video output shift rate.
+
+CCLK
+
+33
+
+37
+
+0
+
+Character Clock: An output which is a submultiple of DCLK. The period ranges from 7 to 10
+DCLK periods per cycle and is determined by the state of the CO-C1 inputs.
+
+RED/TTLV1
+
+28
+
+31
+
+0
+
+Red/TTL Video 1: In color mode. this output provides the red gun serial video. In monochrome
+mode, it should be used with the blue/TTL video 2 output to decode four video intensities.
+
+BLUE/TTLV2
+
+29
+
+32
+
+0
+
+Blue/TTL Video 2: In color mode. this output provides the blue gun serial video. In
+monochrome mode, it should be used with the red/TTL video 1 output to decode four video
+intensities.
+
+GREEN/GP1
+
+27
+
+30
+
+0
+
+Green/General Purpose 1: In color mode, ihis output provides the green gun serial video. In
+monochrome mode, it is a general purpose TTL output which is asserted if the AREDB/ AGP1
+input is asserted when the corresponding character dot data is loaded into the video shift
+register. GP1 can be active in either active scan or blank time.
+
+LUM/GP2
+
+26
+
+29
+
+0
+
+Luminance/General Purpose 2: In color mode, this output is the logical-OR of the RGB
+foreground video. It is low during a blanking interval and during the foreground portion of the
+cursor display. In monochrome mode, it is a general purpose TTL output which is asserted if the
+ABLUEB/ AGP2 input is asserted when the corresponding character dot data is loaded into the
+video shift register. GP2 can be active in either active scan or blank time.
+
+UL
+
+.13
+
+15
+
+I
+
+Underline Timing: Indicates the scan line(s) for the underline attribute. Latched on the falling
+edge of BLANK. The underline will be displayed on the specified scan line for every character
+where AUL = 1.
+
+BLINK
+
+11
+
+13
+
+I
+
+Blink Timing: This input is sampled on the falling edge of BLANK to provide the blink rate for
+the blink attribute. Should be a submultiple of the frame rate.
+
+BLANK
+
+12
+
+14
+
+I
+
+Screen Blank: When high, this input forces the video outputs to the specified background color
+in color mode and to the level specified by the BKGND input (either black or gray) in
+monochrome mode.
+
+RBLANK
+
+7
+
+8
+
+I
+
+Retrace Blank: This input is used to force the video outputs to a low during retrace periods. If
+pulled high, it will automatically suppress video during the retrace periods when BLANK is high.
+The user may also pulse this input while BLANK is high to selectively suppress raster video.
+
+AGREENF/
+BKGND
+
+17
+
+19
+
+I
+
+Green Foreground/Background Intensity: In color mode, this input activates the GREEN/
+GP1 output during the foreground (character video) portion of the associated character block. In
+monochrome mode, this input specifies gray or black screen background.
+
+ABLUEF/
+ABLANK
+
+23
+
+26
+
+I
+
+Blue Foreground/Blank Attribute: In color mode, this input activates the BLUE/TTLV2 output
+during the foreground (character video) portion of the associated character block. In
+monochrome mode, this input generates a blank space for the associated character. The blank
+space intensity is controlled by the AGREENF/BKGND input, the reverse video attribute and
+cursor input.
+
+AREDF/AHILT
+
+25
+
+28
+
+I
+
+Red Foreground/Highlight Attribute: In color mode, this input activates the RED/
+TTLV10utput during the foreground (character video) portion of the associated character block.
+In monochrome mode, this input highlights the associated character (including underline).
+
+CURSOR
+
+8
+
+9
+
+Cursor Timing: This input provides the timing for the cursor video. In color mode, with CURSOR
+and CMODE high, the RGB outputs are driven high (white cursor). If CMODE is low, or in
+monochrome mode, this input reverses the intensities of the video and attributes (the
+foreground and background intensities are reversed). Cursor position, shape, and blink rate are
+controlled by this input.
+
+CMODE
+
+9
+
+10
+
+Cursor Mode: Used in color mode only. When CURSOR and CMODE are high, the RGB
+outputs are driven high (white cursor). When CURSOR is high and CMODE is low, the RGB
+outputs are logically inverted (reverse video cursor).
+
+AUL
+
+19
+
+21
+
+Underline Attribute: Specifies a line to be displayed in the character block. The specific line(s)
+are specified by the UL input. All other attributes apply to the underline video.
+
+January 1986
+
+2-168
+
+Signetics Microprocessor Products
+
+Preliminary Specification
+
+Turbo Color/Monochrome Attributes Controller (Turbo-CMAC)
+
+SCB2675T
+
+PIN DESCRIPTION (Continued)
+PIN NO.
+MNEMONIC
+
+TYPE
+
+NAME AND FUNCTION
+
+18
+
+I
+
+Blink Attribute: In color mode. this active high input will drive the foreground RGB combination
+to the background RGB combination. In monochrome mode, the associated character or
+background is driven to the intensity determined by BKGND, reverse video attribute and the
+cursor input.
+
+14
+
+16
+
+I
+
+Double Width Attribute: This active high input causes the associated character video to be
+shifted out of the serial shift register at one half the dot frequency (DCLK). The CCLK output is
+not affected.
+
+AREDB/AGPl
+
+21
+
+24
+
+I
+
+Red Background/General Purpose Attribute 1: In color mode, this input aCtivates the RED/
+TTLVl output during the background portion of the associated character block. In monochrome
+mode, it activates the GREEN/GPl output for the associated character block.
+
+AEiLUEB/ AGP2
+
+22
+
+25
+
+I
+
+Blue Background/General Purpose Attribute 2: In color mode, this input activates the BLUE/
+TTLV2 output during the background portion of the associated character block. In monochrome
+mode, it activates the LUM/GP2 output for the associated character block.
+
+AGREENB/
+ARVID
+
+18
+
+20
+
+I
+
+Green Background/Reverse Video Attribute: In color mode, this input activates the GREEN/
+GPl output during the background portion of the associated character block. In monochrome
+mode, it causes the associated character block video intensities to be reversed.
+
+DIP
+
+PLCC
+
+ABLINK
+
+16
+
+ADOUBLE
+
+00-08
+
+39,2,
+43, 3,
+38,3,
+42,4,
+37,4,
+41,5,
+36,5,6 40,6, 7
+
+I
+
+Dot Data Input: These are parallel inputs corresponding to the character/graphic symbol dot
+data for a given scan line. These inputs are strobed into the video shift register on the trailing
+(falling) edge of each character cloCk (CCLK).
+
+CO, Cl
+
+34,35
+
+I
+
+Character Clock Control: The states of these two static inputs determine the internal divide
+factor for the CCCK output rate.
+
+38, 39
+
+RESET
+
+15
+
+17
+
+I
+
+Reset: This active high input initializes the internal logic and resets the attribute latches.
+
+M/C
+
+30
+
+33
+
+I
+
+Monochrome/Color Mode: This input selects whether the CMAC operates in monochrome or
+color mode. A low selects color mode and a high selects monochrome mode.
+
+ADOTM
+
+24
+
+27
+
+I
+
+Dot Modulation Attribute: When DOTM and this input are high, the active dot width of the
+associated character video is one DCLK. When DOTM is high and this input is low, the active dot
+width of the associated character video is two DCLKs.
+
+DOTM
+
+31
+
+35
+
+I
+
+Dot Width Modulation: When this input is high, two DCLKs are used for each dot shifted
+through the shift register. When this input is low, one DCLK is used.
+
+DOTS
+
+10
+
+11
+
+I
+
+Dot Stretching: Sampled at the falling edge of BLANK. When this input is high, one extra dot is
+appended to individual dots or groups of dots of the input parallel data and then transferred
+through the shift register. When this input is low, normal transfer of input parallel data results.
+
+FUNCTIONAL DESCRIPTION
+The Turbo-CMAC consists of seven major
+sections (see block diagram). The high speed
+dot clock input is applied to a programmable
+divider to provide a character clock output for
+system timing. Parallel dot data is loaded into
+the video shift register on character boundaries and shifted into the video logic block at
+the dot rate specified by the dot modulation
+section. The appropriate attribute control inputs are selected by the mode select logic,
+latched internally on character boundaries,
+and combined with the serial dot data to
+provide monochrome or color video outputs.
+The BLANK input defines the active screen
+and retrace areas. In color mode, the video
+outputs are forced to the specified background color when this signal is asserted; in
+monochrome mode the video outputs are
+forced to the states defined by the BKGND
+input, i.e., black if dark background is selected and gray if light background is selected. A
+separate RBLANK input allows the user to
+January 1986
+
+select the amount of border around the active
+area when operating in color mode or in
+monochrome mode with light baCkground.
+This input can be tied high, in which case the
+area outside the active area will be dark, or it
+may be pulsed during BLANK periods to
+externally control the border widths.
+In color mode, eight colors for the character
+(foreground) and eight colors for the background (area other than character) can be
+selected by the attribute inputs. In monochrome mode, the intensities of foreground
+and background are a function of the attribute
+and BKGND inputs, i.e., characters may be
+black, gray, white, or highlight (very white)
+while background may be black, gray, or
+white (see table 1).
+
+Character Clock Counter
+The character clock counter divides the
+DCLK input to generate the character clock
+(CCLK). The divide factor is specified by the
+clock control inputs (Cl - CO) as follows:
+
+2-169
+
+SCB2675T
+Cl
+
+CO
+
+Dotsl
+Char.
+
+CCLK
+Duty Cycle"
+
+0
+0
+1
+1
+
+0
+1
+0
+1
+
+10
+7
+8
+9
+
+5/5
+3/4
+4/4
+4/5
+
+*Highllow
+The number of dot clocks/ character is normay the number of dots/ character as listed
+above. However, when dot width control is
+specified, the DCLK input is divided by two
+before it is applied to the character clock
+counter resulting in the number of dot clocks/
+character being double those listed above,
+although the number of displayed dots/character remains the same. See Dot Modulation
+Logic section. The number of dots per character (Cl - CO) can be dynamically changed
+on either edge of the character clock as
+shown in figure 10.
+
+Signetics Microprocessor Products
+
+Preliminary Specification
+
+Turbo Color/Monochrome Attributes Controller (Turbo-CMAC)
+
+Table 1. MONOCHROME MODE ATTRIBUTE CHARACTERISTICS
+REVI
+
+AH/LT
+
+0
+0
+O'
+0
+1
+1
+1
+1
+
+0
+0
+1
+1
+0
+0
+1
+1
+
+ABLlNK2
+
+FOREGROUND
+VIDEO
+
+BACKGROUND
+VIDEO
+
+0
+1
+0
+1
+0
+1
+0
+1
+
+W
+WIG
+H
+H/W
+B
+B/W
+B
+B/H
+
+B
+B
+B
+B
+G
+G/B
+W
+W/B
+
+NOTES:
+1. REV = (BKGND) XOR' (ARVIO):
+
+BKGND ARVID
+
+o
+o
+1
+
+0
+
+REV
+0
+
+1
+
+o
+
+1
+
+1
+o
+2. For blinking, the video outputs are shown as OIl, where 0 and 1 are the blink timing output
+states.
+3. Foreground includes underline when underlining is specified by AUL = 1.
+4. When ABLANK = I, foreground component becomes same as background component.
+5. Codes for video outputs are as follows:
+CODE TTLV2 TTLVI BEAM INTENSITY
+B
+o
+0
+Black (B)
+Gray (G)
+G
+o
+1
+1
+0
+White (W)
+W
+Highlight (H)
+H
+1
+
+Video Shift Register
+On each character boundary, the parallel
+input dot data (DO - DB) is loaded into the
+video shift register. The data is shifted out
+least significant bit first (DO) at the DCLK rate.
+If 10 dotsl character are specified (ClCO = 00), the tenth dot will be the same as
+DB. The serial dot data from the video shift
+register is routed to the video logic where it is
+combined with ·the cursor and attribute con·
+trol bits to produce the' video data outputs.
+
+Mode Select, Attribute and
+Cursor Control
+'The mode select logic multiplexes the monochrome and color attribute inputs and outputs
+as specified by the M/C input. The monochrome mode provides blank.. reverse video,
+highlight and two general purpose attributes.
+The latter may be used, with external logic, to
+combine other attributes (e.g., overscore) into
+the video stream. The color mode provides
+RGB foreground and background color attributes. Both modes provide double width characters, blink, underline, dot width control and
+dot stretching.
+The cursor and attribute inputs are pipelined
+internally to allow for system pipeline propagations. The cursor input and the attribute
+inputs are delayed for one CCLK to account
+for the delay of the character data through
+the character generator latches. The attribute
+timing inputs (BLINK, UL and DOTS)' are
+clocked into the 2675 at the beginning of
+each scan line time by the falling edge of
+BLANK. Thus, these inputs must be in their
+proper state at the falling edge of BLANK
+January 19B6
+
+SCB2675T
+
+TTLV2
+
+TTLVI
+
+VIDEO INTENSITY
+
+0
+0
+1
+1
+
+0
+1
+0
+1
+
+Black
+Gray
+White
+Highlight
+
+Table 1 describes the relationship between
+attributes and video intensity of the foreground and background components of the
+character block in monochrome mode.
+In color mode, the colors of the foreground
+and background components are specified by
+the corresponding attribute inputs; AREDF,
+AGREENF and ABLUEF dictate the color of
+the foreground component while AREDB,
+AGREENB and ABLUEB do the same for the
+background component. In this mode, the
+serial dot data and pipelined cursor and
+attributes are combined to generate four
+video outputs. The RED, GREEN and BLUE
+outputs separately contain the corresponding
+foreground and background components.
+The LUM output is the logical-OR of the
+foreground colors and can be used to drive a
+separate monochrome monitor or to select a
+different set of colors for the foreground.
+
+preceding the scan line where they are required to be active. The BLANK signal itself is
+also delayed internally to provide for the RAM
+and character generator delays (see figures 6
+and 7). Internal delays cause the video outputs to be delayed relative to CCLK as
+illustrated in figure B.
+
+Video Logic
+Each character block consists of the' three
+components shown in figure 1. Symbol video
+is generated from the dot data inputs
+DO - DB. Underline video is enabled by the
+AUL attribute and is generated during the
+scan lines for which the UL input is active.
+Underline and symbol video are always the
+same intensity or color, and other attributes
+(e.g., ABLlNK) apply to them equally. The
+combination of underline and symbol video is
+also referred to as foreground video. Background video is the area of the character
+block corresponding to the absence of foreground video. The assertion of the nondisplay attribute (ABLANK) in the monochrome mode causes the entire character
+block to be displayed as background.
+In monochrome mode, the serial dot data and
+pipelined cursor and attributes are combined
+to generate four video intensities (black, gray,
+white and highlight) which are encOded on
+the TTLVI and TTLV2 outputs as follows:
+
+2-170
+
+Figure 1. Character Block DefinItion
+
+Dot Modulation Logic
+The· dot modulation logic controls the video
+shift register to supply dot stretching and dot
+width control.
+Dot stretching is controlled by the DOTS input
+which is sampled eacl) scan line at the trailing
+(falling) edge of BLANK. If DOTS is asserted
+at that time, all characters on the following
+scan line will have dot stretching applied. Dot
+stretching causes an extra dot to be added to
+individual dots or groups of dots as shown in
+figures 2 and 3. Dot stretching can be used
+to:
+1. Compensate for low video bandwidth
+monitors (since the .minimum active displayed segment with dot stretching is two
+DCLKs).
+2. Assure crisp black characters when operating in white background mode.
+3. Provide thick characters as a means of
+distinguishing areas of the display.
+
+Preliminary Specification
+
+Signetics Microprocessor Products
+
+Turbo Color/Monochrome Attributes Controller (Turbo-CMAC)
+
+Dot width is controlled by the DOTM and
+ADOTM inputs. DOTM is tied either high,
+which enables the feature on the entire display, or low, which disables the feature. With
+ADOTM high, the dot width of characters can
+be selectively controlled by assertion of the
+ADOTM attribute input. When operating in
+this mode, the dot clock input is divided by
+two before being applied to other circuits in
+the Turbo-CMAC.
+The CCLK output is also divided by two. The
+truth table for the possible combinations of
+ADOTM and DOTM is as follows:
+ADOTM
+
+o
+
+DOTM
+
+o
+
+o
+o
+1
+
+OPERATION
+Normal mode
+Dot width control,
+100 % duty cycle
+(DCLK+2, CCLK+2)
+Not allowed
+Dot width control,
+50% duty cycle
+(DCLK+2, CCLK+2)
+
+When dot width control is enabled as above,
+two DCLKs are used for each video dot
+period. Asserting ADOTM for a particular
+character will cause each active video dot of
+the displayed character to be turned on for
+one DCLK and off for the other DCLK, while if
+ADOTM is negated for that character, the
+active video dot for that character will be
+turned on (black background) or off (white
+background) for both DCLK times (see figures
+2 and 4). Only the character video component
+of the character block is modulated. Underline video and background are not affected by
+o,tl-time modulation. Width control can be
+used to:
+1. Make horizontal lines and vertical lines
+appear the same brightness on the display.
+2. Provide two different brightness levels for
+characters without requiring a monitor
+with analog brightness inputs.
+
+However, note that the effects produced by
+this feature are highly dependent on the video
+amplifier characteristics of the monitor used.
+
+Double Width Logic
+The double width logic controls the rate at
+which dots are shifted through the video shift
+register. When the ADOUBLE input is asserted, the associated character video will be
+shifted at one half the DCLK rate, and the dot
+information for the next character will be
+loaded into the shift register two CCLKs later.
+The character and attribute data that is present on the first CCLK after the ADOUBLE
+input is asserted will be ignored. The CCLK
+output is not affected. If a double width
+character is specified at the last location of a
+character row, the second half of the double
+width character (one CCLK) will extend into
+the horizontal front porch.
+
+DOT STRETCHING
+DOT CLOCK
+
+NORMAL
+
+-II'--___r--L-.Jr------L_______
+
+-- -
+
+STRETCHED ~-------------1_
+
+NORMAL
+
+STRETCHED
+
+______
+
+DISPLAYED ON MONITOR
+
+DOT WIDTH CONTROL
+
+DOT CLOCK
+
+WIDTH
+ADOTU::: 0
+DOTS::: 0
+
+WIDTH
+ADON::: 1
+DOYS= 0
+
+WIDTH
+
+A~~~:~~r------------------------------------WIDTH
+ADOTM '" 1
+
+DOTS = 1
+
+WIDTH
+ADOTM::: 0
+
+DOTS = 0
+
+WIDTH
+ADOTM = 1
+DOTS = 0
+
+WIDTH
+ADOTM::: 0
+DOTS = 1
+
+WIDTH
+ADOTM= 1
+DOTS 01
+
+-- -- ----------DISPLAYED ON MONITOR
+
+""'""OS
+
+Figure 2. Dot Modulation Timing
+
+January 1986
+
+2-171
+
+SCB2675T
+
+Preliminary Specification
+
+Signetics Microprocessor Products
+
+Turbo Color/Monochrome Attributes Controller (Turbo-CMAC)
+
+SCB2675T
+
+ACTUAL CHARACTER DISPLAYED
+WITH DOT STRETCHING EMPLOYED
+
+CHARACTER AS STORED
+IN CHARACTER GENERATOR
+
+(
+
+/
+
+OFO(l()20S
+
+Figure 3. Dot Stretching
+
+ACTUAL CHARACTER DISPLAY
+WITH WIDTH CONTROL
+
+NORMAL CHARACTER DISPLAY
+WITHOUT WIDTH CONTROL
+
+E
+
+~ 000
+
+ooooo
+
+00000
+OFOOO<OS
+
+Figure 4. Dot Width Control
+
+ABSOLUTE MAXIMUM RATINGS1
+PARAMETER
+Operating ambient temperature2
+Storage temperature
+All voltages with respect to ground3
+
+UNIT
+
+RATING
+o to +70
+-65 to + 150
+-0.5 to +6.0
+
+)
+
+·C
+·C
+V
+
+DC ELECTRICAL CHARACTERISTICS TA = O·C to + 70·C, Vce = 5V ± 5%, Vss = figure 54,5
+LIMITS
+PARAMETER
+
+UNIT
+
+TEST CONDITIONS
+Min
+
+Input low voltage
+Input high voltage
+Output low voltage
+Output high voltage
+
+IlL
+
+Input low current
+DCLK
+All other inputs
+Input high current
+DCLK
+All other inputs
+
+VIN= 0.4V
+
+Vee supply current
+Vss supply current
+
+VIN = OV, Vee = max
+Figure 5
+
+Icc
+Iss
+
+January 1986
+
+Max
+0.8
+
+VIL
+VIH
+VOL
+VOH
+
+IIH
+
+Typ
+
+2.0
+IOL =4mA
+IOH = -400iJA
+
+0.4
+2.4
+
+V
+V
+V
+V
+
+-800
+-400
+
+iJA
+iJA
+
+40
+20
+
+iJA
+
+30
+110
+
+rnA
+rnA
+
+VIN = 2.4V
+
+2-172
+
+tJ.A
+
+Preliminary Specification
+
+Signetics Microprocessor Products
+
+Turbo Color/Monochrome Attributes Controller (Turbo-CMAC)
+
+SCB2675T
+
+AC ELECTRICAL CHARACTERISTICS T A = O'C to + 70'C, Vcc = 5V ± 5%, VB B = figure 54,5
+TENTATIVE LIMITS
+PARAMETER
+
+TEST CONDITIONS
+
+40MHz Version
+Min
+
+UNIT
+
+Max
+
+Dot clock timing (figure 8)
+Frequency
+fD
+High time
+tDH
+'Low time
+tDL
+
+10
+10
+
+MHz
+ns
+ns
+
+Set-up times (figures 6, 7, 9 and 10)
+BLANK to CCLK
+tSB
+Attributes to CCLK
+tSA
+DO-D9 to CCLK
+tSD
+CURSOR to CCLK
+tSK
+CO, C1 to DCLK
+tsc
+RBLANK to DCLK
+tSA
+BLINK, UL, DOTS to BLANK
+tSM
+
+35
+40
+50
+35
+15
+15
+10
+
+ns
+ns
+ns
+ns
+ns
+ns
+ns
+
+Hold times (figures 6, 7, 9 and 10)
+BLANK from CCLK
+tHB
+Attributes from CCLK
+tHA
+DO-D8 from CCLK
+tHD
+CURSOR from CCLK
+tHK
+CO, C1 from DCLK
+tHC
+RBLANK from DCLK
+tHA
+BLINK, UL, DOTS from BLANK
+tHM
+
+5
+5
+5
+5
+5
+10
+15
+
+ns
+ns
+ns
+ns
+ns
+ns
+ns
+
+40
+
+Delay times (figure 8)
+CCLK from DCLK
+tDC
+Other outputs from DCLK
+tDV
+
+CL = 50pF
+45
+45
+
+ns
+ns
+
+NOTES:
+
+1. Stresses "above those listed under Absolute Maximum Ratings may cause permanent damage to the device. This is a stress rating only and functional operation of
+the device at these or at any conditions other than those described in the AC and DC Electrical Characteristics section of this specification is not implied.
+
+2. For operating at elevated temperatures, the device must be derated based on + 150'C maximum junction temperature.
+3. This product includes circuitry specifically designed for the protection of its internal devices from damaging effects of excessive static charge. Nonetheless, it is
+
+suggested that conventional precautions be taken to avoid applying voltages greater than the rated maxima.
+4. Parameters are valid over operating temperature range unless otherwise specified.
+5. All voltage measurements are referenced to ground. For testing, all input signals swing between O.4V and 2.4V with a transition time of 3ns maximum. All time
+
+measurements are referenced at input voltages of O.BV and 2.0V and output voltages are checked at O.BV and 2.0V.
+Vcc
+vcc ~
+31.60
+1%,1/2W
+
+VB. ~
+JD.1~F
+
+TC00370S
+
+Figure 5. Recommended Vaa Test
+Circuit
+
+January 1986
+
+2-173
+
+Signetics Microprocessor Products
+
+Preliminary Specification
+
+Turbo Color/Monochrome Attributes Controller (Turbo-CMAC)
+
+_~r-'sB--1
+BLANK
+
+BLINK,
+UL,
+DOTS
+
+SCB2675T
+
+..J-------
+
+-II-IHB
+
+I
+
+~------+----+----
+
+~,..;::::...",-....,
+
+-------v
+
+- - - -~ -~....;:;;.;;.;;.'-'
+
+ATIRIBUTES'
+
+LAST
+CHAR
+
+VIDE03
+
+BKGND4
+
+VIDEO
+DOUBLE WIDTH
+ROW
+
+BKGND4
+
+lSI
+CHAR
+
+2nd
+CHAR
+
+I~AR
+
+---
+
+1s1 CHAR
+
+3rd CHAR
+
+LAST -1
+CHAR
+
+v--
+
+~
+
+~
+I
+_
+
+LAST
+CHAR
+
+LAST -I CHAR
+
+I
+_
+
+BKGND4
+
+BKGND4
+
+NOTES:
+
+1. Attributes include ABLINK, ABLANK, ARVID, AUL, AHIL T, ADOUBLE, ADOTM, two general purpose, and foreground/background colors.
+2. One CCLK delay for dot data (obtained from delay through character generator).
+3. See figure 8 for detail timing of video outputs.
+4. Non·active scan time. VIDEO reverts to polarity selected by the BKGND input in monochrome mode.
+
+Figure 6. Turbo-CMAC Pipeline Timing
+
+CURSOR _ _ _ _ _J
+
+VIDEO
+
+r"--l \'""
+
+~\------
+
+I"
+
+CHARACTER
+WITH CURSOR
+
+~
+
+Figure 7. Cursor Pipeline Timing
+
+January 19B6
+
+2-174
+
+Signetics Microprocessor Products
+
+Preliminary Specification
+
+Turbo Color/Monochrome Attributes Controller (Turbo-CMAC)
+
+-I
+
+1 -' /'0-1
+OCLK
+
+--=i r-'
+
+tOL
+
+SCB2675T
+
+1-
+
+DC
+
+CCLK,
+
+~----------------------------------------
+
+--I
+
+..-. tov
+
+OTHER
+OUTPUTS
+
+Figure 8. Output Pipeline Timing
+
+MONOCHROME MODE
+
+d~''"
+VtOEO
+
+GRAY
+
+\
+
+BLACK
+
+/
+
+GRAY
+
+tHR~
+
+t
+
+22
+
+~,
+
+BLACK
+
+I
+
+Figure 9. RBLANK Timing During Inactive Scan Time (Blank = 1)
+
+OCLK
+
+CO. C1
+
+J~~~
+
+________________
+
+~'~J~
+
+________________________
+
+NOTE:
+
+1.
+
+The high and low .imes of CCLK may be controlled independently.
+
+Figure 10. Clock Divider Timing
+
+January 1986
+
+2-175
+
+I~
+
+___________
+
+Signe,tics Microprocessor Products
+
+Preliminary Specification
+
+!
+
+Turbo ColorjMonochrome Attributes Controller (Turbo-CMAC)
+
+~
+
+2670
+CHARACTER
+GENERATOR
+
+en
+
+LUM
+
+lfla:
+
+I
+
+MONITOR
+
+c
+c
+
+">~
+
+en
+
+C
+
+ATTRIBUTE
+RAM
+
+ccTK
+
+CRT CONTROLLER
+
+Figure 11. System Block Diagram of SCB2675T in Color Mode
+
+TTLV') MONITOR
+
+2670
+CHARACTER
+GENERATOR
+
+en
+en
+w
+a:
+
+TTLV2
+
+GENERAL
+) PURPOSE
+267ST
+
+c
+c
+>-
+
+OUTPUTS
+
+CMAC
+
+":3
+
+ATTRIBUTE
+INPUTS
+
+"en
+
+C
+
+ATTRIBUTE
+RAM
+
+CRT CONTROLLER
+
+Figure 12. System Block Diagram of SCB2675T in Monochrome Mode
+
+January 1986
+
+2-176
+
+SCB2675T
+
+
