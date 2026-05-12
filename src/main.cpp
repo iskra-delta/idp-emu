@@ -233,7 +233,7 @@ int main(int argc, char **argv)
         std::unique_ptr<partner> emu = make_emu(gdp_model);
 
         gui app_gui;
-        if (!app_gui.init("Iskra Delta Partner Emulator", 1800, 860))
+        if (!app_gui.init("Iskra Delta Partner Emulator", 1100, 720))
         {
             std::cerr << "[error] Failed to initialize GUI\n";
             const char *disp = std::getenv("DISPLAY");
@@ -254,11 +254,10 @@ int main(int argc, char **argv)
         }
 
         bool running = true;
-        const char *auto_run_env = std::getenv("IDP_AUTO_SETUP");
-        bool paused = !(auto_run_env && auto_run_env[0] && auto_run_env[0] != '0');
+        bool paused = false;  // start running by default; press Space to pause
         dbg_action action = dbg_action::NONE;
 
-        std::cout << "[info] Starting emulation (paused at PC=0000)...\n";
+        std::cout << "[info] Starting emulation...\n";
         const char *quit_hint = "Ctrl+Q=Quit";
         std::cout << "[info] Space=Run/Pause  F11=Step Into  F10=Step Over  " << quit_hint << "\n";
 

@@ -42,7 +42,7 @@ private:
     display display_;
 
     bool show_registers_ = false;
-    bool show_disasm_ = true;
+    bool show_disasm_ = false;
     bool show_fdc_ = false;
     bool show_sio_ = false;
     bool show_pio_ = false;

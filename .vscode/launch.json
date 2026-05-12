@@ -2,14 +2,14 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug Partner GDP (HDD)",
+      "name": "Debug Partner GDP (Floppy)",
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/bin/idp-emu",
       "args": [
         "--model", "gdp",
         "--rom", "${workspaceFolder}/roms/partner_gdp.rom",
-        "--hdd", "${workspaceFolder}/disks/hdd-partner-g.img"
+        "--disk", "${workspaceFolder}/disks/fdd-partner-g.img"
       ],
       "stopAtEntry": false,
       "cwd": "${workspaceFolder}",

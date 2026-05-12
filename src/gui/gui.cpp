@@ -165,31 +165,38 @@ static bool map_vt100_key(SDL_Keycode key, std::vector<uint8_t>& out, bool& loca
         push_byte(out, 0x7F);
         return true;
     case SDLK_F1:
-        push_byte(out, 0x04); // PF1
+        // CPM3.SYS setup dispatch: CP 0x14 → 0xA0CC (set all tabs / PF1 action)
+        push_byte(out, 0x1B); push_byte(out, 0x14);
         return true;
     case SDLK_F2:
-        push_byte(out, 0x05); // PF2
+        // CPM3.SYS setup dispatch: CP 0x1A → 0x9933 (execute/DO action)
+        push_byte(out, 0x1B); push_byte(out, 0x1A);
         return true;
     case SDLK_F3:
-        push_byte(out, 0x06); // PF3
+        // CPM3.SYS setup dispatch: CP 0x1C → JR +28 (tab action / PF3)
+        push_byte(out, 0x1B); push_byte(out, 0x1C);
         return true;
     case SDLK_F4:
-        push_byte(out, 0x07); // PF4
+        // CPM3.SYS setup dispatch: CP 0x16 → 0x96E7 = clears FF19 → exits setup.
+        // This is PF4 = "Exit Set Up" (same role as VT100 PF4).
+        push_byte(out, 0x1B); push_byte(out, 0x16);
         return true;
     case SDLK_PAUSE:
     case SDLK_F12:
         if (has_setup_key) {
-            // Verified against the GDP keyboard ISR at 0xFEA7:
-            // SET UP is a raw keyboard local-function byte, not an ESC sequence.
-            push_byte(out, 0xB0);
+            // CPM3.SYS analysis: key 0xFE toggles FF19 bit 1 (SET-UP flag).
+            // CONIN at 0x8947/0x895A: LD A,(FF19); AND 0x02; CALL NZ, 0x9984
+            // → 0x9984 is the actual setup screen draw+navigation entry point.
+            // Key 0xB0 (previously used) toggles bit 0, which is NOT the setup bit.
+            push_byte(out, 0xFE);
             return true;
         }
         return false;
     case SDLK_SCROLLLOCK:
         if (has_setup_key) {
-            // Verified against the GDP keyboard ISR at 0xFEA7:
-            // NO SCROLL is a raw keyboard local-function byte, not an ESC sequence.
-            push_byte(out, 0xFE);
+            // CPM3.SYS: FF19 bit 0 is toggled by key 0xB0 (NO SCROLL).
+            // Key 0xFE (SET-UP) is now correctly on F12/Pause.
+            push_byte(out, 0xB0);
             return true;
         }
         return false;
@@ -982,15 +989,12 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
         ImGui::DockBuilderRemoveNode(dockspace_id);
         ImGui::DockBuilderAddNode(dockspace_id, ImGuiDockNodeFlags_DockSpace);
         ImGui::DockBuilderSetNodeSize(dockspace_id, ImVec2(vp->WorkSize.x, vp->WorkSize.y - title_bar_h));
-
-        ImGuiID dock_main = dockspace_id;
-        ImGuiID dock_right = ImGui::DockBuilderSplitNode(dock_main, ImGuiDir_Right, 0.25f, nullptr, &dock_main);
-
-        ImGui::DockBuilderDockWindow("Partner Display", dock_main);
-        ImGui::DockBuilderDockWindow("Disassembly", dock_right);
-        ImGui::DockBuilderDockWindow("SCN2674 AVDC", dock_right);
-        ImGui::DockBuilderDockWindow("EF9367 GDP", dock_right);
+        // Dock the display into the central node so it fills the window.
+        ImGui::DockBuilderDockWindow("Partner Display", dockspace_id);
         ImGui::DockBuilderFinish(dockspace_id);
+        // Hide the tab bar on the central node — display is always there, no tabs needed.
+        ImGuiDockNode *node = ImGui::DockBuilderGetNode(dockspace_id);
+        if (node) node->LocalFlags |= ImGuiDockNodeFlags_NoTabBar;
     }
 
     // Panels

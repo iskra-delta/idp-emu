@@ -84,14 +84,12 @@ private:
     partner_gdp_keyboard keyboard_{};
     void sync_ef_mode_from_gdp_pio();
 
-    // AVDC VB → CTC ch3 clock edge flag (set in tick(), consumed by partner::tick).
-    bool avdc_vb_edge_ = false;
-
-    // Setup-key tracer: ring buffer of recent PCs + post-F12 trace.
-    static constexpr int kPcRingSize = 256;
-    std::array<uint16_t, kPcRingSize> pc_ring_{};
-    int pc_ring_head_ = 0;
-    int setup_trace_remain_ = 0; // instructions left to trace after F12
+    // AVDC VB → external IM2 edge flag (set in tick(), read by get_external_im2_vector).
+    bool     avdc_vb_edge_        = false;
+    // Countdown: holds INT high for N ticks after each VB so the Z80 catches it.
+    uint32_t avdint_hold_ticks_   = 0;
+    // Last seen value of FF19 (setup flag byte); detect changes to update setup VRAM.
+    uint8_t  prev_ff19_           = 0xFF;  // 0xFF = uninitialized (never matched)
 
     void gdp_put_char(uint8_t ch);
     void gdp_newline();

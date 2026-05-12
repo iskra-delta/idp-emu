@@ -203,64 +203,18 @@ void partner_gdp::reset()
 
 void partner_gdp::tick()
 {
-    // Record PC in ring buffer before ticking so we have recent history.
-    pc_ring_[pc_ring_head_] = cpu.pc;
-    pc_ring_head_ = (pc_ring_head_ + 1) % kPcRingSize;
-
-    // IDP_AUTO_SETUP=1: auto-boot from floppy then press F12 at B: prompt.
-    static const bool auto_setup = [] {
-        const char *s = std::getenv("IDP_AUTO_SETUP");
-        return s && s[0] && s[0] != '0';
-    }();
-    static bool auto_floppy_done = false;
-    static bool auto_setup_done  = false;
-    if (auto_setup) {
-        // Step 1: redirect ROM from HDD boot path to floppy boot (0x02FA).
-        if (!auto_floppy_done && rom_enabled && cpu.sp >= 0xF000) {
-            if (cpu.pc == 0x01E8 || cpu.pc == 0x01F0 || cpu.pc == 0x02F4) {
-                std::fprintf(stderr, "[auto-setup] Redirecting PC %04x -> 0x02FA (floppy boot)\n", cpu.pc);
-                cpu.pc = 0x02FA;
-                cpu.wz = 0x02FA;
-                auto_floppy_done = true;
-            }
-        }
-        // Step 2: wait 30s min then detect B>/A> in AVDC VRAM (CP/M booted).
-        static auto auto_start_time = std::chrono::steady_clock::now();
-        if (!auto_setup_done && auto_floppy_done) {
-            const auto now = std::chrono::steady_clock::now();
-            const auto elapsed = std::chrono::duration_cast<std::chrono::seconds>(now - auto_start_time).count();
-            if (elapsed >= 30) {
-                bool found_prompt = false;
-                for (int i = 0; i < 16382 && !found_prompt; i++) {
-                    const uint8_t c0 = avdc_.vram[i], c1 = avdc_.vram[i + 1];
-                    if ((c0 == 'B' || c0 == 'A') && c1 == '>') found_prompt = true;
-                }
-                // Also require I=0xFA (BIOS fully initialized IVT) and
-                // avdint handler's semaphore byte 0xFF73 initialised (≠0).
-                const bool bios_ready = (cpu.i == 0xFA)
-                                     && (peek_ram(0xFF73) != 0x00u);
-                if (found_prompt && bios_ready) {
-                    std::fprintf(stderr, "[auto-setup] Prompt+BIOS ready after %llds, pressing F12\n", (long long)elapsed);
-                    key_input(0xB0u);
-                    auto_setup_done = true;
-                } else if (elapsed >= 60) {
-                    std::fprintf(stderr, "[auto-setup] 60s timeout (I=%02x), pressing F12\n", cpu.i);
-                    key_input(0xB0u);
-                    auto_setup_done = true;
-                }
-            }
-        }
-    }
-
-    // Post-setup-key instruction trace.
-    if (setup_trace_remain_ > 0) {
-        std::fprintf(stderr, "[setup-trace] PC=%04x SP=%04x A=%02x F=%02x BC=%04x DE=%04x HL=%04x\n",
-            cpu.pc, cpu.sp, (cpu.af >> 8) & 0xFFu, cpu.af & 0xFFu,
-            cpu.bc & 0xFFFFu, cpu.de & 0xFFFFu, cpu.hl & 0xFFFFu);
-        setup_trace_remain_--;
-    }
-
     partner::tick();
+
+    // Auto-redirect ROM floppy boot: when no HDD is attached the ROM waits at
+    // the GDP clock/select screen for the user to press ENTER then F. Skip that
+    // interactive path by patching PC to the floppy boot entry (0x02FA) whenever
+    // the ROM is at the known HDD-selection branch points.
+    if (!hdc.present && rom_enabled && cpu.sp >= 0xF000) {
+        if (cpu.pc == 0x01E8 || cpu.pc == 0x01F0 || cpu.pc == 0x02F4) {
+            cpu.pc = 0x02FA;
+            cpu.wz = 0x02FA;
+        }
+    }
 
     // Keep all serial TX channels drained so ROM/CP/M polling on TX-ready can
     // progress even when the GDP runtime moves console traffic to a different
@@ -308,16 +262,37 @@ void partner_gdp::tick()
 
     ef9367_tick(&ef9367_, ef_idle);
     {
-        // Track AVDC vblank rising edge for external IM2 injection.
-        // Use prev_vblank_flag from the chip itself (set by scn2674_tick) to
-        // detect the edge — we must read it BEFORE this tick's scn2674_tick.
         const bool prev_vb = avdc_.prev_vblank_flag;
         scn2674_tick(&avdc_, avdc_idle);
         const bool cur_vb  = (avdc_.irq_live & 0x10u) != 0u;
         avdc_vb_edge_ = cur_vb && !prev_vb;
+        // On each VB rising edge (I=0xFA = BIOS ready, ≥1 non-space AVDC write
+        // = past the cold-boot fill phase), hold Z80_INT high for 64 ticks so
+        // the Z80 reliably catches the interrupt within one instruction cycle.
+        if (avdc_vb_edge_ && cpu.i == 0xFA && avdc_char_nonspace_wr_cnt_ > 0) {
+            avdint_hold_ticks_ = 64;
+        }
+        if (avdint_hold_ticks_ > 0) avdint_hold_ticks_--;
     }
     (void)z80pio_tick(&gdp_video_pio_, 0);
     sync_ef_mode_from_gdp_pio();
+
+
+    // After CP/M boots, patch RAM[0x0038] so RST 38h (which 0xAC4F executes
+    // via JP 0x895C landing on the 3rd byte of LD A,(FF19)) does XOR A; RET
+    // instead of RRCA; JP NZ, 0x0134 (boot-sector code left there).
+    // Without the patch: RST38 causes A=0x01 → AND 0x02 → A=0x00 → Z=1 → OK?
+    // Actually RRCA(0x02)=0x01→JP NZ → jumps to 0x0134 → unknown code → stack overflow.
+    // XOR A; RET: A=0 → AND 0x02 = 0 → Z=1 → CALL NZ 0x9984 NOT taken → no recursion.
+    if (cpu.i == 0xFA && avdc_char_nonspace_wr_cnt_ > 0) {
+        static bool patched_rst38 = false;
+        if (!patched_rst38) { patched_rst38 = true;
+            ram[0x0038] = 0xAF;  // XOR A  (clears A so AND 0x02 = 0 = no recursive call)
+            ram[0x0039] = 0xC9;  // RET
+        }
+    }
+    (void)prev_ff19_;
+
     const bool pio_a_output = (gdp_video_pio_.port[Z80PIO_PORT_A].mode == Z80PIO_MODE_OUTPUT);
     const uint8_t pa = gdp_video_pio_.port[Z80PIO_PORT_A].output;
     // SCRLM appears active-low on Partner board wiring.
@@ -1035,63 +1010,6 @@ void partner_gdp::key_input(uint8_t ch)
         ch = '\r';
     }
 
-    // When the SETUP key (0xB0) arrives, dump the recent PC ring buffer and
-    // start a post-F12 instruction trace so we can see what code runs.
-    if (ch == 0xB0u) {
-        std::fprintf(stderr, "\n[setup-key] 0xB0 received — last %d PCs:\n", kPcRingSize);
-        for (int i = 0; i < kPcRingSize; i++) {
-            const int idx = (pc_ring_head_ + i) % kPcRingSize;
-            std::fprintf(stderr, "  %04x\n", pc_ring_[idx]);
-        }
-        std::fprintf(stderr, "[setup-key] AVDC: cursor=%04x s_latch=%02x irq_st=%02x rows=%u cols=%u\n",
-            avdc_.cursor_addr & 0x3FFFu, avdc_.status_latch, avdc_.irq_status,
-            (unsigned)avdc_.rows_per_screen, (unsigned)avdc_.chars_per_row);
-
-        // Dump machine code at the key routine addresses seen in the trace.
-        auto dump_mem = [&](uint16_t addr, int len, const char* label) {
-            std::fprintf(stderr, "[setup-key] %s @ %04x:", label, addr);
-            for (int i = 0; i < len; i++)
-                std::fprintf(stderr, " %02x", peek_ram((uint16_t)(addr + i)));
-            std::fprintf(stderr, "\n");
-        };
-        dump_mem(0xFEA7, 48, "ISR(FEA7)");       // keyboard ISR
-        dump_mem(0xFF0F, 32, "TOGGLE(FF0F)");    // setup flag toggle
-        dump_mem(0xFF08, 16, "NOSCROLL(FF08)"); // NO SCROLL handler
-        dump_mem(0xFEE3, 16, "ISRRET(FEE3)");   // ISR return path
-        dump_mem(0x86D0, 80, "MAINLOOP(86D0)"); // main loop
-        dump_mem(0x8B97, 64, "SUB(8B97)");      // I/O poll sub (extended)
-        dump_mem(0x8C47, 16, "TABLE(8C47)");    // port lookup table
-        dump_mem(0x8BF0, 32, "SUB(8BF0)");      // sub called from loop
-        dump_mem(0x8B68, 32, "SUB(8B68)");      // sub called from loop
-        dump_mem(0xAC47, 64, "SUB(AC47)");      // setup-flag-checking sub
-        dump_mem(0xFEA7, 96, "SIO_ISR(FEA7)");
-        // B5E7 = function table pointer used by key handler for high-bit keys
-        const uint16_t b5e7 = (uint16_t)(peek_ram(0xB5E7) | (peek_ram(0xB5E8) << 8));
-        std::fprintf(stderr, "[setup-key] B5E7=%04x B5E9=%04x\n",
-            b5e7, (uint16_t)(peek_ram(0xB5E9) | (peek_ram(0xB5EA) << 8)));
-        dump_mem(b5e7, 32, "FUNC_TBL(B5E7→)");  // function table for special keys
-        dump_mem(0xAC88, 48, "KEY_PROC(AC88)");
-        // RAM state and port value
-        std::fprintf(stderr, "[setup-key] FF19=%02x FF1A=%02x ACF4=%02x PIO_D0=%02x\n",
-            peek_ram(0xFF19), peek_ram(0xFF1A), peek_ram(0xACF4), io_read(0xD0));
-        // Z80 interrupt routing: I register + device vectors → handler addresses
-        std::fprintf(stderr, "[setup-key] cpu.I=%02x\n", cpu.i);
-        for (int ch = 0; ch < 4; ch++) {
-            const uint8_t v = ctc.chn[ch].int_vector;
-            const uint16_t ptr  = (uint16_t)((cpu.i << 8) | v);
-            const uint16_t hand = (uint16_t)(peek_ram(ptr) | (peek_ram((uint16_t)(ptr+1)) << 8));
-            std::fprintf(stderr, "  CTC ch%d vec=%02x ptr=%04x handler=%04x\n", ch, v, ptr, hand);
-        }
-        for (int ch = 0; ch < 2; ch++) {
-            const uint8_t v = sio.chn[ch].int_vector;
-            const uint16_t ptr  = (uint16_t)((cpu.i << 8) | v);
-            const uint16_t hand = (uint16_t)(peek_ram(ptr) | (peek_ram((uint16_t)(ptr+1)) << 8));
-            std::fprintf(stderr, "  SIO ch%d vec=%02x ptr=%04x handler=%04x\n", ch, v, ptr, hand);
-        }
-
-        std::fprintf(stderr, "[setup-key] Starting %d-tick trace...\n", kPcRingSize * 2000);
-        setup_trace_remain_ = kPcRingSize * 2000;  // ~512000 ticks (~128ms at 4MHz — catches CTC)
-    }
     const bool was_ready = sio.chn[Z80SIO_CHANNEL_A].rx_ready;
     if (!was_ready) {
         z80sio_rx_data(&sio, Z80SIO_CHANNEL_A, ch);
@@ -1249,6 +1167,12 @@ uint8_t partner_gdp::io_read(uint16_t port)
 
 int partner_gdp::get_external_im2_vector() const
 {
+    // Assert INT for 64 ticks on each AVDC VB edge. 64 ticks covers the longest
+    // Z80 instruction (23 cycles) so the Z80 reliably catches the interrupt.
+    // The handler runs under DI so INT going low mid-handler is harmless.
+    if (avdint_hold_ticks_ > 0) {
+        return 0x8E;
+    }
     return -1;
 }
 
@@ -1352,8 +1276,9 @@ void partner_gdp::io_write(uint16_t port, uint8_t data)
         io_cnt_.avdc_wr++;
         const uint8_t pidx = (uint8_t)(port & 0x0F);
         avdc_port_wr_cnt_[pidx]++;
-        if (port == 0x39)
+        if (port == 0x39) {
             avdc_cmd_cnt_[data]++;
+        }
         if (port == 0x34) {
             avdc_char_wr_cnt_++;
             avdc_char_hist_[data]++;
