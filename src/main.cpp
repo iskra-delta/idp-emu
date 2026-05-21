@@ -2,6 +2,7 @@
 #include "partner_crt.hpp"
 #include "partner_gdp.hpp"
 #include "debugger.hpp"
+#include "remote_debugger.hpp"
 #include "gui/gui.hpp"
 #include "gui/display.hpp"
 #include <iostream>
@@ -17,6 +18,23 @@ static constexpr uint32_t CPU_CLOCK_HZ = 4000000;
 static constexpr uint32_t TARGET_FPS = 60;
 static constexpr uint32_t TICKS_PER_FRAME = CPU_CLOCK_HZ / TARGET_FPS;
 static constexpr uint32_t RUN_TICK_SLICE = 8192;
+
+namespace {
+
+void step_one_instruction(partner &emu)
+{
+    while (emu.is_opdone())
+        emu.tick();
+
+    static constexpr uint32_t STEP_GUARD_LIMIT = 1000000;
+    uint32_t guard = 0;
+    while (!emu.is_opdone() && guard < STEP_GUARD_LIMIT) {
+        emu.tick();
+        guard++;
+    }
+}
+
+} // namespace
 
 void print_usage(const char *prog)
 {
@@ -250,6 +268,7 @@ int main(int argc, char **argv)
         std::unique_ptr<partner> emu = make_emu(gdp_model);
 
         gui app_gui;
+        remote_debugger remote_dbg;
         if (!app_gui.init("Iskra Delta Partner Emulator", 1100, 720))
         {
             std::cerr << "[error] Failed to initialize GUI\n";
@@ -262,6 +281,7 @@ int main(int argc, char **argv)
             return 1;
         }
         app_gui.set_terminal_profile(term_profile);
+        app_gui.set_remote_debugger(&remote_dbg);
 
         // Initialize display font from built-in EF9365 image.
         display &disp = app_gui.get_display();
@@ -296,118 +316,169 @@ int main(int argc, char **argv)
 
         while (running)
         {
-            running = app_gui.process_events(*emu, paused, action);
-
-            if (!paused)
             {
-                // Execute roughly a frame worth of emulation, but in smaller
-                // chunks so the window remains responsive.
-                uint32_t ticks_left = TICKS_PER_FRAME;
-                while (ticks_left > 0 && running && !paused)
-                {
-                    const uint32_t slice = (ticks_left > RUN_TICK_SLICE) ? RUN_TICK_SLICE : ticks_left;
-                    for (uint32_t i = 0; i < slice; i++)
-                    {
-                        emu->tick();
-                    }
-                    ticks_left -= slice;
+                std::unique_lock<std::recursive_mutex> emu_lock(remote_dbg.mutex());
+                running = app_gui.process_events(*emu, paused, action);
+                remote_dbg.sync_paused_state(paused);
+            }
 
-                    running = app_gui.process_events(*emu, paused, action);
-                    if (!running || paused)
-                        break;
-
-                    for (uint8_t ch : app_gui.drain_keys())
-                        push_key(ch);
+            if (auto request = app_gui.take_remote_debugger_request()) {
+                std::string error;
+                bool ok = false;
+                if (request->action == gui::remote_debugger_request::kind::start) {
+                    ok = remote_dbg.start(*emu, request->host, request->port, &error);
+                    if (!ok && error.empty())
+                        error = "Failed to start remote debugger.";
+                } else {
+                    ok = remote_dbg.stop(&error);
+                    if (!ok && error.empty())
+                        error = "Failed to stop remote debugger.";
                 }
+                app_gui.set_remote_debugger_error(ok ? std::string{} : error);
             }
-            else if (action == dbg_action::STEP_INTO)
-            {
-                // Execute one instruction: tick past current M1|RD, then until next
-                while (emu->is_opdone()) emu->tick();
-                while (!emu->is_opdone()) emu->tick();
-                action = dbg_action::NONE;
-            }
-            else if (action == dbg_action::STEP_OVER)
-            {
-                auto step_one_instruction = [&]() {
-                    // Execute one instruction: tick past current M1|RD, then until next.
-                    while (emu->is_opdone())
-                        emu->tick();
-                    // Guard against pathological hangs during single-step.
-                    static constexpr uint32_t STEP_GUARD_LIMIT = 1000000;
-                    uint32_t guard = 0;
-                    while (!emu->is_opdone() && guard < STEP_GUARD_LIMIT)
-                    {
-                        emu->tick();
-                        guard++;
-                    }
-                };
 
-                uint16_t pc = emu->get_current_pc();
-                uint8_t opcode = emu->peek_mem(pc);
-                if (is_call_or_rst(opcode))
+            {
+                std::unique_lock<std::recursive_mutex> emu_lock(remote_dbg.mutex());
+                remote_dbg.sync_paused_state(paused);
+
+                const auto remote_command = remote_dbg.take_pending_command(paused);
+                if (remote_command == remote_debugger::pending_command::continue_execution) {
+                    paused = false;
+                    remote_dbg.sync_paused_state(paused);
+                } else if (remote_command == remote_debugger::pending_command::step_instruction) {
+                    step_one_instruction(*emu);
+                    paused = true;
+                    remote_dbg.complete_stop(*emu, xdbgstub::stop_reason::step, paused);
+                }
+
+                if (!paused)
                 {
-                    // Find the address of the next instruction after the CALL/RST
-                    uint16_t target;
-                    if ((opcode & 0xC7) == 0xC7) {
-                        // RST: 1-byte instruction
-                        target = pc + 1;
-                    } else {
-                        // CALL variants: 3-byte instruction
-                        target = pc + 3;
-                    }
-                    // Run until we return to the next instruction (with tick limit),
-                    // while pumping events so UI/debugger stays responsive.
-                    static constexpr uint32_t STEP_OVER_LIMIT = 10000000;
-                    static constexpr uint32_t STEP_OVER_EVENT_SLICE = 8192;
-
-                    // First leave current instruction boundary.
-                    while (emu->is_opdone())
-                        emu->tick();
-
-                    uint32_t i = 0;
-                    for (; i < STEP_OVER_LIMIT; i++)
+                    // Execute roughly a frame worth of emulation, but in smaller
+                    // chunks so the window remains responsive.
+                    uint32_t ticks_left = TICKS_PER_FRAME;
+                    while (ticks_left > 0 && running && !paused)
                     {
-                        emu->tick();
-                        if (emu->get_current_pc() == target && emu->is_opdone())
+                        const uint32_t slice = (ticks_left > RUN_TICK_SLICE) ? RUN_TICK_SLICE : ticks_left;
+                        for (uint32_t i = 0; i < slice && !paused; i++)
+                        {
+                            if (remote_dbg.remote_continue_active() &&
+                                emu->is_opdone() &&
+                                remote_dbg.has_breakpoint(emu->get_current_pc())) {
+                                paused = true;
+                                remote_dbg.complete_stop(*emu, xdbgstub::stop_reason::breakpoint, paused);
+                                break;
+                            }
+
+                            emu->tick();
+
+                            if (emu->is_opdone()) {
+                                if (remote_dbg.pause_requested()) {
+                                    paused = true;
+                                    remote_dbg.sync_paused_state(paused);
+                                    if (remote_dbg.current_pending_command() != remote_debugger::pending_command::step_instruction)
+                                        remote_dbg.complete_stop(*emu, xdbgstub::stop_reason::pause, paused);
+                                    break;
+                                }
+                                if (emu->capture_debug_cpu_state().halted) {
+                                    paused = true;
+                                    remote_dbg.complete_stop(*emu, xdbgstub::stop_reason::halted, paused);
+                                    break;
+                                }
+                            }
+                        }
+                        ticks_left -= slice;
+                        remote_dbg.sync_paused_state(paused);
+
+                        if (!running || paused)
                             break;
 
-                        if ((i % STEP_OVER_EVENT_SLICE) == 0)
+                        running = app_gui.process_events(*emu, paused, action);
+                        remote_dbg.sync_paused_state(paused);
+                        if (paused && remote_dbg.remote_continue_active())
+                            remote_dbg.complete_stop(*emu, xdbgstub::stop_reason::pause, paused);
+                        if (!running || paused)
+                            break;
+
+                        for (uint8_t ch : app_gui.drain_keys())
+                            push_key(ch);
+                    }
+                }
+                else if (action == dbg_action::STEP_INTO)
+                {
+                    step_one_instruction(*emu);
+                    action = dbg_action::NONE;
+                }
+                else if (action == dbg_action::STEP_OVER)
+                {
+                    uint16_t pc = emu->get_current_pc();
+                    uint8_t opcode = emu->peek_mem(pc);
+                    if (is_call_or_rst(opcode))
+                    {
+                        // Find the address of the next instruction after the CALL/RST
+                        uint16_t target;
+                        if ((opcode & 0xC7) == 0xC7) {
+                            // RST: 1-byte instruction
+                            target = pc + 1;
+                        } else {
+                            // CALL variants: 3-byte instruction
+                            target = pc + 3;
+                        }
+                        // Run until we return to the next instruction (with tick limit),
+                        // while pumping events so UI/debugger stays responsive.
+                        static constexpr uint32_t STEP_OVER_LIMIT = 10000000;
+                        static constexpr uint32_t STEP_OVER_EVENT_SLICE = 8192;
+
+                        // First leave current instruction boundary.
+                        while (emu->is_opdone())
+                            emu->tick();
+
+                        uint32_t i = 0;
+                        for (; i < STEP_OVER_LIMIT; i++)
                         {
-                            // Keep window responsive during long step-over spans.
-                            running = app_gui.process_events(*emu, paused, action);
-                            if (!running)
+                            emu->tick();
+                            if (emu->get_current_pc() == target && emu->is_opdone())
                                 break;
-                            // Defer any new debugger action to outer loop.
-                            if (action != dbg_action::STEP_OVER)
-                                break;
+
+                            if ((i % STEP_OVER_EVENT_SLICE) == 0)
+                            {
+                                // Keep window responsive during long step-over spans.
+                                running = app_gui.process_events(*emu, paused, action);
+                                if (!running)
+                                    break;
+                                // Defer any new debugger action to outer loop.
+                                if (action != dbg_action::STEP_OVER)
+                                    break;
+                            }
+                        }
+                        if (i >= STEP_OVER_LIMIT)
+                        {
+                            std::cerr << "[warn] Step Over timeout at PC="
+                                      << std::hex << emu->get_current_pc() << std::dec
+                                      << " (call did not return within limit)\n";
                         }
                     }
-                    if (i >= STEP_OVER_LIMIT)
+                    else
                     {
-                        std::cerr << "[warn] Step Over timeout at PC="
-                                  << std::hex << emu->get_current_pc() << std::dec
-                                  << " (call did not return within limit)\n";
+                        // Not a call: same as step into
+                        step_one_instruction(*emu);
                     }
+                    if (action == dbg_action::STEP_OVER)
+                        action = dbg_action::NONE;
                 }
-                else
-                {
-                    // Not a call: same as step into
-                    step_one_instruction();
-                }
-                if (action == dbg_action::STEP_OVER)
-                    action = dbg_action::NONE;
+
+                // Feed keyboard input to SIO
+                for (uint8_t ch : app_gui.drain_keys())
+                    push_key(ch);
+
+                // Render terminal to display
+                render_machine();
             }
 
-            // Feed keyboard input to SIO
-            for (uint8_t ch : app_gui.drain_keys())
-                push_key(ch);
-
-            // Render terminal to display
-            render_machine();
-
             app_gui.begin_frame();
-            app_gui.render_panels(*emu, paused, action);
+            {
+                std::unique_lock<std::recursive_mutex> emu_lock(remote_dbg.mutex());
+                app_gui.render_panels(*emu, paused, action);
+            }
             app_gui.end_frame();
         }
 

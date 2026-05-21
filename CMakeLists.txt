@@ -26,6 +26,7 @@ find_package(SDL2 REQUIRED)
 
 # --- OpenGL ---
 find_package(OpenGL REQUIRED)
+find_package(Threads REQUIRED)
 
 # --- Dear ImGui via FetchContent ---
 include(FetchContent)
@@ -52,6 +53,17 @@ target_include_directories(imgui_lib PUBLIC
     ${imgui_SOURCE_DIR}/backends
 )
 target_link_libraries(imgui_lib PUBLIC SDL2::SDL2 OpenGL::GL)
+
+set(XYZ_RELEASE_DIR ${CMAKE_SOURCE_DIR}/third_party/xyz-release)
+if(NOT EXISTS ${XYZ_RELEASE_DIR}/lib/libxdbgstub.a)
+    message(FATAL_ERROR "Missing prebuilt xyz release at ${XYZ_RELEASE_DIR}")
+endif()
+
+add_library(xdbgstub_prebuilt STATIC IMPORTED GLOBAL)
+set_target_properties(xdbgstub_prebuilt PROPERTIES
+    IMPORTED_LOCATION ${XYZ_RELEASE_DIR}/lib/libxdbgstub.a
+    INTERFACE_INCLUDE_DIRECTORIES ${XYZ_RELEASE_DIR}/include
+)
 
 # Subdirectories
 add_subdirectory(lib/chipsex)

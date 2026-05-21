@@ -8,13 +8,26 @@
 #include <vector>
 #include <cstdint>
 #include <unordered_map>
+#include <optional>
 
 class partner;
+class remote_debugger;
 enum class partner_gdp_keyboard_sound : uint8_t;
 
 class gui
 {
 public:
+    struct remote_debugger_request {
+        enum class kind {
+            start,
+            stop
+        };
+
+        kind action = kind::start;
+        std::string host;
+        uint16_t port = 0;
+    };
+
     bool init(const std::string &title, int width, int height);
     void shutdown();
 
@@ -26,6 +39,9 @@ public:
 
     display &get_display() { return display_; }
     void set_terminal_profile(terminal_profile profile) { terminal_profile_ = profile; }
+    void set_remote_debugger(remote_debugger *debugger) { remote_debugger_ = debugger; }
+    std::optional<remote_debugger_request> take_remote_debugger_request();
+    void set_remote_debugger_error(const std::string &error) { remote_debug_error_ = error; }
 
     std::vector<uint8_t> drain_keys();
 
@@ -38,6 +54,8 @@ private:
     void service_keyboard_sound(partner &emu);
     void open_disk_mount_dialog(partner &emu, int drive);
     void render_disk_mount_dialog(partner &emu);
+    void open_remote_debugger_dialog();
+    void render_remote_debugger_dialog();
 
     SDL_Window *window_ = nullptr;
     SDL_GLContext gl_context_ = nullptr;
@@ -72,7 +90,13 @@ private:
 
     std::vector<uint8_t> key_buf_;
     std::unordered_map<std::string, uint32_t> key_blink_until_ms_{};
+    remote_debugger *remote_debugger_ = nullptr;
     std::string disk_mount_path_;
     std::string disk_mount_error_;
+    std::string remote_debug_host_ = "127.0.0.1";
+    std::string remote_debug_port_text_ = "9000";
+    std::string remote_debug_error_;
+    std::optional<remote_debugger_request> pending_remote_debugger_request_;
+    bool open_remote_debugger_popup_ = false;
     static constexpr uint32_t key_blink_ms_ = 130;
 };

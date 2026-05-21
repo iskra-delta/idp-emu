@@ -19,6 +19,7 @@
 #include "window_chrome.hpp"
 #include "../partner.hpp"
 #include "../partner_gdp.hpp"
+#include "../remote_debugger.hpp"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -30,6 +31,7 @@
 #include <cctype>
 #include <cmath>
 #include <exception>
+#include <cstdlib>
 #include <cstdio>
 #include <filesystem>
 #include <iostream>
@@ -390,6 +392,23 @@ void gui::open_disk_mount_dialog(partner &emu, int drive)
     open_disk_mount_popup_ = true;
 }
 
+void gui::open_remote_debugger_dialog()
+{
+    if (!remote_debugger_)
+        return;
+    remote_debug_host_ = remote_debugger_->bind_host();
+    remote_debug_port_text_ = std::to_string(remote_debugger_->bind_port());
+    remote_debug_error_.clear();
+    open_remote_debugger_popup_ = true;
+}
+
+std::optional<gui::remote_debugger_request> gui::take_remote_debugger_request()
+{
+    auto request = std::move(pending_remote_debugger_request_);
+    pending_remote_debugger_request_.reset();
+    return request;
+}
+
 void gui::render_disk_mount_dialog(partner &emu)
 {
     if (open_disk_mount_popup_) {
@@ -432,6 +451,69 @@ void gui::render_disk_mount_dialog(partner &emu)
         disk_mount_error_.clear();
         ImGui::CloseCurrentPopup();
     }
+
+    ImGui::EndPopup();
+}
+
+void gui::render_remote_debugger_dialog()
+{
+    if (!remote_debugger_)
+        return;
+
+    if (open_remote_debugger_popup_) {
+        ImGui::OpenPopup("Remote Debugger");
+        open_remote_debugger_popup_ = false;
+    }
+
+    bool open = true;
+    if (!ImGui::BeginPopupModal("Remote Debugger", &open, ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    char host_buf[128];
+    std::snprintf(host_buf, sizeof(host_buf), "%s", remote_debug_host_.c_str());
+    if (ImGui::InputText("Bind host", host_buf, sizeof(host_buf)))
+        remote_debug_host_ = host_buf;
+
+    char port_buf[32];
+    std::snprintf(port_buf, sizeof(port_buf), "%s", remote_debug_port_text_.c_str());
+    if (ImGui::InputText("Port", port_buf, sizeof(port_buf)))
+        remote_debug_port_text_ = port_buf;
+
+    ImGui::TextDisabled("Status: %s", remote_debugger_->status_summary().c_str());
+    ImGui::TextWrapped("xdbg command: %s", remote_debugger_->debugger_command().c_str());
+
+    if (!remote_debug_error_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220, 90, 90, 255));
+        ImGui::TextWrapped("%s", remote_debug_error_.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    const bool enabled = remote_debugger_->is_enabled();
+    if (ImGui::Button(enabled ? "Stop" : "Start")) {
+        remote_debug_error_.clear();
+        if (enabled) {
+            pending_remote_debugger_request_ = remote_debugger_request{
+                remote_debugger_request::kind::stop,
+                remote_debug_host_,
+                0
+            };
+        } else {
+            char *end = nullptr;
+            const unsigned long parsed_port = std::strtoul(remote_debug_port_text_.c_str(), &end, 10);
+            if (end == remote_debug_port_text_.c_str() || *end != '\0' || parsed_port == 0 || parsed_port > 65535UL) {
+                remote_debug_error_ = "Enter a valid TCP port number.";
+            } else {
+                pending_remote_debugger_request_ = remote_debugger_request{
+                    remote_debugger_request::kind::start,
+                    remote_debug_host_,
+                    static_cast<uint16_t>(parsed_port)
+                };
+            }
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Close"))
+        ImGui::CloseCurrentPopup();
 
     ImGui::EndPopup();
 }
@@ -1010,6 +1092,11 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             display_.update();
         }
         ImGui::Separator();
+        if (ImGui::MenuItem("Remote Debugger..."))
+            open_remote_debugger_dialog();
+        if (remote_debugger_)
+            ImGui::TextDisabled("xdbg: %s", remote_debugger_->status_summary().c_str());
+        ImGui::Separator();
         if (ImGui::MenuItem("Quit", "Ctrl+Q"))
         {
             SDL_Event quit_event;
@@ -1090,6 +1177,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
         panels::render_monitor(display_, &show_monitor_);
 
     render_disk_mount_dialog(emu);
+    render_remote_debugger_dialog();
 
     if (show_dma_)
         panels::render_dma(emu, &show_dma_);

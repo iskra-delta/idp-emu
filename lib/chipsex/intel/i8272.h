@@ -327,11 +327,6 @@ static void _i8272_schedule_irq(i8272_t *fdc, uint32_t delay_ticks,
     fdc->irq_enters_result = enter_result;
 }
 
-static void _i8272_schedule_execute(i8272_t *fdc, uint32_t delay_ticks) {
-    fdc->exec_delay = delay_ticks;
-    fdc->exec_pending = true;
-}
-
 /*
     _i8272_enter_result
 
