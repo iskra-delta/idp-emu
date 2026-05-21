@@ -883,6 +883,61 @@ bool partner::has_serial_mouse_attached() const
     return false;
 }
 
+partner::debug_cpu_state partner::capture_debug_cpu_state() const
+{
+    debug_cpu_state state;
+    state.af = cpu.af;
+    state.bc = cpu.bc;
+    state.de = cpu.de;
+    state.hl = cpu.hl;
+    state.ix = cpu.ix;
+    state.iy = cpu.iy;
+    state.sp = cpu.sp;
+    state.pc = cpu.pc;
+    state.i = cpu.i;
+    state.r = cpu.r;
+    state.iff1 = cpu.iff1;
+    state.iff2 = cpu.iff2;
+    state.halted = (pins & Z80_HALT) != 0;
+    return state;
+}
+
+void partner::apply_debug_cpu_state(const debug_cpu_state &state)
+{
+    cpu.af = state.af;
+    cpu.bc = state.bc;
+    cpu.de = state.de;
+    cpu.hl = state.hl;
+    cpu.ix = state.ix;
+    cpu.iy = state.iy;
+    cpu.sp = state.sp;
+    cpu.pc = state.pc;
+    cpu.i = state.i;
+    cpu.r = state.r;
+    cpu.iff1 = state.iff1;
+    cpu.iff2 = state.iff2;
+
+    if (state.halted)
+        pins |= Z80_HALT;
+    else
+        pins &= ~Z80_HALT;
+}
+
+std::vector<uint8_t> partner::read_debug_memory(uint32_t address, size_t length) const
+{
+    std::vector<uint8_t> out;
+    out.reserve(length);
+    for (size_t i = 0; i < length; ++i)
+        out.push_back(peek_mem((uint16_t)(address + i)));
+    return out;
+}
+
+void partner::write_debug_memory(uint32_t address, const std::vector<uint8_t> &data)
+{
+    for (size_t i = 0; i < data.size(); ++i)
+        write_mem((uint16_t)(address + i), data[i]);
+}
+
 void partner::apply_pio_device_output(pio_port_id port, uint8_t data)
 {
     const int idx = pio_port_index(port);
@@ -1104,6 +1159,9 @@ void partner::load_disk(int drive, const std::string &path)
     auto &disk = disks_[drive];
     disk.data.resize(size);
     file.read(reinterpret_cast<char *>(disk.data.data()), (std::streamsize)size);
+    if (!file)
+        throw std::runtime_error("incomplete disk image: " + path);
+    disk.path = path;
 
     // Auto-detect geometry from file size
     constexpr uint64_t FDD_77DS_SIZE = 77ULL * 2 * 18 * 256;   // 709,632 bytes
@@ -1121,6 +1179,13 @@ void partner::load_disk(int drive, const std::string &path)
     }
 
     fdc.drive[drive].ready = true;
+}
+
+std::string partner::get_disk_path(int drive) const
+{
+    if (drive < 0 || drive >= I8272_MAX_DRIVES)
+        return {};
+    return disks_[drive].path;
 }
 
 void partner::load_hdd(const std::string &path)

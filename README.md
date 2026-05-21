@@ -38,8 +38,20 @@ git clone https://github.com/tstih/idp-emu.git
 ## Compile
 
 ```bash
+make
+```
+
+Equivalent raw CMake commands:
+
+```bash
 cmake -S . -B build
 cmake --build build
+```
+
+## Clean
+
+```bash
+make clean
 ```
 
 ## Run
@@ -61,6 +73,8 @@ Run Partner G (GDP) with empty HDD:
 ```bash
 ./bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g-empty.img
 ```
+
+In VS Code, `F5` uses the `.vscode/launch.json` debug configuration, which starts the emulator under `gdb`. If you only want the emulator window, use `Run Without Debugging` (`Ctrl+F5`).
 
 # Dependencies
 

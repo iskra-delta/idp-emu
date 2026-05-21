@@ -2,79 +2,55 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "Debug Partner GDP (Floppy)",
+      "name": "GDP Floppy",
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/bin/idp-emu",
       "args": [
-        "--model", "gdp",
-        "--rom", "${workspaceFolder}/roms/partner_gdp.rom",
-        "--disk", "${workspaceFolder}/disks/fdd-partner-g.img"
+        "--model",
+        "gdp",
+        "--rom",
+        "${workspaceFolder}/roms/partner_gdp.rom",
+        "--disk",
+        "${workspaceFolder}/disks/fdd-partner-g.img"
       ],
-      "stopAtEntry": false,
       "cwd": "${workspaceFolder}",
-      "environment": [],
+      "stopAtEntry": false,
       "externalConsole": false,
+      "miDebuggerArgs": "-iex \"set debuginfod enabled off\"",
+      "launchCompleteCommand": "exec-run",
+      "symbolLoadInfo": {
+        "loadAll": false
+      },
+      "logging": {
+        "trace": true,
+        "traceResponse": true,
+        "engineLogging": true
+      },
+      "environment": [
+        { "name": "DISPLAY", "value": ":0" },
+        { "name": "WAYLAND_DISPLAY", "value": "wayland-0" }
+      ],
       "MIMode": "gdb",
-      "miDebuggerPath": "/usr/bin/gdb",
+      "miDebuggerPath": "${workspaceFolder}/tools/gdb-no-debuginfod.sh",
+      "preLaunchTask": "CMake Build Debug",
       "setupCommands": [
+        {
+          "description": "Enable async MI so Pause/interrupt works while the target is running",
+          "text": "-gdb-set mi-async on",
+          "ignoreFailures": true
+        },
         {
           "description": "Enable pretty-printing for gdb",
           "text": "-enable-pretty-printing",
           "ignoreFailures": true
-        }
-      ],
-      "preLaunchTask": "CMake Build"
-    },
-    {
-      "name": "Debug Partner GDP (Empty HDD)",
-      "type": "cppdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}/bin/idp-emu",
-      "args": [
-        "--model", "gdp",
-        "--rom", "${workspaceFolder}/roms/partner_gdp.rom",
-        "--hdd", "${workspaceFolder}/disks/hdd-partner-g-empty.img"
-      ],
-      "stopAtEntry": false,
-      "cwd": "${workspaceFolder}",
-      "environment": [],
-      "externalConsole": false,
-      "MIMode": "gdb",
-      "miDebuggerPath": "/usr/bin/gdb",
-      "setupCommands": [
+        },
         {
-          "description": "Enable pretty-printing for gdb",
-          "text": "-enable-pretty-printing",
+          "description": "Disable pagination in gdb",
+          "text": "set pagination off",
           "ignoreFailures": true
         }
-      ],
-      "preLaunchTask": "CMake Build"
-    },
-    {
-      "name": "Debug Partner P (Floppy)",
-      "type": "cppdbg",
-      "request": "launch",
-      "program": "${workspaceFolder}/bin/idp-emu",
-      "args": [
-        "--model", "crt",
-        "--rom", "${workspaceFolder}/roms/partner_crt.rom",
-        "--disk", "${workspaceFolder}/disks/fdd-partner-p.img"
-      ],
-      "stopAtEntry": false,
-      "cwd": "${workspaceFolder}",
-      "environment": [],
-      "externalConsole": false,
-      "MIMode": "gdb",
-      "miDebuggerPath": "/usr/bin/gdb",
-      "setupCommands": [
-        {
-          "description": "Enable pretty-printing for gdb",
-          "text": "-enable-pretty-printing",
-          "ignoreFailures": true
-        }
-      ],
-      "preLaunchTask": "CMake Build"
+      ]
     }
   ]
 }

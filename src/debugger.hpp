@@ -1,7 +1,12 @@
 #pragma once
 #include <cstdint>
 
-enum class dbg_action { NONE, STEP_INTO, STEP_OVER, SWITCH_TO_GDP };
+enum class dbg_action {
+    NONE,
+    STEP_INTO,
+    STEP_OVER,
+    SWITCH_TO_GDP
+};
 
 // Returns true if opcode is a CALL or RST instruction (subroutine call)
 inline bool is_call_or_rst(uint8_t opcode)

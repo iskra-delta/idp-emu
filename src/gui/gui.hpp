@@ -36,6 +36,8 @@ private:
     void queue_keyboard_tone(float freq_hz, float duration_ms, float amplitude, bool square_wave);
     void queue_keyboard_sound(partner_gdp_keyboard_sound sound);
     void service_keyboard_sound(partner &emu);
+    void open_disk_mount_dialog(partner &emu, int drive);
+    void render_disk_mount_dialog(partner &emu);
 
     SDL_Window *window_ = nullptr;
     SDL_GLContext gl_context_ = nullptr;
@@ -61,6 +63,8 @@ private:
     bool mouse_left_down_ = false;
     bool mouse_middle_down_ = false;
     bool mouse_right_down_ = false;
+    bool open_disk_mount_popup_ = false;
+    int disk_mount_drive_ = 1;
     panels::display_viewport_info display_viewport_{};
     terminal_profile terminal_profile_ = terminal_profile::vt52;
     SDL_AudioDeviceID audio_device_ = 0;
@@ -68,5 +72,7 @@ private:
 
     std::vector<uint8_t> key_buf_;
     std::unordered_map<std::string, uint32_t> key_blink_until_ms_{};
+    std::string disk_mount_path_;
+    std::string disk_mount_error_;
     static constexpr uint32_t key_blink_ms_ = 130;
 };

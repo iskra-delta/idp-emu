@@ -87,6 +87,7 @@ public:
     void load_rom(const std::string &path);
     void load_disk(int drive, const std::string &path);
     void load_hdd(const std::string &path);
+    std::string get_disk_path(int drive) const;
     virtual void reset();
     virtual void tick();
 
@@ -139,6 +140,27 @@ public:
     void inject_serial_mouse_motion(int dx, int dy, bool left_pressed, bool right_pressed, bool middle_pressed);
     bool has_serial_mouse_attached() const;
     bool has_logitech_mouse_attached() const;
+
+    struct debug_cpu_state {
+        uint16_t af = 0;
+        uint16_t bc = 0;
+        uint16_t de = 0;
+        uint16_t hl = 0;
+        uint16_t ix = 0;
+        uint16_t iy = 0;
+        uint16_t sp = 0;
+        uint16_t pc = 0;
+        uint8_t i = 0;
+        uint8_t r = 0;
+        bool iff1 = false;
+        bool iff2 = false;
+        bool halted = false;
+    };
+
+    debug_cpu_state capture_debug_cpu_state() const;
+    void apply_debug_cpu_state(const debug_cpu_state &state);
+    std::vector<uint8_t> read_debug_memory(uint32_t address, size_t length) const;
+    void write_debug_memory(uint32_t address, const std::vector<uint8_t> &data);
 
 protected:
     // All Zilog chips in Partner system
@@ -258,6 +280,7 @@ private:
         uint32_t seclen = 256;
         uint32_t sectrk = 18;
         uint32_t heads = 1;
+        std::string path;
     };
     std::array<disk_image, I8272_MAX_DRIVES> disks_;
     disk_image hdd_;

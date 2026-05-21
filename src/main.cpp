@@ -24,7 +24,8 @@ void print_usage(const char *prog)
     std::cerr << "Options:\n";
     std::cerr << "  --help           Show this help\n";
     std::cerr << "  --rom FILE       ROM file (default: roms/partner_crt.rom)\n";
-    std::cerr << "  --disk FILE      Boot disk image for drive A: (default: disks/fdd-partner-p.img)\n";
+    std::cerr << "  --fd0 FILE       Floppy drive 0 image (default: disks/fdd-partner-p.img)\n";
+    std::cerr << "  --fd1 FILE       Floppy drive 1 image\n";
     std::cerr << "  --hdd FILE       Hard disk image for Xebec/SASI controller\n";
     std::cerr << "                   (not loaded unless explicitly requested)\n";
     std::cerr << "  --terminal TYPE  Terminal profile: vt52|vt100\n";
@@ -34,10 +35,12 @@ void print_usage(const char *prog)
 int main(int argc, char **argv)
 {
     std::string rom_file  = "roms/partner_crt.rom";
-    std::string disk_file = "disks/fdd-partner-p.img";
+    std::string fd0_file = "disks/fdd-partner-p.img";
+    std::string fd1_file;
     std::string hdd_file;
     std::string model = "auto";
-    bool disk_explicit = false;
+    bool fd0_explicit = false;
+    bool fd1_explicit = false;
     bool terminal_explicit = false;
     terminal_profile term_profile = terminal_profile::vt52;
 
@@ -53,11 +56,17 @@ int main(int argc, char **argv)
             if ((i + 1) >= argc) { std::cerr << "Error: --rom requires a value\n"; return 1; }
             rom_file = argv[++i];
         }
-        else if (strcmp(argv[i], "--disk") == 0)
+        else if (strcmp(argv[i], "--fd0") == 0 || strcmp(argv[i], "--disk") == 0)
         {
-            if ((i + 1) >= argc) { std::cerr << "Error: --disk requires a value\n"; return 1; }
-            disk_file = argv[++i];
-            disk_explicit = true;
+            if ((i + 1) >= argc) { std::cerr << "Error: --fd0 requires a value\n"; return 1; }
+            fd0_file = argv[++i];
+            fd0_explicit = true;
+        }
+        else if (strcmp(argv[i], "--fd1") == 0 || strcmp(argv[i], "--disk-b") == 0)
+        {
+            if ((i + 1) >= argc) { std::cerr << "Error: --fd1 requires a value\n"; return 1; }
+            fd1_file = argv[++i];
+            fd1_explicit = true;
         }
         else if (strcmp(argv[i], "--hdd") == 0)
         {
@@ -137,7 +146,9 @@ int main(int argc, char **argv)
         };
 
         rom_file = resolve_existing_path(rom_file);
-        disk_file = resolve_existing_path(disk_file);
+        fd0_file = resolve_existing_path(fd0_file);
+        if (!fd1_file.empty())
+            fd1_file = resolve_existing_path(fd1_file);
         if (!hdd_file.empty())
             hdd_file = resolve_existing_path(hdd_file);
 
@@ -179,8 +190,8 @@ int main(int argc, char **argv)
         };
 
         auto pick_disk_for_model = [&](bool want_gdp) -> std::string {
-            if (disk_explicit)
-                return disk_file;
+            if (fd0_explicit)
+                return fd0_file;
             const std::string preferred = resolve_existing_path(
                 want_gdp ? "disks/fdd-partner-g.img" : "disks/fdd-partner-p.img");
             const std::string fallback = resolve_existing_path(
@@ -196,11 +207,13 @@ int main(int argc, char **argv)
 
         auto make_emu = [&](bool want_gdp) -> std::unique_ptr<partner> {
             const std::string selected_rom = pick_rom_for_model(want_gdp);
-            const std::string selected_disk = pick_disk_for_model(want_gdp);
-            const bool auto_insert_floppy = hdd_file.empty() || disk_explicit;
+            const std::string selected_fd0 = pick_disk_for_model(want_gdp);
+            const std::string selected_fd1 = fd1_explicit ? fd1_file : std::string{};
+            const bool auto_insert_floppy = hdd_file.empty() || fd0_explicit;
             std::cout << "[info] model=" << (want_gdp ? "gdp" : "crt")
                       << " rom=" << selected_rom
-                      << " disk=" << (auto_insert_floppy ? selected_disk : std::string("(none)"))
+                      << " fd0=" << (auto_insert_floppy ? selected_fd0 : std::string("(none)"))
+                      << " fd1=" << (selected_fd1.empty() ? std::string("(none)") : selected_fd1)
                       << (hdd_file.empty() ? "" : (" hdd=" + hdd_file))
                       << "\n";
 
@@ -210,7 +223,9 @@ int main(int argc, char **argv)
                 auto gdp = std::make_unique<partner_gdp>(term_profile);
                 gdp->load_rom(selected_rom);
                 if (auto_insert_floppy)
-                    gdp->load_disk(0, selected_disk);
+                    gdp->load_disk(0, selected_fd0);
+                if (!selected_fd1.empty())
+                    gdp->load_disk(1, selected_fd1);
                 if (!hdd_file.empty())
                     gdp->load_hdd(hdd_file);
                 gdp->reset();
@@ -221,7 +236,9 @@ int main(int argc, char **argv)
                 auto crt = std::make_unique<partner_crt>(term_profile);
                 crt->load_rom(selected_rom);
                 if (auto_insert_floppy)
-                    crt->load_disk(0, selected_disk);
+                    crt->load_disk(0, selected_fd0);
+                if (!selected_fd1.empty())
+                    crt->load_disk(1, selected_fd1);
                 if (!hdd_file.empty())
                     crt->load_hdd(hdd_file);
                 crt->reset();

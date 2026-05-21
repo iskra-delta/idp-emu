@@ -12,9 +12,8 @@ This folder holds reusable C++ unit tests for the emulator.
 From repository root:
 
 ```bash
-cmake -S . -B build
-cmake --build build -j4
-cd build && ctest --output-on-failure
+make
+make test
 ```
 
 ## Add a new unit test

@@ -29,6 +29,7 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <exception>
 #include <cstdio>
 #include <filesystem>
 #include <iostream>
@@ -378,8 +379,69 @@ void gui::service_keyboard_sound(partner &emu)
     }
 }
 
+void gui::open_disk_mount_dialog(partner &emu, int drive)
+{
+    disk_mount_drive_ = drive;
+    disk_mount_path_ = emu.get_disk_path(drive);
+    if (disk_mount_path_.empty()) {
+        disk_mount_path_ = (drive == 0) ? "disks/fdd-partner-p.img" : "disks/fdd-partner-g.img";
+    }
+    disk_mount_error_.clear();
+    open_disk_mount_popup_ = true;
+}
+
+void gui::render_disk_mount_dialog(partner &emu)
+{
+    if (open_disk_mount_popup_) {
+        ImGui::OpenPopup("Mount Floppy");
+        open_disk_mount_popup_ = false;
+    }
+
+    bool open = true;
+    if (!ImGui::BeginPopupModal("Mount Floppy", &open, ImGuiWindowFlags_AlwaysAutoResize)) {
+        return;
+    }
+
+    ImGui::Text("Floppy FD%d:", disk_mount_drive_);
+    const std::string current_path = emu.get_disk_path(disk_mount_drive_);
+    ImGui::TextDisabled("Current: %s", current_path.empty() ? "(empty)" : current_path.c_str());
+
+    char path_buf[1024];
+    std::snprintf(path_buf, sizeof(path_buf), "%s", disk_mount_path_.c_str());
+    if (ImGui::InputText("Image path", path_buf, sizeof(path_buf))) {
+        disk_mount_path_ = path_buf;
+    }
+
+    if (!disk_mount_error_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220, 90, 90, 255));
+        ImGui::TextWrapped("%s", disk_mount_error_.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    if (ImGui::Button("Mount")) {
+        try {
+            emu.load_disk(disk_mount_drive_, disk_mount_path_);
+            disk_mount_error_.clear();
+            ImGui::CloseCurrentPopup();
+        } catch (const std::exception &e) {
+            disk_mount_error_ = e.what();
+        }
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+        disk_mount_error_.clear();
+        ImGui::CloseCurrentPopup();
+    }
+
+    ImGui::EndPopup();
+}
+
 bool gui::init(const std::string &title, int width, int height)
 {
+    // Let debuggers and the OS deliver SIGINT/SIGTERM normally instead of
+    // having SDL translate them into SDL_QUIT events.
+    SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_TIMER) != 0)
     {
         std::cerr << "[error] SDL_Init failed: " << SDL_GetError() << "\n";
@@ -406,6 +468,8 @@ bool gui::init(const std::string &title, int width, int height)
     }
 
     SDL_SetWindowMinimumSize(window_, 1024, 600);
+    SDL_ShowWindow(window_);
+    SDL_RaiseWindow(window_);
 
     gl_context_ = SDL_GL_CreateContext(window_);
     if (!gl_context_)
@@ -427,6 +491,9 @@ bool gui::init(const std::string &title, int width, int height)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
+    // Avoid restoring repo-local window placements that can leave the display
+    // dock detached on an off-screen monitor from a previous session.
+    io.IniFilename = nullptr;
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
@@ -976,6 +1043,13 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
         ImGui::MenuItem("Device Routing", nullptr, &show_devices_);
         ImGui::MenuItem("Monitor", nullptr, &show_monitor_);
         ImGui::MenuItem("Virtual Keyboard", nullptr, &show_keyboard_);
+        ImGui::Separator();
+        if (ImGui::MenuItem("Mount Floppy FD0..."))
+            open_disk_mount_dialog(emu, 0);
+        if (ImGui::MenuItem("Mount Floppy FD1..."))
+            open_disk_mount_dialog(emu, 1);
+        ImGui::TextDisabled("FD0: %s", emu.get_disk_path(0).empty() ? "(empty)" : emu.get_disk_path(0).c_str());
+        ImGui::TextDisabled("FD1: %s", emu.get_disk_path(1).empty() ? "(empty)" : emu.get_disk_path(1).c_str());
         ImGui::EndPopup();
     }
 
@@ -1014,6 +1088,8 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 
     if (show_monitor_)
         panels::render_monitor(display_, &show_monitor_);
+
+    render_disk_mount_dialog(emu);
 
     if (show_dma_)
         panels::render_dma(emu, &show_dma_);
