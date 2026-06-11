@@ -14,6 +14,7 @@ public:
         orange = 1,
         lcd = 2,
         color = 3,
+        flat = 4,
     };
 
     // Partner GDP visible text raster:
@@ -44,7 +45,10 @@ public:
     GLuint get_texture() const { return shader_ ? crt_tex_ : source_tex_; }
     float aspect_ratio() const { return (float)FB_W / (float)FB_H; }
     const uint8_t* data() const { return fb_; }
-    void set_phosphor_type(phosphor_type t) { phosphor_ = t; }
+    void set_phosphor_type(phosphor_type t)
+    {
+        phosphor_ = (t == phosphor_type::color) ? phosphor_type::green : t;
+    }
     phosphor_type get_phosphor_type() const { return phosphor_; }
     void set_monitor_brightness(float v);
     float get_monitor_brightness() const { return monitor_brightness_; }
@@ -77,7 +81,7 @@ private:
     GLuint shader_ = 0;
     GLuint vao_ = 0;
     GLuint vbo_ = 0;
-    phosphor_type phosphor_ = phosphor_type::green;
+    phosphor_type phosphor_ = phosphor_type::flat;
     float monitor_brightness_ = 1.00f;
     float monitor_contrast_ = 1.00f;
     float monitor_bloom_ = 1.00f;

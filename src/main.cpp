@@ -482,6 +482,12 @@ int main(int argc, char **argv)
             app_gui.end_frame();
         }
 
+        std::string remote_dbg_stop_error;
+        if (!remote_dbg.stop(&remote_dbg_stop_error) && !remote_dbg_stop_error.empty()) {
+            std::cerr << "[warning] Failed to stop remote debugger: "
+                      << remote_dbg_stop_error << "\n";
+        }
+
         app_gui.shutdown();
     }
     catch (const std::exception &e)

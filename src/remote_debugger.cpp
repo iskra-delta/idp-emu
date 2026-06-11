@@ -2,7 +2,6 @@
 
 #include "partner.hpp"
 
-#include <xdbgstub/client.hpp>
 #include <xdbgstub/error.hpp>
 #include <xdbgstub/server.hpp>
 
@@ -249,6 +248,7 @@ bool remote_debugger::start(partner &emu, const std::string &host, uint16_t port
     client_connected_ = false;
     stop_requested_ = false;
     target_ = std::make_unique<target_adapter>(*this);
+    server_ = std::make_unique<xdbgstub::server>();
     enabled_ = true;
     server_thread_ = std::thread([this]() { server_loop(); });
     return true;
@@ -256,35 +256,23 @@ bool remote_debugger::start(partner &emu, const std::string &host, uint16_t port
 
 bool remote_debugger::stop(std::string *error_out)
 {
-    std::string host;
-    uint16_t port = 0;
+    xdbgstub::server *server = nullptr;
     bool join_thread = false;
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         if (!enabled_) {
             join_thread = server_thread_.joinable();
         } else {
-            if (client_connected_) {
-                if (error_out)
-                    *error_out = "Detach xdbg before stopping the remote debugger.";
-                return false;
-            }
             stop_requested_ = true;
-            host = host_;
-            port = port_;
             join_thread = server_thread_.joinable();
         }
+        server = server_.get();
     }
 
-    if (!host.empty()) {
-        try {
-            xdbgstub::client client;
-            client.connect(host, port);
-            client.detach();
-        } catch (...) {
-            // Best-effort wakeup for the accept loop; ignore transient failures.
-        }
-    }
+    (void)error_out;
+    command_cv_.notify_all();
+    if (server != nullptr)
+        server->close();
 
     if (join_thread && server_thread_.joinable())
         server_thread_.join();
@@ -298,6 +286,7 @@ bool remote_debugger::stop(std::string *error_out)
     pending_command_ = pending_command::none;
     completed_status_.reset();
     stop_requested_ = false;
+    server_.reset();
     target_.reset();
     return true;
 }
@@ -455,18 +444,22 @@ void remote_debugger::note_client_activity_locked()
 
 void remote_debugger::server_loop()
 {
+    xdbgstub::server *server = nullptr;
     std::string host;
     uint16_t port = 0;
     {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
+        server = server_.get();
         host = host_;
         port = port_;
     }
 
+    if (server == nullptr)
+        return;
+
     try {
-        xdbgstub::server server;
-        server.listen(host, port);
-        while (true) {
+        server->listen(host, port);
+        while (server->is_listening()) {
             {
                 std::lock_guard<std::recursive_mutex> lock(mutex_);
                 if (stop_requested_)
@@ -474,15 +467,15 @@ void remote_debugger::server_loop()
             }
 
             try {
-                server.serve(*target_);
+                server->serve(*target_);
                 std::lock_guard<std::recursive_mutex> lock(mutex_);
                 client_connected_ = false;
-                if (stop_requested_)
+                if (stop_requested_ || !server->is_listening())
                     break;
             } catch (const xdbgstub::error &e) {
                 std::lock_guard<std::recursive_mutex> lock(mutex_);
                 client_connected_ = false;
-                if (stop_requested_)
+                if (stop_requested_ || !server->is_listening())
                     break;
                 if (std::string(e.what()) == "connection closed")
                     continue;
@@ -490,7 +483,7 @@ void remote_debugger::server_loop()
                 break;
             }
         }
-        server.close();
+        server->close();
     } catch (const std::exception &e) {
         std::lock_guard<std::recursive_mutex> lock(mutex_);
         last_error_ = e.what();

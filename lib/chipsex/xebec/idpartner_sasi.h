@@ -119,6 +119,10 @@ void idpartner_sasi_reset(idpartner_sasi_t *adp) {
 
 uint8_t idpartner_sasi_status_r(idpartner_sasi_t *adp) {
     CHIPS_ASSERT(adp);
+    if (!adp->target || !adp->target->present) {
+        /* No controller on the bus: the data lines float high. */
+        return 0xFF;
+    }
     uint8_t data = 0;
     if (_idpartner_sasi_req(adp)) data |= 0x80;
     if (_idpartner_sasi_io(adp))  data |= 0x40;
@@ -130,7 +134,8 @@ uint8_t idpartner_sasi_status_r(idpartner_sasi_t *adp) {
 
 uint8_t idpartner_sasi_data_r(idpartner_sasi_t *adp) {
     CHIPS_ASSERT(adp);
-    if (!adp->target) {
+    if (!adp->target || !adp->target->present) {
+        /* No controller on the bus: the data lines float high. */
         return 0xFF;
     }
     const uint8_t data = s1410_read_data(adp->target);

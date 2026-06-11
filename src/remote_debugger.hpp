@@ -11,6 +11,10 @@
 
 #include <xdbgstub/model.hpp>
 
+namespace xdbgstub {
+class server;
+}
+
 class partner;
 
 class remote_debugger
@@ -57,6 +61,7 @@ private:
     mutable std::recursive_mutex mutex_;
     std::condition_variable_any command_cv_;
     std::unique_ptr<target_adapter> target_;
+    std::unique_ptr<xdbgstub::server> server_;
     partner *emu_ = nullptr;
     std::thread server_thread_;
     std::vector<uint16_t> breakpoints_;

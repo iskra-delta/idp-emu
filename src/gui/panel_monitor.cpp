@@ -13,21 +13,23 @@ void panels::render_monitor(display &disp, bool *p_open)
 
     const auto mode = disp.get_phosphor_type();
     if (ImGui::BeginCombo("Monitor Type",
+                          mode == display::phosphor_type::flat ? "Flat (No Effects)" :
                           mode == display::phosphor_type::green ? "Green CRT" :
                           mode == display::phosphor_type::orange ? "Orange CRT" :
-                          mode == display::phosphor_type::color ? "Color CRT" :
                           "LCD"))
     {
+        if (ImGui::Selectable("Flat (No Effects)", mode == display::phosphor_type::flat))
+            disp.set_phosphor_type(display::phosphor_type::flat);
         if (ImGui::Selectable("Green CRT", mode == display::phosphor_type::green))
             disp.set_phosphor_type(display::phosphor_type::green);
         if (ImGui::Selectable("Orange CRT", mode == display::phosphor_type::orange))
             disp.set_phosphor_type(display::phosphor_type::orange);
-        if (ImGui::Selectable("Color CRT", mode == display::phosphor_type::color))
-            disp.set_phosphor_type(display::phosphor_type::color);
         if (ImGui::Selectable("LCD", mode == display::phosphor_type::lcd))
             disp.set_phosphor_type(display::phosphor_type::lcd);
         ImGui::EndCombo();
     }
+
+    const bool flat = (disp.get_phosphor_type() == display::phosphor_type::flat);
 
     float brightness = disp.get_monitor_brightness();
     float contrast = disp.get_monitor_contrast();
@@ -41,6 +43,7 @@ void panels::render_monitor(display &disp, bool *p_open)
         disp.set_monitor_brightness(brightness);
     if (ImGui::SliderFloat("Contrast", &contrast, 0.40f, 2.30f, "%.2f"))
         disp.set_monitor_contrast(contrast);
+    ImGui::BeginDisabled(flat);
     if (ImGui::SliderFloat("Bloom", &bloom, 0.00f, 2.40f, "%.2f"))
         disp.set_monitor_bloom(bloom);
     if (ImGui::SliderFloat("Scanline Strength", &scanline, 0.00f, 1.60f, "%.2f"))
@@ -51,6 +54,7 @@ void panels::render_monitor(display &disp, bool *p_open)
         disp.set_monitor_vignette(vignette);
     if (ImGui::SliderFloat("Persistence", &persistence, 0.20f, 1.15f, "%.2f"))
         disp.set_monitor_persistence(persistence);
+    ImGui::EndDisabled();
 
     if (ImGui::Button("Reset Monitor Defaults"))
         disp.reset_monitor_tuning();

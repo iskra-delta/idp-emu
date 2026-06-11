@@ -205,17 +205,6 @@ void partner_gdp::tick()
 {
     partner::tick();
 
-    // Auto-redirect ROM floppy boot: when no HDD is attached the ROM waits at
-    // the GDP clock/select screen for the user to press ENTER then F. Skip that
-    // interactive path by patching PC to the floppy boot entry (0x02FA) whenever
-    // the ROM is at the known HDD-selection branch points.
-    if (!hdc.present && rom_enabled && cpu.sp >= 0xF000) {
-        if (cpu.pc == 0x01E8 || cpu.pc == 0x01F0 || cpu.pc == 0x02F4) {
-            cpu.pc = 0x02FA;
-            cpu.wz = 0x02FA;
-        }
-    }
-
     // Keep all serial TX channels drained so ROM/CP/M polling on TX-ready can
     // progress even when the GDP runtime moves console traffic to a different
     // SIO than the early bootstrap path.
@@ -276,22 +265,6 @@ void partner_gdp::tick()
     }
     (void)z80pio_tick(&gdp_video_pio_, 0);
     sync_ef_mode_from_gdp_pio();
-
-
-    // After CP/M boots, patch RAM[0x0038] so RST 38h (which 0xAC4F executes
-    // via JP 0x895C landing on the 3rd byte of LD A,(FF19)) does XOR A; RET
-    // instead of RRCA; JP NZ, 0x0134 (boot-sector code left there).
-    // Without the patch: RST38 causes A=0x01 → AND 0x02 → A=0x00 → Z=1 → OK?
-    // Actually RRCA(0x02)=0x01→JP NZ → jumps to 0x0134 → unknown code → stack overflow.
-    // XOR A; RET: A=0 → AND 0x02 = 0 → Z=1 → CALL NZ 0x9984 NOT taken → no recursion.
-    if (cpu.i == 0xFA && avdc_char_nonspace_wr_cnt_ > 0) {
-        static bool patched_rst38 = false;
-        if (!patched_rst38) { patched_rst38 = true;
-            ram[0x0038] = 0xAF;  // XOR A  (clears A so AND 0x02 = 0 = no recursive call)
-            ram[0x0039] = 0xC9;  // RET
-        }
-    }
-    (void)prev_ff19_;
 
     const bool pio_a_output = (gdp_video_pio_.port[Z80PIO_PORT_A].mode == Z80PIO_MODE_OUTPUT);
     const uint8_t pa = gdp_video_pio_.port[Z80PIO_PORT_A].output;

@@ -104,14 +104,31 @@ void main() {
     vec2 texel = 1.0 / resolution;
     float edge_mask = 1.0;
 
-    // CRT path (green/orange): intentionally punchy, analog look.
+    // Flat path: direct framebuffer presentation. No curvature, scanlines,
+    // bloom, mask, vignette or noise — maximum legibility.
+    if (monitor_mode == 4) {
+        float code_f = floor(texture(screen_texture, uv).r * 255.0 + 0.5);
+        int code = int(clamp(code_f, 0.0, 255.0));
+        vec3 color;
+        if (code >= 240) {
+            color = decode_index_rgb(code);
+        } else {
+            color = phosphor_core * (code_f / 255.0);
+        }
+        color = (color - vec3(0.5)) * monitor_contrast + vec3(0.5);
+        color *= monitor_brightness;
+        FragColor = vec4(clamp(color, vec3(0.0), vec3(1.0)), 1.0);
+        return;
+    }
+
+    // CRT path (green/orange): analog look, tuned to keep text legible.
     if (monitor_mode != 2) {
-        // Underscan + stronger barrel distortion.
-        uv = (uv - 0.5) * 1.04 + 0.5;
+        // Mild underscan + subtle barrel distortion.
+        uv = (uv - 0.5) * 1.02 + 0.5;
 
         vec2 cc = uv - 0.5;
         float r2 = dot(cc, cc);
-        uv = cc * (1.0 + 0.065 * r2 + 0.11 * r2 * r2) + 0.5;
+        uv = cc * (1.0 + 0.035 * r2 + 0.055 * r2 * r2) + 0.5;
 
         // Rounded corners / bezel cut with a soft transition to avoid dropped edge pixels.
         float edge = min(min(uv.x, uv.y), min(1.0 - uv.x, 1.0 - uv.y));
@@ -125,15 +142,16 @@ void main() {
         : pixel_code;
     float pixel = pixel_raw;
 
-    // Post-warp antialiasing for CRT path: recover detail lost by curvature sampling.
+    // Post-warp antialiasing for CRT path: recover detail lost by curvature
+    // sampling. Center-weighted so glyph strokes stay sharp.
     if (monitor_mode != 2) {
-        float aa = 0.36 * pixel_raw;
-        aa += 0.16 * crt_sample(uv + vec2(texel.x, 0.0));
-        aa += 0.16 * crt_sample(uv - vec2(texel.x, 0.0));
-        aa += 0.14 * crt_sample(uv + vec2(0.0, texel.y));
-        aa += 0.14 * crt_sample(uv - vec2(0.0, texel.y));
-        aa += 0.02 * crt_sample(uv + texel);
-        aa += 0.02 * crt_sample(uv - texel);
+        float aa = 0.52 * pixel_raw;
+        aa += 0.14 * crt_sample(uv + vec2(texel.x, 0.0));
+        aa += 0.14 * crt_sample(uv - vec2(texel.x, 0.0));
+        aa += 0.09 * crt_sample(uv + vec2(0.0, texel.y));
+        aa += 0.09 * crt_sample(uv - vec2(0.0, texel.y));
+        aa += 0.01 * crt_sample(uv + texel);
+        aa += 0.01 * crt_sample(uv - texel);
         aa = clamp(aa, 0.0, 1.0);
         if (monitor_mode == 0 || monitor_mode == 1) {
             // Preserve dark text strokes against bright inverse blocks.
@@ -144,8 +162,9 @@ void main() {
         }
     }
     if (monitor_mode == 0 || monitor_mode == 1) {
-        // Darken low-level phosphor drive so inverse backgrounds don't glow too bright.
-        pixel = pow(clamp(pixel, 0.0, 1.0), 1.40);
+        // Slightly darken low-level phosphor drive so inverse backgrounds
+        // don't glow, without crushing standard-intensity text.
+        pixel = pow(clamp(pixel, 0.0, 1.0), 1.15);
     }
 
     // LCD path (Game Boy-like): reflective panel with dark ink on bright background.
@@ -228,18 +247,18 @@ void main() {
         vec3 glow_tint = max(color, text_fg);
         color += glow_tint * glow * 0.42 * monitor_bloom;
 
-        float scanline = 0.80 + 0.20 * sin(uv.y * resolution.y * 3.14159265);
+        float scanline = 0.88 + 0.12 * sin(uv.y * resolution.y * 3.14159265);
         color *= mix(1.0, scanline, clamp(monitor_scanline, 0.0, 1.6));
 
         vec2 maskpix = fract(uv * resolution);
-        float slot = 0.92 + 0.08 * smoothstep(0.08, 0.55, maskpix.x) * (1.0 - smoothstep(0.72, 0.98, maskpix.x));
+        float slot = 0.95 + 0.05 * smoothstep(0.08, 0.55, maskpix.x) * (1.0 - smoothstep(0.72, 0.98, maskpix.x));
         color *= mix(1.0, slot, clamp(monitor_mask, 0.0, 1.6));
 
         vec2 vig = uv * (1.0 - uv);
-        float vig_mul = clamp(pow(vig.x * vig.y * 17.0, 0.15), 0.33, 1.0);
+        float vig_mul = clamp(pow(vig.x * vig.y * 20.0, 0.10), 0.60, 1.0);
         color *= mix(1.0, vig_mul, clamp(monitor_vignette, 0.0, 1.6));
 
-        float noise = (hash21(uv * resolution + time_sec * 12.0) - 0.5) * 0.004;
+        float noise = (hash21(uv * resolution + time_sec * 12.0) - 0.5) * 0.003;
         color += vec3(noise);
 
         color = (color - vec3(0.5)) * monitor_contrast + vec3(0.5);
@@ -269,23 +288,23 @@ void main() {
     color += phosphor_glow * (bloom * 1.22 * monitor_bloom + trail * 0.25) * bloom_weight;
 
     // Stable scanlines (removed time-drift to avoid visible blinking).
-    float scanline = 0.80 + 0.20 * sin(uv.y * resolution.y * 3.14159265);
+    float scanline = 0.88 + 0.12 * sin(uv.y * resolution.y * 3.14159265);
     color *= mix(1.0, scanline, clamp(monitor_scanline, 0.0, 1.6));
 
     // Slot mask / phosphor grille.
     vec2 maskpix = fract(uv * resolution);
-    float slot = 0.92 + 0.08 * smoothstep(0.08, 0.55, maskpix.x) * (1.0 - smoothstep(0.72, 0.98, maskpix.x));
+    float slot = 0.95 + 0.05 * smoothstep(0.08, 0.55, maskpix.x) * (1.0 - smoothstep(0.72, 0.98, maskpix.x));
     color *= mix(1.0, slot, clamp(monitor_mask, 0.0, 1.6));
 
     // Very mild analog shimmer/noise.
-    float flicker = 0.995 + 0.005 * sin(time_sec * 7.0);
-    float noise = (hash21(uv * resolution + time_sec * 12.0) - 0.5) * 0.006;
+    float flicker = 0.998 + 0.002 * sin(time_sec * 7.0);
+    float noise = (hash21(uv * resolution + time_sec * 12.0) - 0.5) * 0.003;
     color *= flicker;
     color += vec3(noise);
 
-    // Vignette (darker edges).
+    // Vignette (darker edges, kept gentle so corner text stays readable).
     vec2 vig = uv * (1.0 - uv);
-    float vig_mul = clamp(pow(vig.x * vig.y * 17.0, 0.15), 0.33, 1.0);
+    float vig_mul = clamp(pow(vig.x * vig.y * 20.0, 0.10), 0.60, 1.0);
     color *= mix(1.0, vig_mul, clamp(monitor_vignette, 0.0, 1.6));
 
     // Ambient glass lift.
@@ -428,8 +447,9 @@ bool display::load_font(const std::string &path)
 
 void display::update()
 {
-    if (phosphor_ == phosphor_type::color) {
-        // Preserve indexed color codes exactly in color monitor mode.
+    if (phosphor_ == phosphor_type::color || phosphor_ == phosphor_type::flat) {
+        // Preserve pixel codes exactly: color mode keeps indexed values,
+        // flat mode has no phosphor persistence by design.
         memcpy(ghost_fb_, fb_, sizeof(fb_));
     } else {
         const uint16_t base_decay = (phosphor_ == phosphor_type::lcd) ? 214u : 224u;
@@ -493,7 +513,12 @@ void display::apply_crt()
     glUniform3f(glGetUniformLocation(shader_, "text_bg"), text_bg_r_, text_bg_g_, text_bg_b_);
     glUniform1f(glGetUniformLocation(shader_, "text_reverse"), text_reverse_video_ ? 1.0f : 0.0f);
     glUniform1f(glGetUniformLocation(shader_, "text_force_background"), text_force_background_ ? 1.0f : 0.0f);
-    if (phosphor_ == phosphor_type::orange) {
+    if (phosphor_ == phosphor_type::flat) {
+        // Clean green-on-black; intensity comes straight from the framebuffer.
+        glUniform3f(glGetUniformLocation(shader_, "phosphor_core"), 0.45f, 1.00f, 0.50f);
+        glUniform3f(glGetUniformLocation(shader_, "phosphor_glow"), 0.0f, 0.0f, 0.0f);
+        glUniform3f(glGetUniformLocation(shader_, "glass_ambient"), 0.0f, 0.0f, 0.0f);
+    } else if (phosphor_ == phosphor_type::orange) {
         glUniform3f(glGetUniformLocation(shader_, "phosphor_core"), 1.72f, 0.83f, 0.22f);
         glUniform3f(glGetUniformLocation(shader_, "phosphor_glow"), 1.05f, 0.48f, 0.12f);
         glUniform3f(glGetUniformLocation(shader_, "glass_ambient"), 0.024f, 0.012f, 0.004f);

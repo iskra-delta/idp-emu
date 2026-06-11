@@ -7,13 +7,15 @@
 
 namespace {
 
+// Must match the underscan/barrel constants in the CRT fragment shader
+// (display.cpp) so the outline hugs the warped raster.
 static inline ImVec2 crt_warp_uv(ImVec2 tc)
 {
-    tc.x = (tc.x - 0.5f) * 1.04f + 0.5f;
-    tc.y = (tc.y - 0.5f) * 1.04f + 0.5f;
+    tc.x = (tc.x - 0.5f) * 1.02f + 0.5f;
+    tc.y = (tc.y - 0.5f) * 1.02f + 0.5f;
     const ImVec2 cc = ImVec2(tc.x - 0.5f, tc.y - 0.5f);
     const float r2 = cc.x * cc.x + cc.y * cc.y;
-    const float k = 1.0f + 0.065f * r2 + 0.11f * r2 * r2;
+    const float k = 1.0f + 0.035f * r2 + 0.055f * r2 * r2;
     tc.x = cc.x * k + 0.5f;
     tc.y = cc.y * k + 0.5f;
     return tc;
@@ -105,10 +107,15 @@ void panels::render_display(display &disp, display_viewport_info *out_info)
     const ImVec2 image_end = ImVec2(image_pos.x + img_w, image_pos.y + img_h);
     const bool image_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_None);
 
-    // Thin curved border around the monitor viewport, drawn in ImGui
-    // space so it remains unaffected by the CRT/LCD shader pass.
+    // Thin border around the monitor viewport, drawn in ImGui space so it
+    // remains unaffected by the shader pass. Curved only for the analog CRT
+    // modes; flat and LCD get a plain rectangle.
     ImDrawList *dl = ImGui::GetWindowDrawList();
-    const bool crt_curved = disp.get_phosphor_type() != display::phosphor_type::lcd;
+    const auto monitor_mode = disp.get_phosphor_type();
+    const bool crt_curved =
+        (monitor_mode == display::phosphor_type::green) ||
+        (monitor_mode == display::phosphor_type::orange) ||
+        (monitor_mode == display::phosphor_type::color);
     add_curved_monitor_outline(dl, image_pos, image_end, crt_curved, chrome_theme().close_hover_bg);
 
     if (out_info)

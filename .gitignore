@@ -1,3 +1,14 @@
 # Build directories.
 build/
 bin/
+!third_party/xyz-release/bin/
+third_party/xyz-release/bin/*
+!third_party/xyz-release/bin/xdbg
+!third_party/xyz-release/bin/xdbg-z80
+!third_party/xyz-release/bin/xlink
+
+# AI
+.agents/
+.claude/
+.codex/
+idp-emu.config

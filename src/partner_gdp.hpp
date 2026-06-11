@@ -88,8 +88,6 @@ private:
     bool     avdc_vb_edge_        = false;
     // Countdown: holds INT high for N ticks after each VB so the Z80 catches it.
     uint32_t avdint_hold_ticks_   = 0;
-    // Last seen value of FF19 (setup flag byte); detect changes to update setup VRAM.
-    uint8_t  prev_ff19_           = 0xFF;  // 0xFF = uninitialized (never matched)
 
     void gdp_put_char(uint8_t ch);
     void gdp_newline();

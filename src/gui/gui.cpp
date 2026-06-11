@@ -573,9 +573,8 @@ bool gui::init(const std::string &title, int width, int height)
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO &io = ImGui::GetIO();
-    // Avoid restoring repo-local window placements that can leave the display
-    // dock detached on an off-screen monitor from a previous session.
-    io.IniFilename = nullptr;
+    // Keep Dear ImGui settings in a dedicated app-specific config file.
+    io.IniFilename = "idp-emu.config";
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
@@ -612,6 +611,9 @@ bool gui::init(const std::string &title, int width, int height)
             int width_px = 0;
             int height_px = 0;
             SDL_GetWindowSize(window, &width_px, &height_px);
+
+            if (custom_title_close_hit(window, point->x, point->y))
+                return SDL_HITTEST_NORMAL;
 
             const int border = chrome_metrics::resize_border;
             const int corner = chrome_metrics::resize_corner;

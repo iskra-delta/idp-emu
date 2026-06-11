@@ -17,6 +17,17 @@ struct menu_rect {
 
 menu_rect g_menu_rects[k_menu_count]{};
 
+bool mouse_pos_in_window(SDL_Window* window, int& mouse_x, int& mouse_y)
+{
+    mouse_x = 0;
+    mouse_y = 0;
+    if (window == nullptr || SDL_GetMouseFocus() != window) {
+        return false;
+    }
+    SDL_GetMouseState(&mouse_x, &mouse_y);
+    return true;
+}
+
 void close_button_rect(SDL_Window* window, float& bx, float& by, float& bsize)
 {
     int win_w = 0;
@@ -109,8 +120,9 @@ void draw_custom_title_bar(SDL_Window* window)
 
     int mouse_x = 0;
     int mouse_y = 0;
-    SDL_GetMouseState(&mouse_x, &mouse_y);
-    const int hovered_menu = custom_title_menu_hit(mouse_x, mouse_y);
+    const bool mouse_over_main_window = mouse_pos_in_window(window, mouse_x, mouse_y);
+    const int hovered_menu =
+        mouse_over_main_window ? custom_title_menu_hit(mouse_x, mouse_y) : -1;
 
     const ImVec2 separator_size = ImGui::CalcTextSize("|");
     constexpr float pad = 6.0f;
@@ -136,7 +148,7 @@ void draw_custom_title_bar(SDL_Window* window)
         cursor_x += label_size.x + pad * 2.0f + 2.0f;
     }
 
-    if (custom_title_close_hit(window, mouse_x, mouse_y)) {
+    if (mouse_over_main_window && custom_title_close_hit(window, mouse_x, mouse_y)) {
         dl->AddRectFilled({ox + cbx, oy + cby},
                           {ox + cbx + cbsize, oy + cby + cbsize},
                           chrome_theme().close_hover_bg,
