@@ -228,7 +228,7 @@ int main()
     const fs::path rom_path = root / "partos" / "bin" / "partos.rom";
     const fs::path tmp_dir = root / "tests" / ".tmp-partos-boot-banner";
     const fs::path nvram_path = tmp_dir / "invalid-nvram.bin";
-    const std::string banner = "P A R T O S";
+    const std::string banner = "PARTOS";
 
     if (!build_partos_rom(root)) {
         std::puts("FAIL partos build failed");

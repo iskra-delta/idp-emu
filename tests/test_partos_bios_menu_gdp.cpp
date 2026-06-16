@@ -54,6 +54,21 @@ static bool wait_for_gdp_text(partner_gdp &emu, int row, int col, const char *te
     return false;
 }
 
+static bool enter_bios_setup(partner_gdp &emu, bool &saw_banner)
+{
+    saw_banner = false;
+    for (uint64_t ticks = 0; ticks < TICK_LIMIT; ++ticks) {
+        if ((ticks & 0x7FFu) == 0)
+            emu.key_input(0xfe);
+        emu.tick();
+        if (!saw_banner && has_gdp_text(emu.get_avdc(), 13, 34, "PARTOS"))
+            saw_banner = true;
+        if (has_gdp_text(emu.get_avdc(), 10, 22, "KEYBOARD"))
+            return true;
+    }
+    return false;
+}
+
 static bool expect_gdp_text(const scn2674_t &avdc,
                             int row,
                             int col,
@@ -163,38 +178,43 @@ int main()
     emu.load_rom(rom_path.string());
     emu.reset();
 
-    if (!wait_for_gdp_text(emu, 13, 34, "P A R T O S")) {
-        std::puts("FAIL GDP banner did not appear");
+    bool saw_banner = false;
+    if (!enter_bios_setup(emu, saw_banner)) {
+        const auto &avdc = emu.get_avdc();
+        int row = -1;
+        int col = -1;
+        find_gdp_text_anywhere(avdc, "B I O S  S E T U P", row, col);
+        std::printf("INFO bios title anywhere before fail: row=%d col=%d banner=%d\n",
+                    row, col, saw_banner ? 1 : 0);
+        find_gdp_text_anywhere(avdc, "KEYBOARD", row, col);
+        std::printf("INFO keyboard anywhere before fail: row=%d col=%d\n", row, col);
+        std::puts("FAIL BIOS screen did not appear after SETUP");
         return 1;
     }
-
-    emu.key_input(0xfe);
-
-    if (!wait_for_gdp_text(emu, 12, 16, "KEYBOARD")) {
-        std::puts("FAIL BIOS screen did not appear after SETUP");
+    if (!saw_banner) {
+        std::puts("FAIL GDP banner did not appear");
         return 1;
     }
 
     const auto &avdc = emu.get_avdc();
 
-    // layout is centred vertically: model row 6, title row 7, sections row 10+.
-    fails += !expect_gdp_text(avdc, 6, 0, "Delta Partner GDP", "bios model");
-    fails += !expect_gdp_text(avdc, 7, 31, "B I O S  S E T U P", "bios title");
-    fails += !expect_gdp_attr(avdc, 7, 31, "B I O S  S E T U P", 0x10, "bios title attr");
-    fails += !expect_gdp_text(avdc, 10, 2, "SERIAL PORTS", "serial title");
-    fails += !expect_gdp_attr(avdc, 10, 2, "SERIAL PORTS", 0x10, "serial title attr");
-    fails += !expect_gdp_text(avdc, 12, 2, "/DEV/TTYS0", "ttys0 label");
-    fails += !expect_gdp_text(avdc, 12, 16, "KEYBOARD", "ttys0 value");
-    fails += !expect_gdp_attr(avdc, 12, 16, "KEYBOARD", 0x30, "ttys0 value attr");
+    fails += !expect_gdp_text(avdc, 0, 34, "PARTNER GDP", "bios model");
+    fails += !expect_gdp_text(avdc, 4, 35, "BIOS SETUP", "bios title");
+    fails += !expect_gdp_attr(avdc, 4, 35, "BIOS SETUP", 0x10, "bios title attr");
+    fails += !expect_gdp_text(avdc, 8, 8, "SERIAL", "serial title");
+    fails += !expect_gdp_attr(avdc, 8, 8, "SERIAL", 0x10, "serial title attr");
+    fails += !expect_gdp_text(avdc, 10, 8, "TTYS0", "ttys0 label");
+    fails += !expect_gdp_text(avdc, 10, 22, "KEYBOARD", "ttys0 value");
+    fails += !expect_gdp_attr(avdc, 10, 22, "KEYBOARD", 0x30, "ttys0 value attr");
 
     if (fails != 0) {
         int row = -1;
         int col = -1;
-        find_gdp_text_anywhere(avdc, "B I O S  S E T U P", row, col);
+        find_gdp_text_anywhere(avdc, "BIOS SETUP", row, col);
         std::printf("INFO bios title anywhere: row=%d col=%d\n", row, col);
-        find_gdp_text_anywhere(avdc, "SERIAL PORTS", row, col);
+        find_gdp_text_anywhere(avdc, "SERIAL", row, col);
         std::printf("INFO serial title anywhere: row=%d col=%d\n", row, col);
-        find_gdp_text_anywhere(avdc, "/DEV/TTYS0", row, col);
+        find_gdp_text_anywhere(avdc, "TTYS0", row, col);
         std::printf("INFO ttys0 anywhere: row=%d col=%d\n", row, col);
         find_gdp_text_anywhere(avdc, "KEYBOARD", row, col);
         std::printf("INFO keyboard anywhere: row=%d col=%d\n", row, col);

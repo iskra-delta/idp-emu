@@ -3,6 +3,7 @@ build/
 bin/
 tools/zx0/build/
 tools/zx0/bin/
+partos/Testing/
 
 # Fetched third-party sources (Makefile clones these; never commit).
 third_party/udap/

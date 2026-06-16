@@ -3,7 +3,7 @@
 # the rom now has two separately linked pieces:
 #
 #   stage 0: bootstrap.s + dzx0_standard.s linked at 0x0000
-#   stage 1: the rest of the bios linked at 0x0800, then zx0-compressed
+#   stage 1: the rest of the bios linked at 0x2000, then zx0-compressed
 #
 # the final eprom image is:
 #
@@ -43,13 +43,13 @@ KERNEL_PAGE0_SIZE := $(call inc_equ,KERNEL_PAGE0_SIZE)
 
 # discover sources from the current tree instead of hardcoding deleted paths.
 # stage 0 is always the same two-file bootstrap image at rom address 0x0000.
-BOOTSTRAP_SRC := src/bios/bootstrap.s src/bios/dzx0_standard.s
+BOOTSTRAP_SRC := src/rom/bootstrap.s src/rom/dzx0_standard.s
 
-# stage 1 is the rest of the bios, linked for ram execution at 0x0800.
+# stage 1 is the rest of the bios, linked for ram execution at STAGE1_BASE.
 # `start.s` must stay first so the bootstrap can jump straight to STAGE1_BASE.
-BIOS_STAGE1_ALL := $(sort $(wildcard src/bios/*.s))
-BIOS_STAGE1_ENTRY := $(filter src/bios/start.s,$(BIOS_STAGE1_ALL))
-BIOS_STAGE1_OTHER := $(filter-out $(BIOS_STAGE1_ENTRY) src/bios/bootstrap.s src/bios/dzx0_standard.s,$(BIOS_STAGE1_ALL))
+BIOS_STAGE1_ALL := $(sort $(wildcard src/rom/*.s))
+BIOS_STAGE1_ENTRY := $(filter src/rom/start.s,$(BIOS_STAGE1_ALL))
+BIOS_STAGE1_OTHER := $(filter-out $(BIOS_STAGE1_ENTRY) src/rom/bootstrap.s src/rom/dzx0_standard.s,$(BIOS_STAGE1_ALL))
 BIOS_STAGE1_SRC := $(BIOS_STAGE1_ENTRY) $(BIOS_STAGE1_OTHER)
 
 KERNEL_DISCOVERED_SRC := $(sort $(wildcard src/kernel/*.s))
@@ -172,4 +172,4 @@ $(ROM): $(BUILD)/bootstrap.bin $(BUILD)/stage1.bin $(ZX0)
 	echo "$@: $$(stat -c%s $@) bytes (bootstrap=$$BOOT_LEN, stage1=$$STAGE1_LEN, compressed=$$CSTAGE1_LEN, free=$$(( $(ROM_SIZE) - $$TOTAL )))"
 
 clean:
-	rm -rf $(BUILD) $(BIN)
+	rm -rf $(BUILD) $(BIN) Testing

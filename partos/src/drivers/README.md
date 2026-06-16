@@ -1,18 +1,17 @@
 # drivers
 
-This directory contains device-support code.
+This directory contains the hardware-facing driver layer that is linked into
+the current kernel image.
 
-It is the hardware-facing layer for modules such as:
+The authoritative documentation now lives in:
+
+- `partos/docs/PARTOS-VOLUME-2-KERNEL.md`
+
+Current driver families:
 
 - serial I/O
-- RTC/NVRAM
+- RTC
+- NVRAM
 - GDP
 - floppy disks
-- hard disks
-
-The intended split is:
-
-- `src/bios/` = ROM firmware
-- `src/kernel/` = microkernel
-- `src/drivers/` = device support
-- `os/` = operating-system software and programs
+- SASI/Xebec hard disk

@@ -2,7 +2,7 @@
             ;;
             ;; stage-1 bios entry point.
             ;;
-            ;; bootstrap.s inflates the compressed stage-1 image to 0x0800 and
+            ;; bootstrap.s inflates the compressed stage-1 image to 0x2000 and
             ;; jumps here. from this point on we are executing from ram.
             ;;
             ;; 2026-06-11   tstih
@@ -37,6 +37,8 @@
             .globl  hd_read_lba
             .globl  hd_get_sda_type_index
             .globl  hd_init_chars
+            .globl  boot_fd_path
+            .globl  boot_hd_path
 
             ;; __sys_page0_install lives in the kernel's _PAGE0 segment, which
             ;; is pinned at 0xff00, so its entry is at a fixed address the BIOS
@@ -50,14 +52,17 @@
             ;; start_main()
             ;; ----------------------------------------------------------------
             ;; entered from bootstrap.s after the compressed stage-1 bios has
-            ;; been expanded to 0x0800. bootstrap.s already disabled
-            ;; interrupts and established the early stack, so stage-1 can go
-            ;; straight into hardware/model setup.
+            ;; been expanded to 0x2000. bootstrap.s established the early
+            ;; stack but left the rom overlay enabled; stage-1 disables the
+            ;; overlay first, then continues with hardware/model setup.
             ;; model_detect leaves the result in a for later use:
             ;;   0x00 = plain text partner
             ;;   0x01 = graphics-capable partner
             ;; ----------------------------------------------------------------
 start_main::
+            xor     a
+            out     (0x80),a
+
             ;; cache the detected machine class for later boot decisions
             call    model_detect
             ld      (model),a
@@ -117,6 +122,7 @@ boot_main$:
             ;; try floppy fd0 first; fd_init does specify + motor + recal and
             ;; fails if the controller is dead. an empty drive simply fails the
             ;; read inside boot_device$, so we still fall through to the disk.
+boot_fd_path::
             xor     a                   ; unit 0
             call    fd_init
             jr      nz,bt_hd$
@@ -127,6 +133,7 @@ boot_main$:
 bt_hd$:
             ;; initialise the configured sda geometry so the controller can
             ;; read it, then try to boot from the hard disk.
+boot_hd_path::
             call    hd_get_sda_type_index
             call    hd_init_chars
             ld      a,#0x01             ; device 1 = hard disk

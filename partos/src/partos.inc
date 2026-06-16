@@ -1,17 +1,15 @@
             ;; partos.inc
             ;;
-            ;; partos memory map (see docs/partos/ARCHITECTURE.md). these are
-            ;; addresses only; all sizes are computed by the linker (area
-            ;; symbols) and the build (link map).
+            ;; partos memory map (see docs/PARTOS-VOLUME-1-ROM.md and
+            ;; docs/PARTOS-VOLUME-2-KERNEL.md). these are addresses only; all
+            ;; sizes are computed by the linker (area symbols) and the build
+            ;; (link map).
             ;;
             ;; 2026-06-11   tstih
 
             ;; --- rom ----------------------------------------------------------
             .equ    BOOT_BASE,      0x0000 ; bootstrap, runs from rom in place
-            .equ    STAGE1_BASE,    0x0800 ; decompressed stage-1 bios entry
-            .equ    BOOT_SCRATCH_BASE, 0xb000 ; ram trampoline/decoder workspace
-            .equ    BOOT_SCRATCH_DZX0, 0xb020 ; copied zx0 decoder entry
-            .equ    BOOT_SCRATCH_DATA, 0xb080 ; copied compressed stage-1 blob
+            .equ    STAGE1_BASE,    0x2000 ; decompressed stage-1 bios entry
 
             ;; --- runtime memory map ------------------------------------------
             .equ    BIOS_BASE,      0xf600 ; bios runtime location (mem top)

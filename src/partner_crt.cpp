@@ -68,7 +68,7 @@ void partner_crt::tick()
     partner::tick();
     const uint16_t pc = get_current_pc();
 
-    // Stage-1 restarts return to 0x0800 without a hardware reset. On the real
+    // Stage-1 restarts return to 0x2000 without a hardware reset. On the real
     // text machine the restart redraws a fresh boot screen; clear the emulator
     // terminal surface on that edge so stale BIOS/menu text cannot bleed into
     // the next boot banner.

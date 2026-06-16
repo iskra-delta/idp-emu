@@ -3,8 +3,9 @@
             ;; zx0 decoder by Einar Saukas & Urusergi
             ;; "standard" version (68 bytes only)
             ;;
-            ;; copied into the PartOS boot area so page 0 / boot code can use
-            ;; it later to decompress the BIOS image from ROM.
+            ;; linked directly into the rom-resident boot area so bootstrap.s
+            ;; can decompress the stage-1 BIOS image before the overlay is
+            ;; disabled.
             ;;
             ;; parameters:
             ;;  hl ... source address (compressed data)

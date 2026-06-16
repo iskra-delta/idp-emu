@@ -137,7 +137,11 @@ __sys_page0_end::
             ;;       B  = model byte
             ;;       C  = flags byte (bank bit ignored here)
             ;;       D  = meta1 byte
-            ;;       HL = continuation address (normally __sys_kernel)
+            ;;       HL = continuation address
+            ;;
+            ;; current rom usage is smaller than this full interface:
+            ;; it meaningfully sets B and HL, leaves A holding the model byte
+            ;; as a side effect, and does not deliberately initialize C or D.
             ;;
             ;; output:
             ;;   installs the low-page image into both banks, returns to the

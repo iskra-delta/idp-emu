@@ -29,7 +29,7 @@ protected:
     void io_write(uint16_t port, uint8_t data) override;
 
 private:
-    static constexpr uint16_t stage1_entry_pc_ = 0x0800;
+    static constexpr uint16_t stage1_entry_pc_ = 0x2000;
     terminal_profile terminal_profile_ = terminal_profile::vt52;
     std::unique_ptr<terminal_emulator> terminal_;
     std::string raw_serial_;

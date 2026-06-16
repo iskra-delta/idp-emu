@@ -20,10 +20,10 @@
 
 namespace {
 // Absolute addresses from partos/build/stage1.map + start.lst:
-constexpr uint16_t PC_START_MAIN = 0x0800; // stage-1 entry (decompressed)
-constexpr uint16_t PC_FD_PATH    = 0x085D; // boot_main past BOOTING print:
-                                           // xor a; call fd_init (floppy)
-constexpr uint16_t PC_HD_PATH    = 0x0869; // bt_hd$: ld a,#1; call boot_device
+constexpr uint16_t PC_START_MAIN = 0x2000; // stage-1 entry (decompressed)
+constexpr uint16_t PC_STAGE1_READY = 0x2003; // overlay disabled, about to call model_detect
+constexpr uint16_t PC_FD_PATH    = 0x2046; // boot_fd_path in start.s
+constexpr uint16_t PC_HD_PATH    = 0x2052; // boot_hd_path in start.s
 constexpr uint16_t PC_HANDOFF    = 0xFF6B; // jp __sys_page0_install target
 constexpr uint16_t ADDR_MODEL    = 0xDE0C; // model byte (_SYSVARS @ 0xDE00)
 constexpr uint16_t ADDR_NV_VALID = 0xDE15; // bios_nvram_valid
@@ -74,12 +74,15 @@ int main(int argc, char **argv) {
     else    idp.load_disk(0, testdisk);
     idp.reset();
 
-    // 1) Let the bootstrap inflate stage-1 and reach start_main.
+    // 1) Let the bootstrap inflate stage-1 and execute the initial ROM-off
+    //    handoff inside start_main. We redirect only after the overlay has
+    //    been disabled by the live stage-1 code.
     uint64_t guard = 0;
-    while (idp.get_current_pc() != PC_START_MAIN) {
+    while (idp.is_rom_enabled() || idp.get_current_pc() != PC_STAGE1_READY) {
         idp.tick();
         if (++guard > 50000000ULL) {
-            printf("FAIL: never reached start_main (pc=%04X)\n", idp.get_current_pc());
+            printf("FAIL: never reached ready stage-1 state (pc=%04X rom=%d)\n",
+                   idp.get_current_pc(), idp.is_rom_enabled() ? 1 : 0);
             return 1;
         }
     }

@@ -1,16 +1,11 @@
 # os
 
-This directory is for higher-level operating-system software.
+This directory is reserved for the higher-level operating-system layer: the
+part above the kernel and drivers.
 
-Examples include:
+The authoritative documentation now lives in:
 
-- the shell
-- user-facing utilities
-- system programs
+- `partos/docs/PARTOS-VOLUME-3-OS.md`
 
-The intended split is:
-
-- `src/bios/` = ROM firmware
-- `src/kernel/` = microkernel
-- `src/drivers/` = device support
-- `os/` = operating-system software and programs
+That higher-level OS software does not exist yet in any meaningful form. The
+real binaries today are still the ROM and the early kernel.

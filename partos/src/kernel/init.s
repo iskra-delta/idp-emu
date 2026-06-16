@@ -1,9 +1,10 @@
             ;; init.s
             ;;
-            ;; early kernel entry. rom bootstrap loads the kernel image to its
-            ;; final address in common ram, sets hl to __sys_kernel, then jumps
-            ;; to __sys_page0_install. once low page is installed into both
-            ;; banks, control returns here in logical bank 0.
+            ;; early kernel entry. the current rom loads an os image into
+            ;; 0xe000..0xffff, jumps to __sys_page0_install at 0xff6b, and
+            ;; currently passes hl=0xe000 as the continuation address. once
+            ;; low page is installed into both banks, control eventually lands
+            ;; in the loaded image continuation path and may reach here.
             ;;
             ;; 2026-06-14   tstih
             .module init
