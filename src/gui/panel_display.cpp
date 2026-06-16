@@ -78,32 +78,39 @@ void panels::render_display(display &disp, display_viewport_info *out_info)
                  ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse);
 
     ImVec2 avail = ImGui::GetContentRegionAvail();
-    float aspect = disp.aspect_ratio();
+    const float aspect = disp.aspect_ratio();
 
-    // Fit image maintaining aspect ratio and allow it to scale with the docked
-    // window size.
-    float img_w, img_h;
-    if (avail.x / avail.y > aspect)
+    float img_w = avail.x;
+    float img_h = avail.y;
+    if (disp.preserve_aspect())
     {
-        img_h = avail.y;
-        img_w = img_h * aspect;
-    }
-    else
-    {
-        img_w = avail.x;
-        img_h = img_w / aspect;
-    }
+        // Fit image maintaining aspect ratio and allow it to scale with the
+        // docked window size.
+        if (avail.x / avail.y > aspect)
+        {
+            img_h = avail.y;
+            img_w = img_h * aspect;
+        }
+        else
+        {
+            img_w = avail.x;
+            img_h = img_w / aspect;
+        }
 
-    // Center in available space
-    float pad_x = (avail.x - img_w) * 0.5f;
-    float pad_y = (avail.y - img_h) * 0.5f;
-    if (pad_x > 0)
-        ImGui::SetCursorPosX(ImGui::GetCursorPosX() + pad_x);
-    if (pad_y > 0)
-        ImGui::SetCursorPosY(ImGui::GetCursorPosY() + pad_y);
+        // Center in available space
+        const float pad_x = (avail.x - img_w) * 0.5f;
+        const float pad_y = (avail.y - img_h) * 0.5f;
+        if (pad_x > 0)
+            ImGui::SetCursorPosX(ImGui::GetCursorPosX() + pad_x);
+        if (pad_y > 0)
+            ImGui::SetCursorPosY(ImGui::GetCursorPosY() + pad_y);
+    }
 
     const ImVec2 image_pos = ImGui::GetCursorScreenPos();
-    ImGui::Image((ImTextureID)(intptr_t)disp.get_texture(), {img_w, img_h});
+    ImGui::Image((ImTextureID)(intptr_t)disp.get_texture(),
+                 {img_w, img_h},
+                 ImVec2(0.0f, 0.0f),
+                 ImVec2(disp.uv_max_x(), disp.uv_max_y()));
     const ImVec2 image_end = ImVec2(image_pos.x + img_w, image_pos.y + img_h);
     const bool image_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_None);
 
@@ -115,7 +122,8 @@ void panels::render_display(display &disp, display_viewport_info *out_info)
     const bool crt_curved =
         (monitor_mode == display::phosphor_type::green) ||
         (monitor_mode == display::phosphor_type::orange) ||
-        (monitor_mode == display::phosphor_type::color);
+        (monitor_mode == display::phosphor_type::color) ||
+        (monitor_mode == display::phosphor_type::retro_cool);
     add_curved_monitor_outline(dl, image_pos, image_end, crt_curved, chrome_theme().close_hover_bg);
 
     if (out_info)

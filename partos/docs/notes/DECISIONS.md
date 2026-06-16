@@ -30,9 +30,9 @@ picture lives in [../partos/ARCHITECTURE.md](../partos/ARCHITECTURE.md).
   old IM2-table-at-0xFE00 idea).
 - 2026-06-11 — List convention: the next pointer is the FIRST member of
   every list-able structure (dev_drv_s, dev_s, list_s). Generic
-  list.s/append_list handles all lists uniformly (head variable and next
+  list.s/list_append handles all lists uniformly (head variable and next
   field are identical cells); probe results are appended to the device
-  list with append_list (dev_add removed). C view in include/list.h.
+  list with list_append (dev_add removed). C view in include/list.h.
 - 2026-06-11 — ROM split: page 0 (vectors + cold init) at 0x0000, boot
   (_BOOT, the boot-sector loader) at 0x0100 runs FROM ROM in place; only
   the BIOS (_CODE) is copied to memory top (0xF600), stored in ROM right
@@ -46,7 +46,7 @@ picture lives in [../partos/ARCHITECTURE.md](../partos/ARCHITECTURE.md).
   declares its dev_t structures in its own module; they are part of the
   BIOS image and therefore writable RAM at runtime. probe() only chains
   the units actually present via their next fields and returns the chain;
-  append_list() hooks it into the global list. No duplicate storage, no
+  list_append() hooks it into the global list. No duplicate storage, no
   copy. The sbrk heap remains for other runtime needs.
 
 ## Rationale (short form)

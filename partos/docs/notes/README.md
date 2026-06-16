@@ -16,7 +16,7 @@ files) were merged here on 2026-06-11.
 
 - [UKERNEL.md](UKERNEL.md) — microkernel services, syscall table, DOS-compatible codes, locking/multitasking references
 - [FILE-SYSTEM.md](FILE-SYSTEM.md) — FAT12/16 considerations, BPB boot sector, DOS-diskette compatibility
-- [BIOS-GUI.md](BIOS-GUI.md) — BIOS startup screen mockup, /DEV/* device naming scheme
+- [BIOS-GUI.md](BIOS-GUI.md) — BIOS startup screen mockup, bare device naming scheme
 
 ## Boot & drivers
 

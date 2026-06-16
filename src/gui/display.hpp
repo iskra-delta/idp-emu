@@ -15,6 +15,7 @@ public:
         lcd = 2,
         color = 3,
         flat = 4,
+        retro_cool = 5,
     };
 
     // Partner GDP visible text raster:
@@ -23,7 +24,7 @@ public:
     static constexpr int FB_H = 624;
     static constexpr int COLS = 80;
     static constexpr int ROWS = 25;
-    static constexpr int CHAR_W = 10; // 5 * 2 (2x scale)
+    static constexpr int CHAR_W = 11; // 5 * 2 plus a 1px inter-character gap
     static constexpr int CHAR_H = 16; // 7 * 2 plus a little line spacing
 
     void init();
@@ -38,13 +39,21 @@ public:
     void clear();
     void clear_all();
 
-    void draw_char(int col, int row, char c);
+    void draw_char(int col, int row, char c, uint8_t fg_level = 255, uint8_t bg_level = 0);
     void draw_text(int col, int row, const char *text);
-    void fill_char_cell(int col, int row);
+    void fill_char_cell(int col, int row, uint8_t level = 255);
 
     GLuint get_texture() const { return shader_ ? crt_tex_ : source_tex_; }
-    float aspect_ratio() const { return (float)FB_W / (float)FB_H; }
+    float aspect_ratio() const { return (float)content_w_ / (float)content_h_; }
     const uint8_t* data() const { return fb_; }
+    void set_content_area(int width, int height);
+    void set_content_origin(int x, int y);
+    int content_width() const { return content_w_; }
+    int content_height() const { return content_h_; }
+    float uv_max_x() const { return (float)content_w_ / (float)FB_W; }
+    float uv_max_y() const { return (float)content_h_ / (float)FB_H; }
+    void set_preserve_aspect(bool preserve) { preserve_aspect_ = preserve; }
+    bool preserve_aspect() const { return preserve_aspect_; }
     void set_phosphor_type(phosphor_type t)
     {
         phosphor_ = (t == phosphor_type::color) ? phosphor_type::green : t;
@@ -97,6 +106,11 @@ private:
     float text_bg_b_ = 0.00f;
     bool text_reverse_video_ = false;
     bool text_force_background_ = false;
+    int content_w_ = FB_W;
+    int content_h_ = FB_H;
+    int content_x_ = 0;
+    int content_y_ = 0;
+    bool preserve_aspect_ = true;
 
     void apply_crt();
     GLuint compile_shader(const char *vert_src, const char *frag_src);

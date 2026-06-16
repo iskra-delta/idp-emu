@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 project(idp-emu LANGUAGES C CXX)
 
-set(CMAKE_CXX_STANDARD 20)
+set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
@@ -54,16 +54,37 @@ target_include_directories(imgui_lib PUBLIC
 )
 target_link_libraries(imgui_lib PUBLIC SDL2::SDL2 OpenGL::GL)
 
-set(XYZ_RELEASE_DIR ${CMAKE_SOURCE_DIR}/third_party/xyz-release)
-if(NOT EXISTS ${XYZ_RELEASE_DIR}/lib/libxdbgstub.a)
-    message(FATAL_ERROR "Missing prebuilt xyz release at ${XYZ_RELEASE_DIR}")
+# --- udap DAP debugger (https://github.com/retro-vault/udap) ---
+# Sources are fetched by the Makefile into third_party/udap (gitignored,
+# always latest). Only the reusable libraries are built here: libdap
+# (DAP protocol) and the SDCC CDB/MAP parsers. udap's own CMake files
+# are not used because they assume udap is the top-level project.
+set(UDAP_DIR ${CMAKE_SOURCE_DIR}/third_party/udap)
+if(NOT EXISTS ${UDAP_DIR}/include/dap/target.h)
+    message(FATAL_ERROR
+        "udap sources not found at ${UDAP_DIR}.\n"
+        "Run 'make fetch' (or 'git clone https://github.com/retro-vault/udap.git ${UDAP_DIR}').")
 endif()
 
-add_library(xdbgstub_prebuilt STATIC IMPORTED GLOBAL)
-set_target_properties(xdbgstub_prebuilt PROPERTIES
-    IMPORTED_LOCATION ${XYZ_RELEASE_DIR}/lib/libxdbgstub.a
-    INTERFACE_INCLUDE_DIRECTORIES ${XYZ_RELEASE_DIR}/include
+FetchContent_Declare(
+    nlohmann_json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.3
+    GIT_SHALLOW    TRUE
 )
+FetchContent_MakeAvailable(nlohmann_json)
+
+file(GLOB UDAP_DAP_SOURCES ${UDAP_DIR}/lib/dap/*.cpp)
+add_library(udap_dap STATIC ${UDAP_DAP_SOURCES})
+target_include_directories(udap_dap
+    PUBLIC ${UDAP_DIR}/include
+    PRIVATE ${UDAP_DIR}/lib/dap
+)
+target_link_libraries(udap_dap PUBLIC nlohmann_json::nlohmann_json)
+
+file(GLOB UDAP_SDCC_SOURCES ${UDAP_DIR}/lib/sdcc/*.cpp)
+add_library(udap_sdcc STATIC ${UDAP_SDCC_SOURCES})
+target_include_directories(udap_sdcc PUBLIC ${UDAP_DIR}/include)
 
 # Subdirectories
 add_subdirectory(lib/chipsex)

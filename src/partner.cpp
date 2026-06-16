@@ -226,7 +226,7 @@ static T clamp_delta(T v, T lo, T hi)
 }
 }
 
-partner::partner()
+partner::partner(const std::string &rtc_nvram_path) : rtc_nvram_path_(rtc_nvram_path)
 {
     // Initialize all chips
     z80dma_init(&dma);
@@ -242,8 +242,10 @@ partner::partner()
 
     // Connect sector-read callback (preserved across resets)
     fdc.read_sector = read_sector_cb;
+    fdc.write_sector = write_sector_cb;
     fdc.user_data   = this;
     hdc.read_blocks = read_hdd_blocks_cb;
+    hdc.write_blocks = write_hdd_blocks_cb;
     hdc.user_data   = this;
 
     sio_device_cfg_[sio_port_index(sio_port_id::sio1_a)].kind = sio_device_kind::none;
@@ -938,6 +940,15 @@ void partner::write_debug_memory(uint32_t address, const std::vector<uint8_t> &d
         write_mem((uint16_t)(address + i), data[i]);
 }
 
+void partner::debug_set_pc(uint16_t pc)
+{
+    pins = z80_prefetch(&cpu, pc);
+    // Drop the stale fetch strobes from the CPU's latched pin copy so
+    // is_opdone()/get_current_pc() reflect the redirected (not yet fetched)
+    // state instead of the pre-redirect instruction boundary.
+    cpu.pins &= ~(uint64_t)(Z80_M1 | Z80_RD);
+}
+
 void partner::apply_pio_device_output(pio_port_id port, uint8_t data)
 {
     const int idx = pio_port_index(port);
@@ -1114,19 +1125,6 @@ void partner::load_rtc_nvram()
         {
             for (size_t i = 0; i < sizeof(nvram); i++)
                 rtc.regs[0x08 + i] = nvram[i];
-
-            bool matches_reference = true;
-            for (size_t i = 0; i < sizeof(k_rtc_nvram_defaults); i++) {
-                if (rtc.regs[0x08 + i] != k_rtc_nvram_defaults[i]) {
-                    matches_reference = false;
-                    break;
-                }
-            }
-            if (matches_reference) {
-                return;
-            }
-            apply_safe_defaults();
-            save_rtc_nvram();
             return;
         }
     }
@@ -1206,9 +1204,36 @@ void partner::load_hdd(const std::string &path)
     file.read(reinterpret_cast<char *>(hdd_.data.data()), (std::streamsize)size);
     if (!file)
         throw std::runtime_error("incomplete hard disk image: " + path);
+    hdd_.path = path;
 
     hdc.present = true;
     std::cout << "[info] hard disk loaded: " << path << "\n";
+}
+
+bool partner::persist_disk_bytes(disk_image &disk, uint64_t offset,
+                                 const uint8_t *src, size_t size)
+{
+    if ((src == nullptr) || (offset + size > disk.data.size()))
+        return false;
+
+    if (!disk.path.empty())
+    {
+        std::fstream file(disk.path, std::ios::binary | std::ios::in | std::ios::out);
+        if (!file)
+            return false;
+        file.seekp((std::streamoff)offset, std::ios::beg);
+        if (!file)
+            return false;
+        file.write(reinterpret_cast<const char *>(src), (std::streamsize)size);
+        if (!file)
+            return false;
+        file.flush();
+        if (!file)
+            return false;
+    }
+
+    memcpy(disk.data.data() + offset, src, size);
+    return true;
 }
 
 bool partner::read_sector_cb(int drive, int c, int h, int r, int n,
@@ -1247,6 +1272,37 @@ bool partner::read_sector_cb(int drive, int c, int h, int r, int n,
     return true;
 }
 
+bool partner::write_sector_cb(int drive, int c, int h, int r, int n,
+                               const uint8_t *buf, void *user)
+{
+    auto *self = static_cast<partner *>(user);
+    if (drive < 0 || drive >= I8272_MAX_DRIVES) return false;
+    int resolved_drive = drive;
+    if ((drive == 1) &&
+        self->disks_[1].data.empty() &&
+        !self->disks_[0].data.empty() &&
+        self->disks_[2].data.empty() &&
+        self->disks_[3].data.empty())
+    {
+        resolved_drive = 0;
+    }
+    auto &disk = self->disks_[resolved_drive];
+    if (disk.data.empty()) return false;
+
+    uint16_t sector_size = (n == 0) ? 128 : (128 << n);
+    if (sector_size > I8272_SECTOR_SIZE) sector_size = I8272_SECTOR_SIZE;
+
+    if ((r <= 0) || ((uint32_t)r > disk.sectrk) || ((uint32_t)h >= disk.heads)) {
+        return false;
+    }
+
+    uint32_t lba = (((uint32_t)c * disk.heads) + (uint32_t)h) * disk.sectrk
+                 + (uint32_t)(r - 1);
+    uint64_t offset = (uint64_t)lba * disk.seclen;
+
+    return self->persist_disk_bytes(disk, offset, buf, sector_size);
+}
+
 bool partner::read_hdd_blocks_cb(uint32_t lba, uint32_t count, uint8_t *buf, void *user)
 {
     auto *self = static_cast<partner *>(user);
@@ -1259,6 +1315,19 @@ bool partner::read_hdd_blocks_cb(uint32_t lba, uint32_t count, uint8_t *buf, voi
 
     memcpy(buf, disk.data.data() + offset, (size_t)bytes);
     return true;
+}
+
+bool partner::write_hdd_blocks_cb(uint32_t lba, uint32_t count, const uint8_t *buf, void *user)
+{
+    auto *self = static_cast<partner *>(user);
+    auto &disk = self->hdd_;
+    if (disk.data.empty()) return false;
+
+    const uint64_t offset = (uint64_t)lba * disk.seclen;
+    const uint64_t bytes = (uint64_t)count * disk.seclen;
+    if (offset + bytes > disk.data.size()) return false;
+
+    return self->persist_disk_bytes(disk, offset, buf, (size_t)bytes);
 }
 
 void partner::load_rom(const std::string &path)
@@ -1846,8 +1915,6 @@ void partner::io_write(uint16_t port, uint8_t data)
     // MM58167 RTC: 0xA0-0xBF
     if ((port >= 0xA0 && port <= 0xB6) || port == 0xBF)
     {
-        if (port == 0xAC)
-            data = 0x51;
         rtc.regs[port - 0xA0] = data;
         if (port >= 0xA8 && port <= 0xAF)
             save_rtc_nvram();

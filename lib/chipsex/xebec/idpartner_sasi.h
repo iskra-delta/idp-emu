@@ -61,6 +61,8 @@ static inline bool _idpartner_sasi_req(const idpartner_sasi_t *adp) {
             return true;
         case S1410_PHASE_READ_DATA:
             return adp->target->data_idx < adp->target->data_len;
+        case S1410_PHASE_WRITE_DATA:
+            return adp->target->data_idx < adp->target->data_len;
         case S1410_PHASE_RESPONSE:
             return adp->target->response_idx < adp->target->response_len;
         default:

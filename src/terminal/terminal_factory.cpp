@@ -9,7 +9,8 @@ std::unique_ptr<terminal_emulator> make_terminal_emulator(terminal_profile profi
     case terminal_profile::vt52:
         return std::make_unique<vt52_terminal>(true);
     case terminal_profile::vt100_ansi:
-        // Placeholder strategy: route to VT52 until VT100/ANSI implementation is added.
+        // Shared terminal currently implements VT52 plus a small ANSI subset
+        // (cursor visibility, clear/home, cursor motion, SGR highlight/inverse).
         return std::make_unique<vt52_terminal>(true);
     default:
         return std::make_unique<vt52_terminal>(true);

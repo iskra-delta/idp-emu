@@ -11,6 +11,7 @@ const char *phase_name(s1410_phase_t phase)
     case S1410_PHASE_IDLE:         return "IDLE";
     case S1410_PHASE_AWAIT_CONFIG: return "CFG";
     case S1410_PHASE_READ_DATA:    return "READ";
+    case S1410_PHASE_WRITE_DATA:   return "WRITE";
     case S1410_PHASE_RESPONSE:     return "RESP";
     default:                       return "?";
     }

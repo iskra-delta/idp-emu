@@ -2,6 +2,7 @@
 #include "partner.hpp"
 #include "terminal/terminal_emulator.hpp"
 #include "terminal/terminal_factory.hpp"
+#include <array>
 #include <deque>
 #include <memory>
 
@@ -11,9 +12,10 @@ class partner_crt : public partner
 {
 public:
     static constexpr int TERM_COLS = 80;
-    static constexpr int TERM_ROWS = 25;
+    static constexpr int TERM_ROWS = 24;
 
-    explicit partner_crt(terminal_profile profile = terminal_profile::vt52);
+    explicit partner_crt(terminal_profile profile = terminal_profile::vt52,
+                         const std::string &rtc_nvram_path = "partner_cmos.bin");
 
     void reset() override;
     void tick() override;
@@ -27,8 +29,10 @@ protected:
     void io_write(uint16_t port, uint8_t data) override;
 
 private:
+    static constexpr uint16_t stage1_entry_pc_ = 0x0800;
     terminal_profile terminal_profile_ = terminal_profile::vt52;
     std::unique_ptr<terminal_emulator> terminal_;
     std::string raw_serial_;
-    std::deque<uint8_t> key_fifo_{};
+    std::array<std::deque<uint8_t>, 4> key_fifos_{};
+    uint16_t last_pc_ = 0xFFFF;
 };

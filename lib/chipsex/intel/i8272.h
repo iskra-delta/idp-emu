@@ -23,9 +23,10 @@
     - Main Status Register (MSR) at port 0xF0
     - Data Register at port 0xF1
     - Command/Result phase state machine
-    - Commands: SPECIFY, RECALIBRATE, SENSE INTERRUPT STATUS, READ DATA, SEEK
+    - Commands: SPECIFY, RECALIBRATE, SENSE INTERRUPT STATUS, READ DATA,
+      WRITE DATA, FORMAT TRACK, SEEK
     - Per-drive state (track, head, motor)
-    - Sector read via callback
+    - Sector read/write via callbacks
     - CHIPS-style pin-level bus tick (`i8272_tick_pins`)
 
     ## Emulated Pins
@@ -191,6 +192,9 @@ typedef struct {
 /*--- Callback: read a sector from disk image ---*/
 typedef bool (*i8272_read_sector_cb)(int drive, int c, int h, int r, int n,
                                      uint8_t *buf, void *user);
+/*--- Callback: write a sector to disk image ---*/
+typedef bool (*i8272_write_sector_cb)(int drive, int c, int h, int r, int n,
+                                      const uint8_t *buf, void *user);
 
 /*--- Intel 8272 FDC state ---*/
 typedef struct {
@@ -236,7 +240,7 @@ typedef struct {
     uint8_t data_buf[I8272_SECTOR_SIZE];
     uint16_t data_len;
     uint16_t data_idx;
-    /* last READ DATA request (debug visibility) */
+    /* last sector transfer request (debug visibility) */
     uint8_t last_us;
     uint8_t last_c;
     uint8_t last_h;
@@ -244,8 +248,9 @@ typedef struct {
     uint8_t last_n;
     bool last_read_ok;
 
-    /* sector read callback */
+    /* sector read/write callbacks */
     i8272_read_sector_cb read_sector;
+    i8272_write_sector_cb write_sector;
     void *user_data;
 } i8272_t;
 
@@ -298,6 +303,14 @@ static uint8_t _i8272_cmd_length(uint8_t cmd_code) {
     }
 }
 
+static uint16_t _i8272_sector_size(uint8_t n) {
+    uint16_t sector_size = (n == 0) ? 128 : (128 << n);
+    if (sector_size > I8272_SECTOR_SIZE) {
+        sector_size = I8272_SECTOR_SIZE;
+    }
+    return sector_size;
+}
+
 /*
     _i8272_cmd_name (for debug, not used at runtime but kept for reference)
 */
@@ -337,6 +350,69 @@ static void _i8272_enter_result(i8272_t *fdc) {
     fdc->result_idx = 0;
     /* RQM=1, DIO=1 (FDC->CPU), CB=1 */
     fdc->msr = I8272_MSR_RQM | I8272_MSR_DIO | I8272_MSR_CB;
+}
+
+static void _i8272_set_rw_result(i8272_t *fdc, uint8_t c, uint8_t h,
+                                 uint8_t r, uint8_t n) {
+    fdc->result[0] = fdc->st0;
+    fdc->result[1] = fdc->st1;
+    fdc->result[2] = fdc->st2;
+    fdc->result[3] = c;
+    fdc->result[4] = h;
+    fdc->result[5] = r;
+    fdc->result[6] = n;
+    fdc->result_len = 7;
+}
+
+static bool _i8272_finalize_format_track(i8272_t *fdc, uint8_t us, uint8_t sc,
+                                         uint8_t fill_byte) {
+    if (!fdc->write_sector) {
+        fdc->st0 = I8272_ST0_IC_AT;
+        fdc->st1 = I8272_ST1_NW;
+        fdc->st2 = 0;
+        _i8272_set_rw_result(fdc, 0, 0, 0, 0);
+        return false;
+    }
+
+    uint8_t sector_buf[I8272_SECTOR_SIZE];
+    for (uint16_t i = 0; i < I8272_SECTOR_SIZE; i++) {
+        sector_buf[i] = fill_byte;
+    }
+
+    for (uint8_t i = 0; i < sc; i++) {
+        const uint8_t c = fdc->data_buf[i * 4 + 0];
+        const uint8_t h = fdc->data_buf[i * 4 + 1];
+        const uint8_t r = fdc->data_buf[i * 4 + 2];
+        const uint8_t n = fdc->data_buf[i * 4 + 3];
+        const uint16_t sector_size = _i8272_sector_size(n);
+
+        fdc->last_c = c;
+        fdc->last_h = h;
+        fdc->last_r = r;
+        fdc->last_n = n;
+
+        if (!fdc->write_sector(us, c, h, r, n, sector_buf, fdc->user_data)) {
+            fdc->st0 = fdc->drive[us].ready ? I8272_ST0_IC_AT : I8272_ST0_IC_ATRDY;
+            fdc->st1 = I8272_ST1_NW;
+            fdc->st2 = 0;
+            _i8272_set_rw_result(fdc, c, h, r, n);
+            (void)sector_size;
+            return false;
+        }
+    }
+
+    if (sc > 0) {
+        const uint8_t last_base = (uint8_t)((sc - 1) * 4);
+        _i8272_set_rw_result(
+            fdc,
+            fdc->data_buf[last_base + 0],
+            fdc->data_buf[last_base + 1],
+            fdc->data_buf[last_base + 2],
+            fdc->data_buf[last_base + 3]);
+    } else {
+        _i8272_set_rw_result(fdc, 0, 0, 0, 0);
+    }
+    return true;
 }
 
 /*
@@ -460,10 +536,7 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
     fdc->st2 = 0;
 
     /* Calculate sector size */
-    uint16_t sector_size = (n == 0) ? 128 : (128 << n);
-    if (sector_size > I8272_SECTOR_SIZE) {
-        sector_size = I8272_SECTOR_SIZE;
-    }
+    const uint16_t sector_size = _i8272_sector_size(n);
 
     bool ok = false;
     if (fdc->read_sector) {
@@ -492,14 +565,7 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
     fdc->last_read_ok = ok;
 
     /* Prepare result phase */
-    fdc->result[0] = fdc->st0;
-    fdc->result[1] = fdc->st1;
-    fdc->result[2] = fdc->st2;
-    fdc->result[3] = c;
-    fdc->result[4] = h;
-    fdc->result[5] = r;
-    fdc->result[6] = n;
-    fdc->result_len = 7;
+    _i8272_set_rw_result(fdc, c, h, r, n);
 
     if (ok && fdc->data_len > 0) {
         /* Enter transfer phase immediately: data is sourced by DMA pacing. */
@@ -518,6 +584,120 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
         */
         _i8272_schedule_irq(fdc, 1024, false, false);
     }
+}
+
+/*
+    _i8272_exec_write_data
+
+    WRITE DATA: write sector(s) to disk.
+    Command format: cmd, HU, C, H, R, N, EOT, GPL, DTL
+    Result: ST0, ST1, ST2, C, H, R, N
+*/
+static void _i8272_exec_write_data(i8272_t *fdc) {
+    const uint8_t us = fdc->cmd[1] & 0x03;
+    const uint8_t hd = (fdc->cmd[1] >> 2) & 0x01;
+    const uint8_t c  = fdc->cmd[2];
+    const uint8_t h  = fdc->cmd[3];
+    const uint8_t r  = fdc->cmd[4];
+    const uint8_t n  = fdc->cmd[5];
+    const uint8_t eot = fdc->cmd[6];
+    fdc->last_us = us;
+    fdc->last_c = c;
+    fdc->last_h = h;
+    fdc->last_r = r;
+    fdc->last_n = n;
+
+    fdc->drive[us].head = hd;
+    fdc->st0 = 0;
+    fdc->st1 = 0;
+    fdc->st2 = 0;
+    fdc->data_len = 0;
+    fdc->data_idx = 0;
+
+    if (!fdc->drive[us].ready) {
+        fdc->st0 = I8272_ST0_IC_ATRDY;
+        fdc->st1 = I8272_ST1_NW;
+    } else if (!fdc->write_sector) {
+        fdc->st0 = I8272_ST0_IC_AT;
+        fdc->st1 = I8272_ST1_NW;
+    } else {
+        fdc->data_len = _i8272_sector_size(n);
+        fdc->data_idx = 0;
+        fdc->st0 = I8272_ST0_IC_NT;
+        if (r == eot) {
+            fdc->st1 |= I8272_ST1_EN;
+        }
+    }
+
+    _i8272_set_rw_result(fdc, c, h, r, n);
+
+    if (fdc->data_len > 0) {
+        /* Enter data-receive phase: host/DMA pushes bytes into the FDC. */
+        fdc->phase = I8272_PHASE_EXECUTE;
+        fdc->msr = I8272_MSR_RQM | I8272_MSR_EXM | I8272_MSR_CB;
+    } else {
+        _i8272_enter_result(fdc);
+        _i8272_schedule_irq(fdc, 1024, false, false);
+    }
+}
+
+/*
+    _i8272_exec_format_track
+
+    FORMAT TRACK: receive SC CHRN tuples and fill each described sector with
+    the supplied fill byte.
+    Command format: cmd, HU, N, SC, GPL, D
+    Execute data: (C, H, R, N) repeated SC times
+    Result: ST0, ST1, ST2, C, H, R, N
+*/
+static void _i8272_exec_format_track(i8272_t *fdc) {
+    const uint8_t us = fdc->cmd[1] & 0x03;
+    const uint8_t hd = (fdc->cmd[1] >> 2) & 0x01;
+    const uint8_t n = fdc->cmd[2];
+    const uint8_t sc = fdc->cmd[3];
+    const uint16_t exec_bytes = (uint16_t)sc * 4u;
+    fdc->last_us = us;
+    fdc->last_c = 0;
+    fdc->last_h = hd;
+    fdc->last_r = 0;
+    fdc->last_n = n;
+
+    fdc->drive[us].head = hd;
+    fdc->st0 = 0;
+    fdc->st1 = 0;
+    fdc->st2 = 0;
+    fdc->data_len = 0;
+    fdc->data_idx = 0;
+
+    if (!fdc->drive[us].ready) {
+        fdc->st0 = I8272_ST0_IC_ATRDY;
+        fdc->st1 = I8272_ST1_NW;
+        _i8272_set_rw_result(fdc, 0, hd, 0, n);
+        _i8272_enter_result(fdc);
+        _i8272_schedule_irq(fdc, 1024, false, false);
+        return;
+    }
+    if (!fdc->write_sector) {
+        fdc->st0 = I8272_ST0_IC_AT;
+        fdc->st1 = I8272_ST1_NW;
+        _i8272_set_rw_result(fdc, 0, hd, 0, n);
+        _i8272_enter_result(fdc);
+        _i8272_schedule_irq(fdc, 1024, false, false);
+        return;
+    }
+    if (exec_bytes > I8272_SECTOR_SIZE) {
+        fdc->st0 = I8272_ST0_IC_AT;
+        fdc->st1 = I8272_ST1_OR;
+        _i8272_set_rw_result(fdc, 0, hd, 0, n);
+        _i8272_enter_result(fdc);
+        _i8272_schedule_irq(fdc, 1024, false, false);
+        return;
+    }
+
+    fdc->data_len = exec_bytes;
+    fdc->data_idx = 0;
+    fdc->phase = I8272_PHASE_EXECUTE;
+    fdc->msr = I8272_MSR_RQM | I8272_MSR_EXM | I8272_MSR_CB;
 }
 
 /*
@@ -569,6 +749,8 @@ static void _i8272_execute_command(i8272_t *fdc) {
         case I8272_CMD_RECALIBRATE:     _i8272_exec_recalibrate(fdc); break;
         case I8272_CMD_SENSE_INT:       _i8272_exec_sense_int(fdc); break;
         case I8272_CMD_READ_DATA:       _i8272_exec_read_data(fdc); break;
+        case I8272_CMD_WRITE_DATA:      _i8272_exec_write_data(fdc); break;
+        case I8272_CMD_FORMAT_TRACK:    _i8272_exec_format_track(fdc); break;
         case I8272_CMD_READ_ID:         _i8272_exec_read_id(fdc); break;
         case I8272_CMD_SEEK:            _i8272_exec_seek(fdc); break;
         default:                        _i8272_exec_invalid(fdc); break;
@@ -581,6 +763,7 @@ void i8272_init(i8272_t *fdc) {
     CHIPS_ASSERT(fdc);
     memset(fdc, 0, sizeof(*fdc));
     fdc->read_sector = NULL;
+    fdc->write_sector = NULL;
     fdc->user_data = NULL;
     i8272_reset(fdc);
 }
@@ -589,6 +772,7 @@ void i8272_reset(i8272_t *fdc) {
     CHIPS_ASSERT(fdc);
     /* Preserve callbacks */
     i8272_read_sector_cb cb = fdc->read_sector;
+    i8272_write_sector_cb wcb = fdc->write_sector;
     void *ud = fdc->user_data;
 
     fdc->phase = I8272_PHASE_IDLE;
@@ -639,6 +823,7 @@ void i8272_reset(i8272_t *fdc) {
 
     /* Restore callbacks */
     fdc->read_sector = cb;
+    fdc->write_sector = wcb;
     fdc->user_data = ud;
 }
 
@@ -651,7 +836,11 @@ void i8272_tick(i8272_t *fdc) {
         if (fdc->exec_delay == 0) {
             fdc->exec_pending = false;
             fdc->phase = I8272_PHASE_EXECUTE;
-            fdc->msr = I8272_MSR_RQM | I8272_MSR_DIO | I8272_MSR_EXM | I8272_MSR_CB;
+            fdc->msr = I8272_MSR_RQM | I8272_MSR_EXM | I8272_MSR_CB;
+            if ((fdc->cmd_code != I8272_CMD_WRITE_DATA) &&
+                (fdc->cmd_code != I8272_CMD_FORMAT_TRACK)) {
+                fdc->msr |= I8272_MSR_DIO;
+            }
         }
     }
     if (fdc->irq_request || (fdc->irq_delay == 0)) {
@@ -711,7 +900,8 @@ uint8_t i8272_read_status(i8272_t *fdc) {
 uint8_t i8272_read_data(i8272_t *fdc) {
     CHIPS_ASSERT(fdc);
 
-    if (fdc->phase == I8272_PHASE_EXECUTE) {
+    if ((fdc->phase == I8272_PHASE_EXECUTE) &&
+        (fdc->cmd_code == I8272_CMD_READ_DATA)) {
         /* Execution phase: return sector data bytes */
         if (fdc->data_idx < fdc->data_len) {
             uint8_t data = fdc->data_buf[fdc->data_idx++];
@@ -748,7 +938,38 @@ uint8_t i8272_read_data(i8272_t *fdc) {
 void i8272_write_data(i8272_t *fdc, uint8_t data) {
     CHIPS_ASSERT(fdc);
 
-    if (fdc->phase == I8272_PHASE_IDLE) {
+    if ((fdc->phase == I8272_PHASE_EXECUTE) &&
+        ((fdc->cmd_code == I8272_CMD_WRITE_DATA) ||
+         (fdc->cmd_code == I8272_CMD_FORMAT_TRACK))) {
+        if (fdc->data_idx < fdc->data_len) {
+            fdc->data_buf[fdc->data_idx++] = data;
+            if (fdc->data_idx >= fdc->data_len) {
+                bool ok = false;
+                if (fdc->cmd_code == I8272_CMD_WRITE_DATA) {
+                    ok = false;
+                    if (fdc->write_sector) {
+                        ok = fdc->write_sector(
+                            fdc->last_us, fdc->last_c, fdc->last_h, fdc->last_r, fdc->last_n,
+                            fdc->data_buf, fdc->user_data);
+                    }
+                    if (!ok) {
+                        fdc->st0 = fdc->drive[fdc->last_us].ready ?
+                            I8272_ST0_IC_AT : I8272_ST0_IC_ATRDY;
+                        fdc->st1 &= (uint8_t)~I8272_ST1_EN;
+                        fdc->st1 |= I8272_ST1_NW;
+                        _i8272_set_rw_result(
+                            fdc, fdc->last_c, fdc->last_h, fdc->last_r, fdc->last_n);
+                    }
+                } else {
+                    ok = _i8272_finalize_format_track(
+                        fdc, fdc->last_us, fdc->cmd[3], fdc->cmd[5]);
+                }
+                _i8272_enter_result(fdc);
+                _i8272_schedule_irq(fdc, 1024, false, false);
+            }
+        }
+    }
+    else if (fdc->phase == I8272_PHASE_IDLE) {
         /* First command byte: decode command */
         fdc->cmd[0] = data;
         fdc->cmd_code = data & 0x1F; /* lower 5 bits are the command */

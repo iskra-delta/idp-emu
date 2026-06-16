@@ -1,3 +1,11 @@
+/*
+ * Declares the PartOS device model shared by kernel code and hardware
+ * drivers, including device instances, driver descriptors, and common
+ * ioctl flags.
+ *
+ * MIT License (see: LICENSE)
+ * Copyright (C) 2021 tomaz stih
+ */
 #ifndef DEV_H
 #define DEV_H
 
@@ -33,7 +41,7 @@ struct dev_s;
  * Nothing is allocated or copied: the instances live in the BIOS image,
  * which is RAM at runtime, so probe only sets their next links to chain
  * the units actually found. The chain is then hooked into the global
- * device list with append_list().
+ * device list with list_append().
  * open() receives an already-resolved device instance (see find_dev_drv)
  * and performs the hardware-specific claim/init; 0 = ok, negative = error.
  * All function pointers are mandatory; stub with an empty return for

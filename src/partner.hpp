@@ -81,7 +81,7 @@ public:
         uint64_t bytes_seen = 0;
     };
 
-    partner();
+    explicit partner(const std::string &rtc_nvram_path = "partner_cmos.bin");
     virtual ~partner();
 
     void load_rom(const std::string &path);
@@ -116,8 +116,12 @@ public:
     uint64_t get_tick_count() const { return tick_count; }
     bool is_rom_enabled() const { return rom_enabled; }
     uint8_t get_ram_bank() const { return ram_bank; }
+    // Instruction boundary test. Uses the CPU's own latched pin copy
+    // (cpu.pins) rather than the shared bus mask: the peripheral daisy
+    // chain rewrites the shared mask every tick (e.g. while a CTC interrupt
+    // is pending) and can mask out the M1|RD fetch strobes.
     bool is_opdone() const {
-        return ((pins & (Z80_M1|Z80_RD)) == (Z80_M1|Z80_RD)) && !cpu.prefix_active;
+        return ((cpu.pins & (Z80_M1|Z80_RD)) == (Z80_M1|Z80_RD)) && !cpu.prefix_active;
     }
     // During M1 fetch, cpu.pc has already been incremented past the opcode byte.
     // This returns the actual instruction address.
@@ -159,6 +163,9 @@ public:
 
     debug_cpu_state capture_debug_cpu_state() const;
     void apply_debug_cpu_state(const debug_cpu_state &state);
+    // Redirect execution to a new PC. Unlike apply_debug_cpu_state, this
+    // restarts the CPU's pipelined opcode fetch at the new address.
+    void debug_set_pc(uint16_t pc);
     std::vector<uint8_t> read_debug_memory(uint32_t address, size_t length) const;
     void write_debug_memory(uint32_t address, const std::vector<uint8_t> &data);
 
@@ -293,7 +300,12 @@ private:
     std::array<pio_device_runtime, 2> pio_device_runtime_{};
     std::string virtual_printer_text_;
 
+    bool persist_disk_bytes(disk_image &disk, uint64_t offset,
+                            const uint8_t *src, size_t size);
     static bool read_sector_cb(int drive, int c, int h, int r, int n,
                                uint8_t *buf, void *user);
+    static bool write_sector_cb(int drive, int c, int h, int r, int n,
+                                const uint8_t *buf, void *user);
     static bool read_hdd_blocks_cb(uint32_t lba, uint32_t count, uint8_t *buf, void *user);
+    static bool write_hdd_blocks_cb(uint32_t lba, uint32_t count, const uint8_t *buf, void *user);
 };

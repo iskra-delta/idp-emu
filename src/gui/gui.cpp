@@ -16,10 +16,11 @@
 #include "chrome_style.hpp"
 #include "chrome_theme.hpp"
 #include "custom_title_bar.hpp"
+#include "terminal_keymap.hpp"
 #include "window_chrome.hpp"
 #include "../partner.hpp"
 #include "../partner_gdp.hpp"
-#include "../remote_debugger.hpp"
+#include "../dap/dap_debugger.hpp"
 
 #include <imgui.h>
 #include <imgui_internal.h>
@@ -38,11 +39,6 @@
 #include <string>
 
 namespace {
-static inline void push_byte(std::vector<uint8_t>& out, uint8_t b)
-{
-    out.push_back(b);
-}
-
 static inline void push_cstr(std::vector<uint8_t>& out, const char* s)
 {
     while (*s) {
@@ -76,136 +72,6 @@ static std::string resolve_asset_path(const std::string& relative)
             return p.lexically_normal().string();
     }
     return relative;
-}
-
-// VT100 control-key translation (Ctrl+A..Z etc.).
-static bool map_vt100_ctrl_key(SDL_Keycode key, SDL_Keymod mods, std::vector<uint8_t>& out)
-{
-    if ((mods & KMOD_CTRL) == 0) {
-        return false;
-    }
-    if (key >= SDLK_a && key <= SDLK_z) {
-        push_byte(out, (uint8_t)(1 + (key - SDLK_a))); // Ctrl+A..Ctrl+Z => 0x01..0x1A
-        return true;
-    }
-    switch (key) {
-    case SDLK_SPACE:
-    case SDLK_2:
-        push_byte(out, 0x00); // NUL
-        return true;
-    case SDLK_LEFTBRACKET:
-        push_byte(out, 0x1B); // ESC
-        return true;
-    case SDLK_BACKSLASH:
-        push_byte(out, 0x1C); // FS
-        return true;
-    case SDLK_RIGHTBRACKET:
-        push_byte(out, 0x1D); // GS
-        return true;
-    case SDLK_6:
-        push_byte(out, 0x1E); // RS (Ctrl+^)
-        return true;
-    case SDLK_MINUS:
-        push_byte(out, 0x1F); // US (Ctrl+_)
-        return true;
-    default:
-        return false;
-    }
-}
-
-// Partner serial keyboard translation for non-text keys in GDP mode.
-// Printable text still arrives via SDL_TEXTINPUT.
-static bool map_vt100_key(SDL_Keycode key, std::vector<uint8_t>& out, bool& local_only, bool has_setup_key)
-{
-    local_only = false;
-    switch (key) {
-    case SDLK_RETURN:
-    case SDLK_KP_ENTER:
-        push_byte(out, 0x0D);
-        return true;
-    case SDLK_BACKSPACE:
-        push_byte(out, 0x08);
-        return true;
-    case SDLK_TAB:
-        push_byte(out, 0x09);
-        return true;
-    case SDLK_ESCAPE:
-        push_byte(out, 0x1B);
-        return true;
-    case SDLK_UP:
-        if (has_setup_key) {
-            push_byte(out, 0x1B);
-            push_byte(out, 0x18);
-        } else {
-            push_byte(out, 0x08);
-        }
-        return true;
-    case SDLK_DOWN:
-        if (has_setup_key) {
-            push_byte(out, 0x1B);
-            push_byte(out, 0x19);
-        } else {
-            push_byte(out, 0x0A);
-        }
-        return true;
-    case SDLK_RIGHT:
-        if (has_setup_key) {
-            push_byte(out, 0x1B);
-            push_byte(out, 0x15);
-        } else {
-            push_byte(out, 0x0C);
-        }
-        return true;
-    case SDLK_LEFT:
-        if (has_setup_key) {
-            push_byte(out, 0x1B);
-            push_byte(out, 0x17);
-        } else {
-            push_byte(out, 0x0B);
-        }
-        return true;
-    case SDLK_DELETE:
-        push_byte(out, 0x7F);
-        return true;
-    case SDLK_F1:
-        // CPM3.SYS setup dispatch: CP 0x14 → 0xA0CC (set all tabs / PF1 action)
-        push_byte(out, 0x1B); push_byte(out, 0x14);
-        return true;
-    case SDLK_F2:
-        // CPM3.SYS setup dispatch: CP 0x1A → 0x9933 (execute/DO action)
-        push_byte(out, 0x1B); push_byte(out, 0x1A);
-        return true;
-    case SDLK_F3:
-        // CPM3.SYS setup dispatch: CP 0x1C → JR +28 (tab action / PF3)
-        push_byte(out, 0x1B); push_byte(out, 0x1C);
-        return true;
-    case SDLK_F4:
-        // CPM3.SYS setup dispatch: CP 0x16 → 0x96E7 = clears FF19 → exits setup.
-        // This is PF4 = "Exit Set Up" (same role as VT100 PF4).
-        push_byte(out, 0x1B); push_byte(out, 0x16);
-        return true;
-    case SDLK_PAUSE:
-    case SDLK_F12:
-        if (has_setup_key) {
-            // CPM3.SYS analysis: key 0xFE toggles FF19 bit 1 (SET-UP flag).
-            // CONIN at 0x8947/0x895A: LD A,(FF19); AND 0x02; CALL NZ, 0x9984
-            // → 0x9984 is the actual setup screen draw+navigation entry point.
-            // Key 0xB0 (previously used) toggles bit 0, which is NOT the setup bit.
-            push_byte(out, 0xFE);
-            return true;
-        }
-        return false;
-    case SDLK_SCROLLLOCK:
-        if (has_setup_key) {
-            // CPM3.SYS: FF19 bit 0 is toggled by key 0xB0 (NO SCROLL).
-            // Key 0xFE (SET-UP) is now correctly on F12/Pause.
-            push_byte(out, 0xB0);
-            return true;
-        }
-        return false;
-    default:
-        return false;
-    }
 }
 
 static const char *host_label_for_special_key(SDL_Keycode key)
@@ -480,7 +346,7 @@ void gui::render_remote_debugger_dialog()
         remote_debug_port_text_ = port_buf;
 
     ImGui::TextDisabled("Status: %s", remote_debugger_->status_summary().c_str());
-    ImGui::TextWrapped("xdbg command: %s", remote_debugger_->debugger_command().c_str());
+    ImGui::TextWrapped("udap client: %s", remote_debugger_->debugger_command().c_str());
 
     if (!remote_debug_error_.empty()) {
         ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220, 90, 90, 255));
@@ -565,7 +431,11 @@ bool gui::init(const std::string &title, int width, int height)
         std::cerr << "[error] SDL_GL_MakeCurrent failed: " << SDL_GetError() << "\n";
         return false;
     }
-    if (SDL_GL_SetSwapInterval(1) != 0)
+    const bool enable_vsync = [] {
+        const char *s = std::getenv("IDP_EMU_VSYNC");
+        return s && s[0] && s[0] != '0';
+    }();
+    if (SDL_GL_SetSwapInterval(enable_vsync ? 1 : 0) != 0)
     {
         std::cerr << "[warning] SDL_GL_SetSwapInterval failed: " << SDL_GetError() << "\n";
     }
@@ -577,7 +447,12 @@ bool gui::init(const std::string &title, int width, int height)
     io.IniFilename = "idp-emu.config";
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    const bool enable_viewports = [] {
+        const char *s = std::getenv("IDP_EMU_VIEWPORTS");
+        return s && s[0] && s[0] != '0';
+    }();
+    if (enable_viewports)
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
     ImFont* ui_font = nullptr;
     const std::string inter_path = resolve_asset_path("assets/fonts/Inter.ttf");
@@ -955,22 +830,11 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
             // Route terminal keys unless user is actively editing an ImGui text field.
             if (!ImGui::GetIO().WantTextInput)
             {
-                // VT100 profile maps non-printable keys to DEC-compatible sequences.
-                if (terminal_profile_ == terminal_profile::vt100_ansi)
-                {
-                    if (map_vt100_ctrl_key(sym, mods, key_buf_))
-                        continue;
+                if (map_terminal_ctrl_key(sym, mods, key_buf_))
+                    continue;
 
-                    bool local_only = false;
-                    if (map_vt100_key(sym, key_buf_, local_only, gdp_keyboard_model))
-                    {
-                        if (local_only)
-                        {
-                            // Local-only VT100 key (SET-UP): no transmit to host.
-                        }
-                        continue;
-                    }
-                }
+                if (map_terminal_key(sym, key_buf_, gdp_keyboard_model))
+                    continue;
 
                 switch (sym)
                 {
@@ -1094,10 +958,10 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             display_.update();
         }
         ImGui::Separator();
-        if (ImGui::MenuItem("Remote Debugger..."))
+        if (ImGui::MenuItem("Debugger (udap)..."))
             open_remote_debugger_dialog();
         if (remote_debugger_)
-            ImGui::TextDisabled("xdbg: %s", remote_debugger_->status_summary().c_str());
+            ImGui::TextDisabled("udap: %s", remote_debugger_->status_summary().c_str());
         ImGui::Separator();
         if (ImGui::MenuItem("Quit", "Ctrl+Q"))
         {
@@ -1265,7 +1129,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             const std::string label = visible + "##kbd_" + std::to_string(key_uid++);
             if (ImGui::Button(label.c_str(), ImVec2(w, h))) {
                 blink_host_key(host_key);
-                push_byte(key_buf_, ch);
+                key_buf_.push_back(ch);
                 char tx[16];
                 std::snprintf(tx, sizeof(tx), "0x%02X", (unsigned)ch);
                 clicked_info(dec_key, host_key, tx);
@@ -1328,7 +1192,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
                 ImGui::SetCursorPosX(ImGui::GetCursorPosX() + (avail_w - keyboard_total_w) * 0.5f);
             }
 
-            key_button("SET UP", "Pause/F12", "\xb0", setup_w, h);
+            key_button("SET UP", "Pause/F12/Delete", "\xfe", setup_w, h);
             ImGui::Spacing();
             if (auto *gdp = dynamic_cast<partner_gdp *>(&emu))
             {
@@ -1409,7 +1273,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             key_button("RETURN", "Enter", "\r", return_w, h); ImGui::SameLine();
             char_button("|\n\\", "\\", '\\', k);
 
-            key_button("NO\nSCROLL", "ScrollLock", "\xfe", noscroll_w, h); ImGui::SameLine();
+            key_button("NO\nSCROLL", "ScrollLock", "\xb0", noscroll_w, h); ImGui::SameLine();
             key_button("SHIFT", "LShift", "", shift_w, h); ImGui::SameLine();
             char_button("Z", "Z", 'z', k); ImGui::SameLine();
             char_button("X", "X", 'x', k); ImGui::SameLine();
@@ -1429,10 +1293,10 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 
             ImGui::SameLine(0.0f, side_gap);
             ImGui::BeginGroup();
-            key_button("UP", "Up", "\x1b\x18", k, h); ImGui::SameLine();
-            key_button("DOWN", "Down", "\x1b\x19", k, h); ImGui::SameLine();
-            key_button("LEFT", "Left", "\x1b\x17", k, h); ImGui::SameLine();
-            key_button("RIGHT", "Right", "\x1b\x15", k, h);
+            key_button("UP", "Up", "\x1b""A", k, h); ImGui::SameLine();
+            key_button("DOWN", "Down", "\x1b""B", k, h); ImGui::SameLine();
+            key_button("LEFT", "Left", "\x1b""D", k, h); ImGui::SameLine();
+            key_button("RIGHT", "Right", "\x1b""C", k, h);
             ImGui::EndGroup();
 
             ImGui::SameLine(0.0f, side_gap);
@@ -1549,10 +1413,10 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 
             ImGui::SameLine(0.0f, inter_group_gap_1);
             ImGui::BeginGroup();
-            char_button("UP", "Up", 0x08, k, h); ImGui::SameLine();
-            char_button("DOWN", "Down", 0x0A, k, h); ImGui::SameLine();
-            char_button("LEFT", "Left", 0x0B, k, h); ImGui::SameLine();
-            char_button("RIGHT", "Right", 0x0C, k, h);
+            key_button("UP", "Up", "\x1b""A", k, h); ImGui::SameLine();
+            key_button("DOWN", "Down", "\x1b""B", k, h); ImGui::SameLine();
+            key_button("LEFT", "Left", "\x1b""D", k, h); ImGui::SameLine();
+            key_button("RIGHT", "Right", "\x1b""C", k, h);
 
             char_button("-", "-", '-', k); ImGui::SameLine();
             char_button("+", "=", '+', k); ImGui::SameLine();
@@ -1600,9 +1464,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 
         ImGui::Separator();
         ImGui::Text("Last: %s", last_click_info[0] ? last_click_info : "(none)");
-        if (gdp_keyboard_model) {
-            ImGui::TextUnformatted("SET-UP host key: Pause or F12.");
-        }
+        ImGui::TextUnformatted("SET-UP host key: Pause, F12, or Delete.");
         ImGui::TextUnformatted("Quit: Ctrl+Q.");
         ImGui::TextUnformatted("Debugger keys reserved: F10, F11.");
         ImGui::End();

@@ -16,7 +16,8 @@ class display;
 class partner_gdp : public partner
 {
 public:
-    explicit partner_gdp(terminal_profile profile = terminal_profile::vt100_ansi);
+    explicit partner_gdp(terminal_profile profile = terminal_profile::vt100_ansi,
+                         const std::string &rtc_nvram_path = "partner_cmos.bin");
 
     void reset() override;
     void tick() override;
@@ -44,6 +45,7 @@ public:
     const std::array<uint64_t, 256>& get_avdc_char_hist() const { return avdc_char_hist_; }
     uint8_t get_gdp_scroll() const { return gdp_scroll_; }
     uint8_t get_gdp_pio_port_a() const { return gdp_video_pio_.port[Z80PIO_PORT_A].output; }
+    uint8_t get_gdp_pio_port_b() const { return gdp_video_pio_.port[Z80PIO_PORT_B].output; }
 
 protected:
     uint8_t io_read(uint16_t port) override;

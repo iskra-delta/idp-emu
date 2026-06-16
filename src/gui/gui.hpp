@@ -11,7 +11,7 @@
 #include <optional>
 
 class partner;
-class remote_debugger;
+class dap_debugger;
 enum class partner_gdp_keyboard_sound : uint8_t;
 
 class gui
@@ -39,7 +39,7 @@ public:
 
     display &get_display() { return display_; }
     void set_terminal_profile(terminal_profile profile) { terminal_profile_ = profile; }
-    void set_remote_debugger(remote_debugger *debugger) { remote_debugger_ = debugger; }
+    void set_remote_debugger(dap_debugger *debugger) { remote_debugger_ = debugger; }
     std::optional<remote_debugger_request> take_remote_debugger_request();
     void set_remote_debugger_error(const std::string &error) { remote_debug_error_ = error; }
 
@@ -90,11 +90,11 @@ private:
 
     std::vector<uint8_t> key_buf_;
     std::unordered_map<std::string, uint32_t> key_blink_until_ms_{};
-    remote_debugger *remote_debugger_ = nullptr;
+    dap_debugger *remote_debugger_ = nullptr;
     std::string disk_mount_path_;
     std::string disk_mount_error_;
     std::string remote_debug_host_ = "127.0.0.1";
-    std::string remote_debug_port_text_ = "9000";
+    std::string remote_debug_port_text_ = "4711";
     std::string remote_debug_error_;
     std::optional<remote_debugger_request> pending_remote_debugger_request_;
     bool open_remote_debugger_popup_ = false;

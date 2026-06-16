@@ -16,6 +16,7 @@ void panels::render_monitor(display &disp, bool *p_open)
                           mode == display::phosphor_type::flat ? "Flat (No Effects)" :
                           mode == display::phosphor_type::green ? "Green CRT" :
                           mode == display::phosphor_type::orange ? "Orange CRT" :
+                          mode == display::phosphor_type::retro_cool ? "BW CRT" :
                           "LCD"))
     {
         if (ImGui::Selectable("Flat (No Effects)", mode == display::phosphor_type::flat))
@@ -24,6 +25,8 @@ void panels::render_monitor(display &disp, bool *p_open)
             disp.set_phosphor_type(display::phosphor_type::green);
         if (ImGui::Selectable("Orange CRT", mode == display::phosphor_type::orange))
             disp.set_phosphor_type(display::phosphor_type::orange);
+        if (ImGui::Selectable("BW CRT", mode == display::phosphor_type::retro_cool))
+            disp.set_phosphor_type(display::phosphor_type::retro_cool);
         if (ImGui::Selectable("LCD", mode == display::phosphor_type::lcd))
             disp.set_phosphor_type(display::phosphor_type::lcd);
         ImGui::EndCombo();

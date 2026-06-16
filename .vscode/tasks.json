@@ -2,7 +2,7 @@
   "version": "2.0.0",
   "tasks": [
     {
-      "label": "CMake Configure Debug",
+      "label": "CMake Configure RelWithDebInfo",
       "type": "shell",
       "command": "cmake",
       "args": [
@@ -10,7 +10,7 @@
         "${workspaceFolder}",
         "-B",
         "${workspaceFolder}/build",
-        "-DCMAKE_BUILD_TYPE=Debug"
+        "-DCMAKE_BUILD_TYPE=RelWithDebInfo"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -25,7 +25,7 @@
       }
     },
     {
-      "label": "CMake Build Debug",
+      "label": "CMake Build RelWithDebInfo",
       "type": "shell",
       "command": "cmake",
       "args": [
@@ -37,7 +37,7 @@
         "cwd": "${workspaceFolder}"
       },
       "dependsOn": [
-        "CMake Configure Debug"
+        "CMake Configure RelWithDebInfo"
       ],
       "dependsOrder": "sequence",
       "group": {
@@ -52,6 +52,35 @@
         "panel": "shared",
         "clear": false
       }
+    },
+    {
+      "label": "Build PartOS ROM",
+      "type": "shell",
+      "command": "make",
+      "args": [
+        "-C",
+        "${workspaceFolder}/partos"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [
+        "$gcc"
+      ],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      }
+    },
+    {
+      "label": "Build Emulator + PartOS",
+      "dependsOn": [
+        "CMake Build RelWithDebInfo",
+        "Build PartOS ROM"
+      ],
+      "dependsOrder": "sequence",
+      "problemMatcher": []
     }
   ]
 }

@@ -2,7 +2,7 @@
 #include "partner_crt.hpp"
 #include "partner_gdp.hpp"
 #include "debugger.hpp"
-#include "remote_debugger.hpp"
+#include "dap/dap_debugger.hpp"
 #include "gui/gui.hpp"
 #include "gui/display.hpp"
 #include <iostream>
@@ -20,6 +20,29 @@ static constexpr uint32_t TICKS_PER_FRAME = CPU_CLOCK_HZ / TARGET_FPS;
 static constexpr uint32_t RUN_TICK_SLICE = 8192;
 
 namespace {
+
+constexpr const char *DEFAULT_PARTOS_ROM = "partos/bin/partos.rom";
+constexpr const char *DEFAULT_PARTOS_NVRAM = "partos/partos_shadow_nvram.bin";
+constexpr const char *DEFAULT_LEGACY_CRT_ROM = "roms/partner_crt.rom";
+
+bool is_boot_prompt_wait(uint16_t pc)
+{
+    return (pc == 0x009F) || (pc == 0x00A1) || (pc == 0x00A3);
+}
+
+bool is_floppy_boot_start(uint16_t pc)
+{
+    return (pc == 0x0292) || (pc == 0x029B) || (pc == 0x03A5) || (pc == 0x03F5);
+}
+
+bool boot_trace_enabled()
+{
+    static const bool enabled = [] {
+        const char *value = std::getenv("IDP_TRACE_BOOT");
+        return value && value[0] && value[0] != '0';
+    }();
+    return enabled;
+}
 
 void step_one_instruction(partner &emu)
 {
@@ -41,22 +64,27 @@ void print_usage(const char *prog)
     std::cerr << "Usage: " << prog << " [options]\n";
     std::cerr << "Options:\n";
     std::cerr << "  --help           Show this help\n";
-    std::cerr << "  --rom FILE       ROM file (default: roms/partner_crt.rom)\n";
+    std::cerr << "  --rom FILE       ROM file (default: " << DEFAULT_PARTOS_ROM << ")\n";
     std::cerr << "  --fd0 FILE       Floppy drive 0 image (default: disks/fdd-partner-p.img)\n";
     std::cerr << "  --fd1 FILE       Floppy drive 1 image\n";
     std::cerr << "  --hdd FILE       Hard disk image for Xebec/SASI controller\n";
     std::cerr << "                   (not loaded unless explicitly requested)\n";
+    std::cerr << "  --nvram FILE     Shadow MM58167 NVRAM backing file (default: " << DEFAULT_PARTOS_NVRAM << ")\n";
     std::cerr << "  --terminal TYPE  Terminal profile: vt52|vt100\n";
     std::cerr << "  --model TYPE     Machine model: crt|gdp|auto (default: auto)\n";
+    std::cerr << "  --dap PORT       Start the udap DAP debug server on 127.0.0.1:PORT\n";
 }
 
 int main(int argc, char **argv)
 {
-    std::string rom_file  = "roms/partner_crt.rom";
+    std::string rom_file  = DEFAULT_PARTOS_ROM;
     std::string fd0_file = "disks/fdd-partner-p.img";
     std::string fd1_file;
     std::string hdd_file;
+    std::string nvram_file = DEFAULT_PARTOS_NVRAM;
     std::string model = "auto";
+    uint16_t dap_port = 0;
+    bool rom_explicit = false;
     bool fd0_explicit = false;
     bool fd1_explicit = false;
     bool terminal_explicit = false;
@@ -73,6 +101,7 @@ int main(int argc, char **argv)
         {
             if ((i + 1) >= argc) { std::cerr << "Error: --rom requires a value\n"; return 1; }
             rom_file = argv[++i];
+            rom_explicit = true;
         }
         else if (strcmp(argv[i], "--fd0") == 0 || strcmp(argv[i], "--disk") == 0)
         {
@@ -90,6 +119,11 @@ int main(int argc, char **argv)
         {
             if ((i + 1) >= argc) { std::cerr << "Error: --hdd requires a value\n"; return 1; }
             hdd_file = argv[++i];
+        }
+        else if (strcmp(argv[i], "--nvram") == 0)
+        {
+            if ((i + 1) >= argc) { std::cerr << "Error: --nvram requires a value\n"; return 1; }
+            nvram_file = argv[++i];
         }
         else if (strcmp(argv[i], "--terminal") == 0)
         {
@@ -110,6 +144,18 @@ int main(int argc, char **argv)
                 return 1;
             }
             terminal_explicit = true;
+        }
+        else if (strcmp(argv[i], "--dap") == 0)
+        {
+            if ((i + 1) >= argc) { std::cerr << "Error: --dap requires a port number\n"; return 1; }
+            char *end = nullptr;
+            const unsigned long parsed = std::strtoul(argv[++i], &end, 10);
+            if (end == argv[i] || *end != '\0' || parsed == 0 || parsed > 65535UL)
+            {
+                std::cerr << "Error: Invalid --dap port: " << argv[i] << "\n";
+                return 1;
+            }
+            dap_port = (uint16_t)parsed;
         }
         else if (strcmp(argv[i], "--model") == 0)
         {
@@ -163,12 +209,47 @@ int main(int argc, char **argv)
             return input;
         };
 
+        auto resolve_runtime_path = [&](const std::string &input) -> std::string {
+            if (input.empty())
+                return input;
+
+            namespace fs = std::filesystem;
+            fs::path p(input);
+            if (p.is_absolute())
+                return p.lexically_normal().string();
+
+            const fs::path exe_path = fs::absolute(fs::path(argv[0])).lexically_normal();
+            const fs::path exe_dir = exe_path.parent_path();
+
+            std::vector<fs::path> candidates;
+            candidates.push_back(fs::current_path() / p);
+            candidates.push_back(exe_dir / p);
+            if (exe_dir.filename() == "bin")
+                candidates.push_back(exe_dir.parent_path() / p);
+
+            std::error_code ec;
+            for (const fs::path &candidate : candidates)
+            {
+                fs::path parent = candidate.parent_path();
+                if (parent.empty())
+                    parent = fs::current_path();
+                ec.clear();
+                if (fs::exists(parent, ec) && !ec)
+                    return candidate.lexically_normal().string();
+            }
+
+            return (fs::current_path() / p).lexically_normal().string();
+        };
+
         rom_file = resolve_existing_path(rom_file);
+        if (!rom_explicit && !std::filesystem::exists(rom_file))
+            rom_file = resolve_existing_path(DEFAULT_LEGACY_CRT_ROM);
         fd0_file = resolve_existing_path(fd0_file);
         if (!fd1_file.empty())
             fd1_file = resolve_existing_path(fd1_file);
         if (!hdd_file.empty())
             hdd_file = resolve_existing_path(hdd_file);
+        nvram_file = resolve_runtime_path(nvram_file);
 
         bool gdp_model = false;
         if (model == "gdp")
@@ -194,6 +275,8 @@ int main(int argc, char **argv)
             std::string candidate = rom_file;
             std::string low = candidate;
             for (char &c : low) c = (char)std::tolower((unsigned char)c);
+            if (low.find("crt") == std::string::npos)
+                return rom_file;
             const size_t crt_pos = low.find("crt");
             if (crt_pos != std::string::npos)
             {
@@ -233,12 +316,13 @@ int main(int argc, char **argv)
                       << " fd0=" << (auto_insert_floppy ? selected_fd0 : std::string("(none)"))
                       << " fd1=" << (selected_fd1.empty() ? std::string("(none)") : selected_fd1)
                       << (hdd_file.empty() ? "" : (" hdd=" + hdd_file))
+                      << " nvram=" << nvram_file
                       << "\n";
 
             std::unique_ptr<partner> created;
             if (want_gdp)
             {
-                auto gdp = std::make_unique<partner_gdp>(term_profile);
+                auto gdp = std::make_unique<partner_gdp>(term_profile, nvram_file);
                 gdp->load_rom(selected_rom);
                 if (auto_insert_floppy)
                     gdp->load_disk(0, selected_fd0);
@@ -251,7 +335,7 @@ int main(int argc, char **argv)
             }
             else
             {
-                auto crt = std::make_unique<partner_crt>(term_profile);
+                auto crt = std::make_unique<partner_crt>(term_profile, nvram_file);
                 crt->load_rom(selected_rom);
                 if (auto_insert_floppy)
                     crt->load_disk(0, selected_fd0);
@@ -268,7 +352,7 @@ int main(int argc, char **argv)
         std::unique_ptr<partner> emu = make_emu(gdp_model);
 
         gui app_gui;
-        remote_debugger remote_dbg;
+        dap_debugger remote_dbg;
         if (!app_gui.init("Iskra Delta Partner Emulator", 1100, 720))
         {
             std::cerr << "[error] Failed to initialize GUI\n";
@@ -283,6 +367,13 @@ int main(int argc, char **argv)
         app_gui.set_terminal_profile(term_profile);
         app_gui.set_remote_debugger(&remote_dbg);
 
+        if (dap_port != 0)
+        {
+            std::string dap_error;
+            if (!remote_dbg.start(*emu, "127.0.0.1", dap_port, &dap_error))
+                std::cerr << "[warning] Could not start DAP server: " << dap_error << "\n";
+        }
+
         // Initialize display font from built-in EF9365 image.
         display &disp = app_gui.get_display();
         if (!disp.load_font(""))
@@ -292,6 +383,7 @@ int main(int argc, char **argv)
 
         bool running = true;
         bool paused = false;  // start running by default; press Space to pause
+        bool resume_skip_bp = false;
         dbg_action action = dbg_action::NONE;
 
         std::cout << "[info] Starting emulation...\n";
@@ -313,13 +405,36 @@ int main(int argc, char **argv)
             else
                 disp.clear();
         };
+        uint64_t next_boot_trace_tick = 1;
+        auto service_boot_trace = [&]() {
+            if (!boot_trace_enabled())
+                return;
+
+            const uint64_t ticks = emu->get_tick_count();
+            if (ticks < next_boot_trace_tick)
+                return;
+
+            const uint16_t pc = emu->get_current_pc();
+            std::cout << "[boot] tick=" << ticks
+                      << " pc=0x" << std::hex << pc << std::dec
+                      << " prompt=" << (is_boot_prompt_wait(pc) ? 1 : 0)
+                      << " floppy_start=" << (is_floppy_boot_start(pc) ? 1 : 0)
+                      << std::endl;
+            next_boot_trace_tick = ticks + 2000000ULL;
+        };
 
         while (running)
         {
             {
                 std::unique_lock<std::recursive_mutex> emu_lock(remote_dbg.mutex());
+                const bool was_paused = paused;
                 running = app_gui.process_events(*emu, paused, action);
                 remote_dbg.sync_paused_state(paused);
+                // User paused from the GUI while a client continue was
+                // running: tell the client. (Transition only - a pending,
+                // not-yet-started continue must not be reported as stopped.)
+                if (paused && !was_paused && remote_dbg.continue_active())
+                    remote_dbg.notify_stopped("pause");
             }
 
             if (auto request = app_gui.take_remote_debugger_request()) {
@@ -328,11 +443,11 @@ int main(int argc, char **argv)
                 if (request->action == gui::remote_debugger_request::kind::start) {
                     ok = remote_dbg.start(*emu, request->host, request->port, &error);
                     if (!ok && error.empty())
-                        error = "Failed to start remote debugger.";
+                        error = "Failed to start debug server.";
                 } else {
                     ok = remote_dbg.stop(&error);
                     if (!ok && error.empty())
-                        error = "Failed to stop remote debugger.";
+                        error = "Failed to stop debug server.";
                 }
                 app_gui.set_remote_debugger_error(ok ? std::string{} : error);
             }
@@ -340,16 +455,24 @@ int main(int argc, char **argv)
             {
                 std::unique_lock<std::recursive_mutex> emu_lock(remote_dbg.mutex());
                 remote_dbg.sync_paused_state(paused);
+                const bool was_paused_at_frame_start = paused;
 
-                const auto remote_command = remote_dbg.take_pending_command(paused);
-                if (remote_command == remote_debugger::pending_command::continue_execution) {
+                if (remote_dbg.take_pending_command() ==
+                    dap_debugger::pending_command::continue_execution) {
                     paused = false;
                     remote_dbg.sync_paused_state(paused);
-                } else if (remote_command == remote_debugger::pending_command::step_instruction) {
-                    step_one_instruction(*emu);
-                    paused = true;
-                    remote_dbg.complete_stop(*emu, xdbgstub::stop_reason::step, paused);
                 }
+
+                if (!paused && remote_dbg.pause_requested()) {
+                    paused = true;
+                    remote_dbg.complete_pause();
+                }
+
+                // When resuming from a stop, skip the breakpoint test for the
+                // instruction we are standing on, or a continue from a hit
+                // breakpoint would re-trigger it without making progress.
+                if (!paused && was_paused_at_frame_start)
+                    resume_skip_bp = true;
 
                 if (!paused)
                 {
@@ -361,30 +484,29 @@ int main(int argc, char **argv)
                         const uint32_t slice = (ticks_left > RUN_TICK_SLICE) ? RUN_TICK_SLICE : ticks_left;
                         for (uint32_t i = 0; i < slice && !paused; i++)
                         {
-                            if (remote_dbg.remote_continue_active() &&
-                                emu->is_opdone() &&
-                                remote_dbg.has_breakpoint(emu->get_current_pc())) {
-                                paused = true;
-                                remote_dbg.complete_stop(*emu, xdbgstub::stop_reason::breakpoint, paused);
-                                break;
+                            if (emu->is_opdone()) {
+                                // Honour a debugger pause before the next
+                                // instruction executes; instruction-level
+                                // latency keeps launch/pause sound even when
+                                // the GUI frame rate degrades.
+                                if (remote_dbg.pause_requested()) {
+                                    paused = true;
+                                    remote_dbg.complete_pause();
+                                    break;
+                                }
+                                if (resume_skip_bp) {
+                                    resume_skip_bp = false;
+                                } else if (remote_dbg.session_active() &&
+                                           remote_dbg.has_breakpoint(emu->get_current_pc())) {
+                                    paused = true;
+                                    remote_dbg.notify_stopped("breakpoint");
+                                    break;
+                                }
                             }
 
                             emu->tick();
+                            service_boot_trace();
 
-                            if (emu->is_opdone()) {
-                                if (remote_dbg.pause_requested()) {
-                                    paused = true;
-                                    remote_dbg.sync_paused_state(paused);
-                                    if (remote_dbg.current_pending_command() != remote_debugger::pending_command::step_instruction)
-                                        remote_dbg.complete_stop(*emu, xdbgstub::stop_reason::pause, paused);
-                                    break;
-                                }
-                                if (emu->capture_debug_cpu_state().halted) {
-                                    paused = true;
-                                    remote_dbg.complete_stop(*emu, xdbgstub::stop_reason::halted, paused);
-                                    break;
-                                }
-                            }
                         }
                         ticks_left -= slice;
                         remote_dbg.sync_paused_state(paused);
@@ -394,8 +516,8 @@ int main(int argc, char **argv)
 
                         running = app_gui.process_events(*emu, paused, action);
                         remote_dbg.sync_paused_state(paused);
-                        if (paused && remote_dbg.remote_continue_active())
-                            remote_dbg.complete_stop(*emu, xdbgstub::stop_reason::pause, paused);
+                        if (paused && remote_dbg.continue_active())
+                            remote_dbg.notify_stopped("pause");
                         if (!running || paused)
                             break;
 
@@ -403,12 +525,12 @@ int main(int argc, char **argv)
                             push_key(ch);
                     }
                 }
-                else if (action == dbg_action::STEP_INTO)
+                if (paused && action == dbg_action::STEP_INTO)
                 {
                     step_one_instruction(*emu);
                     action = dbg_action::NONE;
                 }
-                else if (action == dbg_action::STEP_OVER)
+                else if (paused && action == dbg_action::STEP_OVER)
                 {
                     uint16_t pc = emu->get_current_pc();
                     uint8_t opcode = emu->peek_mem(pc);

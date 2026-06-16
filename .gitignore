@@ -1,11 +1,11 @@
 # Build directories.
 build/
 bin/
-!third_party/xyz-release/bin/
-third_party/xyz-release/bin/*
-!third_party/xyz-release/bin/xdbg
-!third_party/xyz-release/bin/xdbg-z80
-!third_party/xyz-release/bin/xlink
+tools/zx0/build/
+tools/zx0/bin/
+
+# Fetched third-party sources (Makefile clones these; never commit).
+third_party/udap/
 
 # AI
 .agents/

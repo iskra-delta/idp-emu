@@ -29,7 +29,7 @@ out vec4 FragColor;
 
 uniform sampler2D screen_texture;
 uniform vec2 resolution;
-uniform int monitor_mode;      // 0=green CRT, 1=orange CRT, 2=LCD, 3=color CRT
+uniform int monitor_mode;      // 0=green CRT, 1=orange CRT, 2=LCD, 3=color CRT, 4=flat, 5=BW CRT
 uniform vec3 phosphor_core;
 uniform vec3 phosphor_glow;
 uniform vec3 glass_ambient;
@@ -71,7 +71,7 @@ float decode_mono_index_signal(float sample_r) {
 float source_sample(vec2 uv) {
     // For green/orange CRT we need smooth resampling after barrel warp, otherwise
     // nearest-neighbor pickup can drop thin glyph strokes at certain angles.
-    if (monitor_mode == 0 || monitor_mode == 1) {
+    if (monitor_mode == 0 || monitor_mode == 1 || monitor_mode == 5) {
         vec2 texel = 1.0 / resolution;
         vec2 st = uv * resolution - vec2(0.5);
         vec2 cell = floor(st);
@@ -93,7 +93,7 @@ float source_sample(vec2 uv) {
 
 float crt_sample(vec2 uv) {
     float s = source_sample(uv);
-    if (monitor_mode == 0 || monitor_mode == 1) {
+    if (monitor_mode == 0 || monitor_mode == 1 || monitor_mode == 5) {
         return decode_mono_index_signal(s);
     }
     return s;
@@ -137,7 +137,7 @@ void main() {
     }
 
     float pixel_code = source_sample(uv);
-    float pixel_raw = (monitor_mode == 0 || monitor_mode == 1)
+    float pixel_raw = (monitor_mode == 0 || monitor_mode == 1 || monitor_mode == 5)
         ? decode_mono_index_signal(pixel_code)
         : pixel_code;
     float pixel = pixel_raw;
@@ -153,7 +153,7 @@ void main() {
         aa += 0.01 * crt_sample(uv + texel);
         aa += 0.01 * crt_sample(uv - texel);
         aa = clamp(aa, 0.0, 1.0);
-        if (monitor_mode == 0 || monitor_mode == 1) {
+        if (monitor_mode == 0 || monitor_mode == 1 || monitor_mode == 5) {
             // Preserve dark text strokes against bright inverse blocks.
             float preserve = smoothstep(0.0, 0.12, pixel_raw);
             pixel = mix(pixel_raw, aa, preserve);
@@ -161,7 +161,7 @@ void main() {
             pixel = aa;
         }
     }
-    if (monitor_mode == 0 || monitor_mode == 1) {
+    if (monitor_mode == 0 || monitor_mode == 1 || monitor_mode == 5) {
         // Slightly darken low-level phosphor drive so inverse backgrounds
         // don't glow, without crushing standard-intensity text.
         pixel = pow(clamp(pixel, 0.0, 1.0), 1.15);
@@ -268,6 +268,67 @@ void main() {
         return;
     }
 
+    // BW CRT path: a higher-energy monochrome CRT inspired by the
+    // public cool-retro-term shader stack, adapted here to stay self-contained.
+    if (monitor_mode == 5) {
+        float frame = floor(time_sec * 60.0);
+        float line = floor(uv.y * resolution.y);
+        float jitter = (hash21(vec2(line * 0.071, frame * 0.013)) - 0.5) * texel.x * 1.8;
+        float sway = sin(uv.y * 17.0 + time_sec * 1.4) * texel.x * 0.8;
+        float bend = sin(uv.y * 3.2 + time_sec * 0.7) * texel.x * 0.6;
+        vec2 retro_uv = clamp(uv + vec2(jitter + sway + bend, 0.0), 0.0, 1.0);
+
+        float stable = pixel;
+        float jittered = crt_sample(retro_uv);
+        float beam_src = mix(stable, jittered, 0.20);
+
+        float bloom = 0.0;
+        bloom += stable * 0.24;
+        bloom += jittered * 0.20;
+        bloom += crt_sample(retro_uv + vec2(texel.x * 1.0, 0.0)) * 0.15;
+        bloom += crt_sample(retro_uv - vec2(texel.x * 1.0, 0.0)) * 0.15;
+        bloom += crt_sample(retro_uv + vec2(texel.x * 2.5, 0.0)) * 0.10;
+        bloom += crt_sample(retro_uv - vec2(texel.x * 2.5, 0.0)) * 0.10;
+        bloom += crt_sample(retro_uv + vec2(0.0, texel.y * 1.0)) * 0.06;
+        bloom += crt_sample(retro_uv - vec2(0.0, texel.y * 1.0)) * 0.06;
+
+        float beam = pow(clamp(beam_src, 0.0, 1.0), 0.70) * 0.84;
+        float glow_gate = smoothstep(0.18, 0.92, beam_src);
+        float trail = crt_sample(retro_uv - vec2(texel.x * 2.0, 0.0)) * 0.24;
+        vec3 color = phosphor_core * beam;
+        color += phosphor_glow * (bloom * 1.34 * monitor_bloom + trail * 0.34) * glow_gate;
+
+        float scanline = 0.80 + 0.20 * sin((retro_uv.y * resolution.y + 0.35) * 3.14159265);
+        float row_pulse = 0.95 + 0.05 * sin(retro_uv.y * resolution.y * 0.5 + time_sec * 16.0);
+        color *= mix(1.0, scanline * row_pulse, clamp(monitor_scanline, 0.0, 1.6));
+
+        vec2 maskpix = fract(retro_uv * resolution);
+        float mask_x = 0.86 + 0.14 * sin(maskpix.x * 3.14159265);
+        float mask_y = 0.92 + 0.08 * sin(maskpix.y * 6.28318530);
+        color *= mix(1.0, mask_x * mask_y, clamp(monitor_mask, 0.0, 1.6));
+
+        float static_noise = hash21(retro_uv * resolution * 0.75 + vec2(frame, frame * 0.37));
+        float fine_noise = hash21(retro_uv * resolution * 1.90 + vec2(time_sec * 21.0, time_sec * 13.0));
+        color += vec3((static_noise - 0.5) * 0.026 + (fine_noise - 0.5) * 0.008);
+
+        float sync_band = sin(retro_uv.y * 220.0 - time_sec * 11.0);
+        float sync_glow = smoothstep(0.90, 0.995, sync_band) * 0.05;
+        color += phosphor_glow * sync_glow * glow_gate;
+
+        vec2 vig = retro_uv * (1.0 - retro_uv);
+        float vig_mul = clamp(pow(vig.x * vig.y * 21.0, 0.12), 0.54, 1.0);
+        color *= mix(1.0, vig_mul, clamp(monitor_vignette, 0.0, 1.6));
+
+        color += glass_ambient;
+        color = min(color * 1.10, vec3(1.0));
+        color = (color - vec3(0.5)) * monitor_contrast + vec3(0.5);
+        color *= monitor_brightness;
+        color *= edge_mask;
+        color = clamp(color, vec3(0.0), vec3(1.0));
+        FragColor = vec4(color, 1.0);
+        return;
+    }
+
     // CRT bloom/halation: horizontal smear + local blur.
     float bloom = 0.0;
     bloom += crt_sample(uv) * 0.28;
@@ -278,11 +339,17 @@ void main() {
     bloom += crt_sample(uv + vec2(0.0, texel.y * 1.0)) * 0.09;
     bloom += crt_sample(uv - vec2(0.0, texel.y * 1.0)) * 0.09;
 
-    float beam = pow(pixel, 0.78) * 1.45;
+    // Calibrate the beam so the full 0..255 phosphor-drive range maps into
+    // 0..1 instead of overdriving (the old 1.45 gain clipped both the normal
+    // and highlight text levels to solid green, erasing the highlight/inverse
+    // attributes). Standard text now lands below clip; highlight reaches full.
+    float beam = pow(pixel, 0.78) * 0.60;
     float trail = crt_sample(uv - vec2(texel.x * 2.0, 0.0)) * 0.18;
     float bloom_weight = 1.0;
     if (monitor_mode == 0 || monitor_mode == 1) {
-        bloom_weight = smoothstep(0.20, 0.85, pixel);
+        // Steeper knee so halation lifts only the bright (highlight/inverse)
+        // levels to full, keeping normal text distinctly dimmer than highlight.
+        bloom_weight = smoothstep(0.55, 0.95, pixel);
     }
     vec3 color = phosphor_core * beam;
     color += phosphor_glow * (bloom * 1.22 * monitor_bloom + trail * 0.25) * bloom_weight;
@@ -526,6 +593,10 @@ void display::apply_crt()
         glUniform3f(glGetUniformLocation(shader_, "phosphor_core"), 0.92f, 0.92f, 0.92f);
         glUniform3f(glGetUniformLocation(shader_, "phosphor_glow"), 0.62f, 0.62f, 0.62f);
         glUniform3f(glGetUniformLocation(shader_, "glass_ambient"), 0.012f, 0.012f, 0.012f);
+    } else if (phosphor_ == phosphor_type::retro_cool) {
+        glUniform3f(glGetUniformLocation(shader_, "phosphor_core"), 1.04f, 1.05f, 1.07f);
+        glUniform3f(glGetUniformLocation(shader_, "phosphor_glow"), 0.62f, 0.64f, 0.68f);
+        glUniform3f(glGetUniformLocation(shader_, "glass_ambient"), 0.006f, 0.006f, 0.008f);
     } else if (phosphor_ == phosphor_type::lcd) {
         // Unused in LCD mode but still set for completeness.
         glUniform3f(glGetUniformLocation(shader_, "phosphor_core"), 0.0f, 0.0f, 0.0f);
@@ -608,6 +679,18 @@ void display::set_text_palette_rgb(float fg_r, float fg_g, float fg_b,
     text_force_background_ = force_background;
 }
 
+void display::set_content_area(int width, int height)
+{
+    content_w_ = (width < 1) ? 1 : ((width > FB_W) ? FB_W : width);
+    content_h_ = (height < 1) ? 1 : ((height > FB_H) ? FB_H : height);
+}
+
+void display::set_content_origin(int x, int y)
+{
+    content_x_ = (x < 0) ? 0 : ((x >= FB_W) ? (FB_W - 1) : x);
+    content_y_ = (y < 0) ? 0 : ((y >= FB_H) ? (FB_H - 1) : y);
+}
+
 void display::set_pixel(int x, int y, bool on)
 {
     if (x >= 0 && x < FB_W && y >= 0 && y < FB_H)
@@ -648,19 +731,24 @@ void display::clear_all()
     memset(ghost_fb_, 0, sizeof(ghost_fb_));
 }
 
-void display::draw_char(int col, int row, char c)
+void display::draw_char(int col, int row, char c, uint8_t fg_level, uint8_t bg_level)
 {
     if (col < 0 || col >= COLS || row < 0 || row >= ROWS)
         return;
-    int idx = (unsigned char)c - 32;
-    if (idx < 0 || idx >= 96)
-        return;
 
-    if (!font_loaded_)
-        return;
+    int x0 = content_x_ + col * CHAR_W;
+    int y0 = content_y_ + row * CHAR_H;
+    if (bg_level != 0) {
+        for (int y = y0; y < y0 + CHAR_H; y++) {
+            for (int x = x0; x < x0 + CHAR_W; x++) {
+                set_level_pixel(x, y, bg_level);
+            }
+        }
+    }
 
-    int x0 = col * CHAR_W;
-    int y0 = row * CHAR_H;
+    const int idx = (unsigned char)c - 32;
+    if (idx < 0 || idx >= 96 || !font_loaded_)
+        return;
 
     for (int r = 0; r < 7; r++)
     {
@@ -669,13 +757,14 @@ void display::draw_char(int col, int row, char c)
         {
             if (bits & (0x10 >> b))
             {
-                // Fill 2x2 block for each font pixel
+                // Keep the full 2x-scaled 5-pixel glyph and leave the extra
+                // pixel at the right edge of the 11-pixel cell empty.
                 int px = x0 + b * 2;
                 int py = y0 + r * 2;
-                set_pixel(px, py, true);
-                set_pixel(px + 1, py, true);
-                set_pixel(px, py + 1, true);
-                set_pixel(px + 1, py + 1, true);
+                set_level_pixel(px, py, fg_level);
+                set_level_pixel(px + 1, py, fg_level);
+                set_level_pixel(px, py + 1, fg_level);
+                set_level_pixel(px + 1, py + 1, fg_level);
             }
         }
     }
@@ -691,17 +780,17 @@ void display::draw_text(int col, int row, const char *text)
     }
 }
 
-void display::fill_char_cell(int col, int row)
+void display::fill_char_cell(int col, int row, uint8_t level)
 {
     if (col < 0 || col >= COLS || row < 0 || row >= ROWS)
         return;
 
-    const int x0 = col * CHAR_W;
-    const int y0 = row * CHAR_H;
+    const int x0 = content_x_ + col * CHAR_W;
+    const int y0 = content_y_ + row * CHAR_H;
     for (int y = y0; y < y0 + CHAR_H; y++)
     {
         for (int x = x0; x < x0 + CHAR_W; x++)
-            set_pixel(x, y, true);
+            set_level_pixel(x, y, level);
     }
 }
 

@@ -126,7 +126,8 @@ static inline void gdp_pio_write(z80pio_t* pio, uint8_t port, uint8_t data) {
 }
 }
 
-partner_gdp::partner_gdp(terminal_profile profile) : terminal_profile_(profile)
+partner_gdp::partner_gdp(terminal_profile profile, const std::string &rtc_nvram_path)
+    : partner(rtc_nvram_path), terminal_profile_(profile)
 {
     set_sio_port_lock(sio_port_id::sio1_a, true, "Internal GDP keyboard (fixed)");
     ef9367_init(&ef9367_);
@@ -280,6 +281,9 @@ void partner_gdp::tick()
 
 void partner_gdp::render_to(display &disp)
 {
+    disp.set_content_origin(0, 0);
+    disp.set_content_area(display::FB_W, display::FB_H);
+    disp.set_preserve_aspect(true);
     disp.clear();
     int ef_on_pixels = 0;
     int avdc_pixels = 0;
@@ -555,6 +559,15 @@ void partner_gdp::render_to(display &disp)
         const int fx = (ax * FULL_W) / avdc_raster_w;
         map_full_to_disp(fx, ay, dx, dy);
     };
+    const auto map_avdc_x_span_to_disp = [&](int ax, int& dx0, int& dx1) {
+        dx0 = (ax * FULL_W) / avdc_raster_w;
+        dx1 = ((ax + 1) * FULL_W) / avdc_raster_w;
+        if (dx1 <= dx0) {
+            dx1 = dx0 + 1;
+        }
+        dx0 = std::clamp(dx0, 0, display::FB_W);
+        dx1 = std::clamp(dx1, 0, display::FB_W);
+    };
     const auto map_scan_to_glyph_row = [&](int scanline) -> int {
         const int s = std::clamp(scanline, 0, std::max(0, avdc_logical_scanlines - 1));
         if (avdc_logical_scanlines <= 1) {
@@ -572,6 +585,18 @@ void partner_gdp::render_to(display &disp)
         const int num = s * 15 + ((avdc_logical_scanlines - 1) / 2);
         const int den = avdc_logical_scanlines - 1;
         return std::clamp(num / den, 0, 15);
+    };
+    const auto apply_dot_stretch = [&](std::array<bool, 10>& row_dots) {
+        if (!text_dot_stretch || avdc_char_w < 2) {
+            return;
+        }
+        const int dot_count = std::clamp(avdc_char_w, 1, (int)row_dots.size());
+        const std::array<bool, 10> base = row_dots;
+        for (int i = 1; i < dot_count; i++) {
+            if (base[(size_t)(i - 1)]) {
+                row_dots[(size_t)i] = true;
+            }
+        }
     };
     const auto draw_avdc_cell = [&](int col, int row, uint16_t off) {
         const uint8_t row_double_mode =
@@ -611,9 +636,15 @@ void partner_gdp::render_to(display &disp)
             // b5: reverse -> swap fore/back
             // b0: blink -> toggle green<->bright green over time, keep black unchanged
             constexpr int MONO_BLACK = 0;
-            // Keep a wider gap so highlight survives CRT bloom/contrast shaping.
+            // Two mono text levels. MONO_HI must stay BELOW 240: the flat/color
+            // shader paths treat framebuffer codes >=240 as RGBI colour indices
+            // (0xF0..0xFF), so a highlight/inverse level of 248 was decoded as
+            // colour index 8 = black, making highlight text and the highlighted
+            // inverse block vanish. Keeping a clear gap also keeps the four
+            // attribute states (normal / highlight / inverse / inverse+highlight)
+            // visually distinct across green, orange, LCD and flat.
             constexpr int MONO_STD = 168;
-            constexpr int MONO_HI = 248;
+            constexpr int MONO_HI = 232;
             int fg_base = attr_highlight ? MONO_HI : MONO_STD;
             int bg_base = MONO_BLACK;
             if (attr_reverse_mono) {
@@ -673,11 +704,12 @@ void partner_gdp::render_to(display &disp)
                     for (int px = 0; px < 8; px++) {
                         row_dots[px] = (bits & (uint8_t)(0x80u >> px)) != 0;
                     }
+                    for (int px = 8; px < std::min(avdc_char_w, (int)row_dots.size()); px++) {
+                        row_dots[px] = row_dots[7];
+                    }
                 }
             }
-            if (text_dot_stretch && avdc_char_w >= 2) {
-                row_dots[1] = row_dots[0];
-            }
+            apply_dot_stretch(row_dots);
             const bool underline_row = attr_underline && (scan == avdc_underline_scan);
             for (int px = 0; px < draw_char_w; px++) {
                 const int dot_x = row_double_width ? (px >> 1) : px;
@@ -689,32 +721,37 @@ void partner_gdp::render_to(display &disp)
                     glyph_on = true;
                 }
                 const int fx = draw_col * draw_char_w + px;
+                int dx0 = 0;
+                int dx1 = 0;
+                map_avdc_x_span_to_disp(fx, dx0, dx1);
                 for (int ydup = 0; ydup < AVDC_CELL_Y_SCALE; ydup++) {
                     const int fy = avdc_y_off + row * avdc_char_h + (ly * AVDC_CELL_Y_SCALE) + ydup;
-                    int dx = 0, dy = 0;
-                    map_avdc_to_disp(fx, fy, dx, dy);
-                    if (indexed_text_output) {
-                        if (glyph_on) {
-                            disp.set_index_pixel(dx, dy, fg_idx);
-                            avdc_pixels++;
-                        } else if (bg_idx != 0u) {
-                            disp.set_index_pixel(dx, dy, bg_idx);
-                        }
-                    } else {
-                        const int draw_fg = mono_fg;
-                        const int inten = glyph_on ? draw_fg : mono_bg;
-                        const bool opaque_cell = (mono_bg > 0);
-                        if (opaque_cell) {
-                            disp.set_level_pixel(dx, dy, (uint8_t)std::clamp(inten, 0, 255));
-                        } else if (glyph_on) {
-                            if (draw_fg <= 0) {
-                                disp.set_level_pixel(dx, dy, 0);
-                            } else {
-                                disp.add_pixel(dx, dy, (uint8_t)draw_fg);
+                    int dy = 0;
+                    dy = fy;
+                    for (int dx = dx0; dx < dx1; dx++) {
+                        if (indexed_text_output) {
+                            if (glyph_on) {
+                                disp.set_index_pixel(dx, dy, fg_idx);
+                                avdc_pixels++;
+                            } else if (bg_idx != 0u) {
+                                disp.set_index_pixel(dx, dy, bg_idx);
                             }
-                        }
-                        if (glyph_on) {
-                            avdc_pixels++;
+                        } else {
+                            const int draw_fg = mono_fg;
+                            const int inten = glyph_on ? draw_fg : mono_bg;
+                            const bool opaque_cell = (mono_bg > 0);
+                            if (opaque_cell) {
+                                disp.set_level_pixel(dx, dy, (uint8_t)std::clamp(inten, 0, 255));
+                            } else if (glyph_on) {
+                                if (draw_fg <= 0) {
+                                    disp.set_level_pixel(dx, dy, 0);
+                                } else {
+                                    disp.add_pixel(dx, dy, (uint8_t)draw_fg);
+                                }
+                            }
+                            if (glyph_on) {
+                                avdc_pixels++;
+                            }
                         }
                     }
                 }
@@ -733,21 +770,26 @@ void partner_gdp::render_to(display &disp)
                 for (int px = 0; px < 8; px++) {
                     row_dots[px] = (bits & (uint8_t)(0x80u >> px)) != 0;
                 }
+                for (int px = 8; px < std::min(avdc_char_w, (int)row_dots.size()); px++) {
+                    row_dots[px] = row_dots[7];
+                }
             }
-            if (text_dot_stretch && avdc_char_w >= 2) {
-                row_dots[1] = row_dots[0];
-            }
+            apply_dot_stretch(row_dots);
             for (int px = 0; px < avdc_char_w; px++) {
                 if (!row_dots[(size_t)px]) {
                     continue;
                 }
                 const int fx = col * avdc_char_w + px;
+                int dx0 = 0;
+                int dx1 = 0;
+                map_avdc_x_span_to_disp(fx, dx0, dx1);
                 for (int ydup = 0; ydup < AVDC_CELL_Y_SCALE; ydup++) {
                     const int fy = avdc_y_off + row * avdc_char_h + (ly * AVDC_CELL_Y_SCALE) + ydup;
-                    int dx = 0, dy = 0;
-                    map_avdc_to_disp(fx, fy, dx, dy);
-                    disp.add_pixel(dx, dy, 144);
-                    avdc_pixels++;
+                    const int dy = fy;
+                    for (int dx = dx0; dx < dx1; dx++) {
+                        disp.add_pixel(dx, dy, 144);
+                        avdc_pixels++;
+                    }
                 }
             }
         }
@@ -773,14 +815,18 @@ void partner_gdp::render_to(display &disp)
             }
             for (int px = 0; px < draw_char_w; px++) {
                 const int fx = draw_col * draw_char_w + px;
+                int dx0 = 0;
+                int dx1 = 0;
+                map_avdc_x_span_to_disp(fx, dx0, dx1);
                 for (int ydup = 0; ydup < AVDC_CELL_Y_SCALE; ydup++) {
                     const int fy = avdc_y_off + row * avdc_char_h + (ly * AVDC_CELL_Y_SCALE) + ydup;
-                    int dx = 0, dy = 0;
-                    map_avdc_to_disp(fx, fy, dx, dy);
-                    if (indexed_text_output) {
-                        disp.set_index_pixel(dx, dy, 0x0F);
-                    } else {
-                        disp.add_pixel(dx, dy, 242);
+                    const int dy = fy;
+                    for (int dx = dx0; dx < dx1; dx++) {
+                        if (indexed_text_output) {
+                            disp.set_index_pixel(dx, dy, 0x0F);
+                        } else {
+                            disp.add_pixel(dx, dy, 242);
+                        }
                     }
                 }
             }

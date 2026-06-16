@@ -1,43 +1,69 @@
+/*
+ * Declares the intrusive singly linked-list helpers shared across kernel
+ * objects and system-owned resources.
+ *
+ * MIT License (see: LICENSE)
+ * Copyright (C) 2021 tomaz stih
+ */
 #ifndef LIST_H
 #define LIST_H
 
-/*
- * Generic singly linked lists.
- *
- * Convention: every list-able structure has its next pointer as the
- * FIRST member. The list head variable and a member's next field are
- * then identical cells — a 16-bit word holding the address of the next
- * member, or 0 at the end — so one set of routines (list.s) handles
- * every list in the system, regardless of the member type:
- *
- *   head ──> member ──> member ──> 0
- *   (cell)   (next is   (next is
- *            the cell)  the cell)
- *
- * A structure participates in a list by starting with list_t (or,
- * equivalently, with its own typed next pointer as the first member —
- * the layout is what matters, not the type):
- *
- *   typedef struct dev_s {
- *       struct dev_s *next;   // first member: list link
- *       ...                   // payload
- *   } dev_t;
- *
- * A chain is one or more members linked through their first word and
- * terminated with 0. A single member is a chain of one: its next word
- * must be 0 before it is appended.
- */
-typedef struct list_s {
-    struct list_s *next;
-} list_t;
+#include <stddef.h>
+#include <stdint.h>
 
 /*
- * Appends a chain (or a single member with next == 0) to the end of a
- * list. list is the ADDRESS of the head pointer, so appending to an
- * empty list correctly sets the head:
- *
- *   append_list((list_t **)&dev_list, (list_t *)probe_result);
+ * Intrusive singly linked-list node header shared across kernel objects.
+ * Any list-able structure starts with this next pointer at offset 0.
  */
-void append_list(list_t **list, list_t *chain);
+typedef struct list_item_s {
+    struct list_item_s *next;
+    uint8_t data[0];
+} list_item_t;
+
+/* compatibility alias used by older PartOS code */
+typedef list_item_t list_t;
+
+/*
+ * Match helper that compares one element argument for equality.
+ */
+uint8_t list_match_eq(list_item_t *p, uint16_t arg);
+
+/*
+ * Find the first element for which the callback returns true.
+ */
+list_item_t *list_find(
+    list_item_t *first,
+    list_item_t **prev,
+    uint8_t (*match)(list_item_t *p, uint16_t arg),
+    uint16_t the_arg);
+
+/*
+ * Visit each element in the list with a caller callback.
+ */
+void list_iterate(
+    list_item_t *first,
+    void (*fn)(list_item_t *p, uint16_t arg),
+    uint16_t the_arg);
+
+/*
+ * Insert one element at the list head.
+ */
+list_item_t *list_insert(list_item_t **first, list_item_t *el);
+
+/*
+ * Remove one explicit element from the list.
+ */
+list_item_t *list_remove(list_item_t **first, list_item_t *el);
+
+/*
+ * Remove and return the first element of the list.
+ */
+list_item_t *list_remove_first(list_item_t **first);
+
+/*
+ * Append one element or a pre-linked chain to the list tail.
+ * The return value is the appended head, or NULL on failure.
+ */
+list_item_t *list_append(list_item_t **list, list_item_t *chain);
 
 #endif /* LIST_H */
