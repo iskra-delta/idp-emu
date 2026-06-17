@@ -7,8 +7,9 @@
             .equ    FD_TYPE_COUNT,          4
             .equ    FD_TYPE_F_VALID,        0x01 ; profile slot is populated
 
-            ;; the boot-time table is a flags-only validity array; geometry and
-            ;; labels belong to the OS-side floppy driver, not the ROM.
+            ;; the read geometry the boot reader needs (sectors/track + fdc
+            ;; sector-size code) lives in fd_geom_table$ in fd.s, keyed by the
+            ;; nvram fd0 type. labels and full geometry stay with the os driver.
             .equ    FD_TYPE_FLAGS,          0
             .equ    FD_TYPE_SIZE,           1
 

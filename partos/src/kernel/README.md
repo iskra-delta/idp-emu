@@ -11,10 +11,10 @@ Short version of the current state:
 
 - `kernel.bin` is `6120` bytes
 - `_CODE` is linked at `0xE818`
-- `_HEAP` is linked at `0xF800`
-- `_IM2` is linked at `0xFE00`
-- `_PAGE0` is linked at `0xFF00`
-- `__sys_page0_install` lives at fixed address `0xFF6B`
+- `_HEAP` is linked at `0xFA00` (896 bytes)
+- `_IM2` is linked at `0xFE00` (512 bytes, two pages)
+- `_PAGE0` is linked at `0xF900`
+- `__sys_page0_install` lives at fixed address `0xF96B`
 - the current ROM caller jumps to `__sys_page0_install` with `HL = 0xE000`
   and `B = model byte`
 - `__sys_kernel` exists, but it is not currently the direct continuation

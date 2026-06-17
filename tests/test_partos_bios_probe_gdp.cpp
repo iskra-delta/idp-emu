@@ -176,11 +176,11 @@ int main()
 
     fails += expect_probe_result(
         rom_path, *dev_list_addr, fd0_path, fd1_path, hdd_path,
-        scenario{ false, false, false, { "ttyS0", "ttyS1", "ttyS2", "ttyS3", "rtc", "nvram", "gdp" } }, "gdp_no_media");
+        scenario{ false, false, false, { "ttyS0", "ttyS1", "ttyS2", "ttyS3", "rtc", "nvram", "avdc" } }, "gdp_no_media");
 
     fails += expect_probe_result(
         rom_path, *dev_list_addr, fd0_path, fd1_path, hdd_path,
-        scenario{ true, true, true, { "ttyS0", "ttyS1", "ttyS2", "ttyS3", "rtc", "nvram", "gdp", "fd0", "fd1", "sda" } }, "gdp_combined");
+        scenario{ true, true, true, { "ttyS0", "ttyS1", "ttyS2", "ttyS3", "rtc", "nvram", "avdc", "fd0", "fd1", "sda" } }, "gdp_combined");
 
     if (fails == 0) {
         std::puts("test_partos_bios_probe_gdp: PASS");

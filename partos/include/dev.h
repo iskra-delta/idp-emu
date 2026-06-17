@@ -25,7 +25,12 @@
 #define IOCTL_SETFLAGS  0x02    /* input(de): flags to set */
 #define IOCTL_CLRFLAGS  0x03    /* input(de): flags to clear */
 
+/* Shared flat-block byte-position ioctls (24-bit little-endian offset). */
+#define IOCTL_GETPOS    0x10
+#define IOCTL_SETPOS    0x11
+
 struct dev_s;
+struct event_s;
 
 /*
  * List convention: next is always the FIRST member of a list-able
@@ -35,25 +40,35 @@ struct dev_s;
 
 /*
  * Device driver descriptor — one per hardware type.
- * probe() detects hardware and returns a chain of the driver's own
- * STATICALLY declared dev_t instances (linked in place through their
- * next fields, zero-terminated), or NULL if no hardware is present.
- * Nothing is allocated or copied: the instances live in the BIOS image,
- * which is RAM at runtime, so probe only sets their next links to chain
- * the units actually found. The chain is then hooked into the global
- * device list with list_append().
- * open() receives an already-resolved device instance (see find_dev_drv)
- * and performs the hardware-specific claim/init; 0 = ok, negative = error.
+ * probe() ONLY enumerates: it builds the chain of the driver's STATICALLY
+ * declared dev_t instances for the units present (presence comes from the
+ * NVRAM/model config, not from poking hardware). Nothing is allocated and no
+ * hardware is initialized. The chain is hooked into the global device list
+ * with list_append().
+ * init() is the driver-level (controller/chip) one-time setup, run once for
+ * every driver when the kernel starts. It is the same for every unit of the
+ * driver; per-device setup belongs in open(). Many drivers need none.
+ * open() performs the per-DEVICE-instance init (which can differ unit to
+ * unit); 0 = ok.
+ *
+ * read()/write() are ASYNCHRONOUS: the caller passes a sync event, the
+ * driver starts the transfer (DMA + interrupt where possible) and signals
+ * the event when the work is done. The caller waits on the event (or, for
+ * immediate-completion drivers, finds it already signaled). A NULL event is
+ * allowed (fire and forget). The asm native ABI is in drivers/drv.inc
+ * (hl=dev, de=buf, bc=count, ix=event).
+ *
  * All function pointers are mandatory; stub with an empty return for
  * operations the hardware does not support.
  */
 typedef struct dev_drv_s {
     struct dev_drv_s *next;
     struct dev_s *(*probe) (void);
+    int16_t       (*init)  (void);
     int16_t       (*open)  (struct dev_s *dev);
     void          (*close) (struct dev_s *dev);
-    int16_t       (*read)  (struct dev_s *dev, uint8_t *buf, uint16_t len);
-    int16_t       (*write) (struct dev_s *dev, const uint8_t *buf, uint16_t len);
+    int16_t       (*read)  (struct dev_s *dev, uint8_t *buf, uint16_t len, struct event_s *event);
+    int16_t       (*write) (struct dev_s *dev, const uint8_t *buf, uint16_t len, struct event_s *event);
     int16_t       (*ioctl) (struct dev_s *dev, uint8_t cmd, void *params);
 } dev_drv_t;
 
@@ -61,19 +76,43 @@ typedef struct dev_drv_s {
  * Device instance — one per unit discovered by probe.
  * next links instances into the global device list built at boot (first
  * member, see list convention above).
- * name is zero-terminated in 9 bytes (8 usable chars + null).
- * data is 16 bytes of driver-private per-instance state; block devices
+ * name is zero-terminated in 6 bytes (5 usable chars + null), which fits all
+ * current built-in device names (`ctc`, `pioA`, `ttyS0`, `nvram`, `sda`).
+ * data is 9 bytes of driver-private per-instance state; block devices
  * keep their current position here (reads/writes all share the same
  * parameters, the position advances with each transfer).
  */
 typedef struct dev_s {
     struct dev_s *next;
-    uint8_t     name[8];
-    uint8_t     reserved;
+    uint8_t     name[6];
     uint8_t     flags;
-    uint8_t     data[16];
+    uint8_t     data[9];
     dev_drv_t  *driver;
 } dev_t;
+
+/*
+ * Head of the driver chain (every built-in driver descriptor, linked through
+ * its next field) and head of the device chain (all units enumerated from the
+ * NVRAM/model configuration). Both are built at kernel start.
+ */
+extern dev_drv_t *drv_first;
+extern dev_t     *dev_first;
+
+/*
+ * Link every built-in driver descriptor into drv_first. Call once at start.
+ */
+void drv_register_all(void);
+
+/*
+ * Runs every driver's one-time, driver-level init (controller/chip setup)
+ * once at kernel start. Call before the device probe pass.
+ */
+void dev_init_all(void);
+
+/*
+ * Enumerate the configured devices into dev_first (NVRAM/model driven).
+ */
+void dev_probe_all(void);
 
 /*
  * Finds a device by name in the single global device list (built from

@@ -44,9 +44,10 @@ typedef struct block_s {
 } block_t;
 
 /*
- * System-owned allocator heap supplied by the kernel.
+ * Allocator heaps supplied by the kernel.
  */
 extern void *_sys_heap;
+extern void *_usr_heap;
 
 /*
  * Initialize one allocator heap region.

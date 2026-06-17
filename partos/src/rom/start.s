@@ -8,6 +8,7 @@
             ;; 2026-06-11   tstih
             .module start
 
+            .include "../partos.inc"
             .include "../drivers/rtc.inc"
 
             .equ    BOOT_BANNER_CRT_X,   34
@@ -34,17 +35,16 @@
             .globl  avdc_set_mode
             .globl  fd_init
             .globl  fd_read_lba
+            .globl  fd_n$
             .globl  hd_read_lba
             .globl  hd_get_sda_type_index
             .globl  hd_init_chars
             .globl  boot_fd_path
             .globl  boot_hd_path
 
-            ;; __sys_page0_install lives in the kernel's _PAGE0 segment, which
-            ;; is pinned at 0xff00, so its entry is at a fixed address the BIOS
-            ;; reaches in the just-loaded OS image. (kernel.map: 0xff6b; the
-            ;; kernel build keeps _PAGE0 exactly 256 bytes.)
-            .equ    SYS_PAGE0_INSTALL,   0xff6b
+            ;; __sys_page0_install lives in the kernel's fixed page-0 block.
+            ;; the ROM jumps straight to that entry after loading the image.
+            .equ    SYS_PAGE0_INSTALL,   KERNEL_PAGE0_INSTALL
 
             .area   _BOOT
 
@@ -136,8 +136,9 @@ bt_hd$:
 boot_hd_path::
             call    hd_get_sda_type_index
             call    hd_init_chars
-            ld      a,#0x01             ; device 1 = hard disk
-            call    boot_device$
+            ld      a,#1
+            ld      (fd_n$),a           ; hd is 256-byte: boot ssh = 1
+            call    boot_device$        ; a = 1 = device (hard disk)
             jr      c,bt_nodev$
 
 bt_go$:
@@ -159,15 +160,44 @@ bt_halt$:
             ;; boot_device(<a> device) -> read+verify boot record, load OS
             ;; ----------------------------------------------------------------
             ;; device: 0 = floppy, 1 = hard disk. reads the boot record, checks
-            ;; the boot signature, then streams blocks 1..32 (the reserved area)
-            ;; into OS_LOAD_BASE. out: carry set on read error or no signature.
+            ;; the boot signature, then streams the 8 KB reserved area into
+            ;; OS_LOAD_BASE. handles 256- and 512-byte sectors: the floppy size
+            ;; comes from fd_n$ (set by fd_init from nvram), the hd is always
+            ;; 256. lba 0..N fit cylinder 0 in both formats, so no seek is used.
+            ;; out: carry set on read error or no signature.
             ;; ----------------------------------------------------------------
+            ;; fd_n$ doubles as the boot sector size >> 8 (1 = 256 B, 2 = 512):
+            ;; fd_init sets it from the nvram floppy type; the hd path forces 1.
 boot_device$:
             ld      (boot_dev$),a
-            ;; read blocks 0..32 contiguously: boot record lands at 0xdf00, the
-            ;; 8 KB OS image at OS_LOAD_BASE. one loop covers both.
+
+            ;; read the boot record (sector 0) at 0xdf00. a 512-byte record
+            ;; spills into 0xe000.., but the os image below reloads that and we
+            ;; check the signature first, so it is harmless.
             ld      hl,#OS_LOAD_BASE - 0x100
-            ld      bc,#0x2100
+            xor     a
+            call    boot_read$
+            jr      nz,bd_fail$
+
+            ;; signature (0x55 0xaa) sits at record_base + sector_size - 2,
+            ;; i.e. (0xde + ssh):0xfe.
+            ld      a,(fd_n$)
+            add     a,#0xde
+            ld      h,a
+            ld      l,#0xfe
+            ld      a,(hl)
+            cp      #0x55
+            jr      nz,bd_fail$
+            inc     hl
+            ld      a,(hl)
+            cp      #0xaa
+            jr      nz,bd_fail$
+
+            ;; stream the 8 KB os image (sectors 1..) into OS_LOAD_BASE, one
+            ;; sector at a time, until the destination wraps past 0xffff. that
+            ;; is 32 sectors of 256 B or 16 of 512 B; all fit cylinder 0.
+            ld      hl,#OS_LOAD_BASE
+            ld      c,#1                ; lba 1
 bd_loop$:
             push    bc
             push    hl
@@ -176,19 +206,13 @@ bd_loop$:
             pop     hl
             pop     bc
             jr      nz,bd_fail$
-            inc     h                   ; advance dst by one 256-byte sector
+            ld      a,(fd_n$)
+            add     a,h                 ; advance dst by one sector (ssh*256)
+            ld      h,a
+            jr      z,bd_done$          ; dst reached 0x10000 -> image loaded
             inc     c
-            djnz    bd_loop$
-
-            ;; verify the boot signature (0x55 0xAA) in the loaded boot record
-            ld      hl,#OS_LOAD_BASE - 0x100 + 254
-            ld      a,(hl)
-            cp      #0x55
-            jr      nz,bd_fail$
-            inc     hl
-            ld      a,(hl)
-            cp      #0xaa
-            jr      nz,bd_fail$
+            jr      bd_loop$
+bd_done$:
             or      a                   ; carry clear = booted
             ret
 bd_fail$:

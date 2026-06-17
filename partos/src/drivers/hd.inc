@@ -26,8 +26,23 @@
             .equ    HD_CMD_READY,       0x01 ; 1-byte "drive ready" exchange
             .equ    HD_CMD_READ6,       0x08
             .equ    HD_CMD_WRITE6,      0x0a
+            .equ    HD_CMD_INITDRV,     0x0c ; Xebec Initialize Drive Characteristics
+            .equ    HD_XEBEC_CFG_SIZE,  8    ; geometry payload bytes
 
             .equ    HD_BLOCK_SIZE,      256
 
             .equ    HD_RESET_DELAY_MS,  10
             .equ    HD_POLL_TIMEOUT,    0xffff
+
+            ;; z80 dma end-of-block interrupt vector used by the hd driver.
+            ;; dma sits first in the daisy chain, so this vector is delivered
+            ;; directly by the dma once the programmed byte count reaches zero.
+            .equ    HD_DMA_VEC,         0x90
+
+            ;; nvram byte 2 packs the hard-disk type selectors (0 = absent):
+            ;;   sda[7:6] sdb[5:4]
+            .equ    HD_NVRAM_TYPE_BYTE, 2
+            .equ    HD_NVRAM_SDA_MASK,  0xc0
+
+            ;; z80 dma register port (shared with the floppy controller)
+            .equ    HD_PORT_DMA,        0xc0

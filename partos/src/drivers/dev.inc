@@ -21,20 +21,25 @@
             ;; next is the FIRST member of both structures so the generic
             ;; list routines (list.s) can handle them uniformly.
 
-            ;; --- struct dev_drv_s offsets (14 bytes) -------------------------
+            ;; --- struct dev_drv_s offsets (16 bytes) -------------------------
+            ;; probe = enumerate units (no hardware init); init = driver-level
+            ;; one-time setup (controller/chip), run once at kernel start; open
+            ;; = per-device instance init.
             .equ    DRV_NEXT,       0   ; struct dev_drv_s *next (list link)
             .equ    DRV_PROBE,      2   ; probe function pointer
-            .equ    DRV_OPEN,       4   ; open function pointer
-            .equ    DRV_CLOSE,      6   ; close function pointer
-            .equ    DRV_READ,       8   ; read function pointer
-            .equ    DRV_WRITE,      10  ; write function pointer
-            .equ    DRV_IOCTL,      12  ; ioctl function pointer
+            .equ    DRV_INIT,       4   ; driver init function pointer
+            .equ    DRV_OPEN,       6   ; open function pointer
+            .equ    DRV_CLOSE,      8   ; close function pointer
+            .equ    DRV_READ,       10  ; read function pointer
+            .equ    DRV_WRITE,      12  ; write function pointer
+            .equ    DRV_IOCTL,      14  ; ioctl function pointer
 
-            ;; --- struct dev_s offsets (30 bytes) -----------------------------
+            ;; --- struct dev_s offsets (20 bytes) -----------------------------
             .equ    DEV_NEXT,       0   ; struct dev_s *next (list link)
-            .equ    DEV_NAME,       2   ; name[8]
-            .equ    DEV_RESERVED,   10  ; guaranteed zero terminator
-            .equ    DEV_FLAGS,      11  ; flags
-            .equ    DEV_DATA,       12  ; data[16], driver private state
-            .equ    DEV_DRIVER,     28  ; dev_drv_t *driver (back pointer)
-            .equ    DEV_SIZE,       30  ; sizeof(dev_t)
+            .equ    DEV_NAME,       2   ; name[6], zero-terminated
+            .equ    DEV_NAME_SIZE,  6
+            .equ    DEV_FLAGS,      8   ; flags
+            .equ    DEV_DATA,       9   ; data[9], driver private state
+            .equ    DEV_DATA_SIZE,  9
+            .equ    DEV_DRIVER,     18  ; dev_drv_t *driver (back pointer)
+            .equ    DEV_SIZE,       20  ; sizeof(dev_t)

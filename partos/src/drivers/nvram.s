@@ -8,30 +8,21 @@
             ;; 2026-06-13   tstih
             .module nvram
 
+            .include "dev.inc"
             .include "drv.inc"
             .include "nvram.inc"
 
             .globl  drv_open_ok
             .globl  drv_close_nop
             .globl  drv_ioctl_unsupported
+            .globl  drv_signal_done
+            .globl  nvram_init
+            .globl  nvram_dev
+            .globl  avdc_dev_drv
 
             .area   _CODE
 
             ;; ----------------------------------------------------------------
-            ;; <hl> *dev <= nvram_probe()
-            ;; ----------------------------------------------------------------
-            ;; mm58167 nvram is mandatory on partner, so probe does not touch
-            ;; hardware at all. it simply returns the one static nvram device.
-            ;;
-            ;; output(s):
-            ;;  hl  ... nvram device
-            ;; destroys:
-            ;;  hl
-            ;; ----------------------------------------------------------------
-nvram_probe::
-            ld      hl,#nvram_dev$
-            ret
-
 nvram_check_len$:
             ld      a,b
             or      a
@@ -59,6 +50,7 @@ nvram_read_loop$:
             inc     de
             inc     c
             djnz    nvram_read_loop$
+            call    drv_signal_done     ; ix = event (immediate completion)
             ld      hl,#DRV_OK
             ret
 
@@ -76,22 +68,29 @@ nvram_write_loop$:
             inc     de
             inc     c
             djnz    nvram_write_loop$
+            call    drv_signal_done     ; ix = event (immediate completion)
+            ld      hl,#DRV_OK
+            ret
+
+            ;; driver-level init: the mm58167 needs none.
+nvram_init::
             ld      hl,#DRV_OK
             ret
 
 nvram_dev_drv::
+            .dw     avdc_dev_drv
             .dw     0x0000
-            .dw     nvram_probe
+            .dw     nvram_init
             .dw     drv_open_ok
             .dw     drv_close_nop
             .dw     nvram_read
             .dw     nvram_write
             .dw     drv_ioctl_unsupported
 
+nvram_dev::
 nvram_dev$:
             .dw     0x0000
-            .db     'n','v','r','a','m',0,0,0
+            .db     'n','v','r','a','m',0
             .db     0x00
-            .db     0x00
-            .ds     16
+            .ds     DEV_DATA_SIZE
             .dw     nvram_dev_drv

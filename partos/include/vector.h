@@ -11,7 +11,7 @@
 #include <stdint.h>
 
 /*
- * Public vector-table indices accepted by vector_get() and vector_set().
+ * Public vector-table indices accepted by vector_set().
  */
 #define VECTOR_ENTRY    0   /* rst 0x00 shared entry dispatch */
 #define VECTOR_RST08    1   /* rst 0x08 */
@@ -23,12 +23,6 @@
 #define VECTOR_RST38    7   /* im 1 interrupt entry */
 #define VECTOR_NMI      8   /* nmi entry */
 #define VECTOR_COUNT    9
-
-/*
- * Return the current handler stored in one vector-table slot.
- * Returns NULL if the vector index is invalid.
- */
-void *vector_get(uint8_t vector);
 
 /*
  * Replace one vector-table slot and return the previous handler.

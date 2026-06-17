@@ -209,3 +209,8 @@ target_include_directories(test_rtc_nvram_shadow PRIVATE ${CMAKE_SOURCE_DIR}/src
 target_link_libraries(test_rtc_nvram_shadow PRIVATE chipsex)
 
 add_test(NAME rtc_nvram_shadow COMMAND test_rtc_nvram_shadow)
+
+# Hermetic PartOS kernel boot-floor regression gate (target defined in src/).
+# Builds the kernel + a FAT12 fixture and verifies the kernel boots through
+# device probe, the round-robin scheduler and FAT mount-submit.
+add_test(NAME partos_kernel_boot COMMAND idp-kernel-probe)

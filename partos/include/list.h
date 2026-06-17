@@ -56,11 +56,6 @@ list_item_t *list_insert(list_item_t **first, list_item_t *el);
 list_item_t *list_remove(list_item_t **first, list_item_t *el);
 
 /*
- * Remove and return the first element of the list.
- */
-list_item_t *list_remove_first(list_item_t **first);
-
-/*
  * Append one element or a pre-linked chain to the list tail.
  * The return value is the appended head, or NULL on failure.
  */

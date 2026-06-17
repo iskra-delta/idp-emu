@@ -11,7 +11,6 @@
 
             .globl  _ir_disable
             .globl  _ir_enable
-            .globl  _vector_get
             .globl  _vector_set
             .globl  __sys_entry
             .globl  __sys_kernel
@@ -69,31 +68,6 @@ __vector_ptr$:
 
 vp_invalid$:
             ld      hl,#0x0000
-            ret
-
-            ;; ----------------------------------------------------------------
-            ;; <de> <= _vector_get(<a> vector)
-            ;; ----------------------------------------------------------------
-            ;; returns the current handler stored in the shared-memory vector
-            ;; table, or 0 on an invalid vector index.
-            ;; ----------------------------------------------------------------
-_vector_get::
-            ld      c,a
-            call    _ir_disable
-            ld      a,c
-            call    __vector_ptr$
-            ld      a,h
-            or      l
-            jr      z,vg_invalid$
-            ld      e,(hl)
-            inc     hl
-            ld      d,(hl)
-            call    _ir_enable
-            ret
-
-vg_invalid$:
-            ld      de,#0x0000
-            call    _ir_enable
             ret
 
             ;; ----------------------------------------------------------------

@@ -267,6 +267,7 @@ private:
     void service_sio_device(sio_port_id port, z80sio_t *chip, int channel);
     void apply_sio_modem_inputs(uint64_t &bus_pins, sio_port_id port_a, sio_port_id port_b);
     void apply_pio_device_output(pio_port_id port, uint8_t data);
+    void pulse_pio_output_ack(pio_port_id port);
     void queue_mouse_packet(sio_port_id port, int dx, int dy, uint8_t buttons);
     void queue_logitech_c7_poll_report(sio_port_id port);
     void queue_logitech_c7_identification(sio_port_id port);

@@ -14,104 +14,114 @@
             .include "drv.inc"
             .include "fd.inc"
 
-            .globl  drv_reset_dev
             .globl  drv_open_pos0
             .globl  drv_close_nop
             .globl  drv_prep_rw256
             .globl  drv_advance_pos256
             .globl  drv_ioctl_pos24
+            .globl  drv_err
+            .globl  drv_signal_done
+            .globl  drv_zero_ok_bc_ix
+            .globl  drv_isr_enter
+            .globl  drv_isr_exit
+            .globl  __sys_nvram_cache
+            .globl  fd_init
+            .globl  fd_dev0
+            .globl  fd_dev1
+            .globl  fd_dev2
+            .globl  fd_dev3
+            .globl  _ir_set
+            .globl  _ir_disable
+            .globl  _ir_enable
+            .globl  ir_refcnt
+            .globl  _fd_isr
+            .globl  hd_dev_drv
 
             .area   _CODE
 
-            ;; ----------------------------------------------------------------
-            ;; <hl> *chain <= fd_probe()
-            ;; ----------------------------------------------------------------
-            ;; probes the raw i8272 for ready units by issuing SENSE DRIVE
-            ;; STATUS to all four unit numbers. detected devices are chained
-            ;; as fd0, fd1, ... in discovery order, while dev.data[0] keeps
-            ;; the physical fdc unit number needed later by real I/O code.
-            ;; ----------------------------------------------------------------
-fd_probe::
-            xor     a
-            ld      (fd_probe_count$),a
-            ld      l,a
-            ld      h,a
-            ld      (fd_probe_head$),hl
-            ld      (fd_probe_tail$),hl
+            ;; per floppy type (1..3): sectors/track, fdc sector-size code,
+            ;; sector size >> 8. the rom delegates this geometry to the os.
+fd_geom_table$:
+            .db     18,0x01,0x01        ; 1: PARTNER  18 spt, 256-byte
+            .db      9,0x02,0x02        ; 2: DOS-720K  9 spt, 512-byte
+            .db      9,0x02,0x02        ; 3: DOS-360K  9 spt, 512-byte
 
-            ld      b,#0
-fdp_loop$:
-            push    bc
-            call    fd_probe_unit$
-            pop     bc
-            jr      c,fdp_done$
-            inc     b
-            ld      a,b
-            cp      #FD_MAX_UNITS
-            jr      c,fdp_loop$
-fdp_done$:
-            ld      hl,(fd_probe_head$)
+fd_seed_geom$:                          ; hl=dev, a=type (0..3)
+            or      a
+            ret     z
+            push    hl
+            dec     a
+            ld      l,a
+            ld      h,#0
+            ld      e,a
+            ld      d,#0
+            add     hl,hl
+            add     hl,de
+            ld      de,#fd_geom_table$
+            add     hl,de
+            ex      de,hl               ; de = geometry entry
+            pop     hl                  ; hl = dev
+            ld      bc,#DEV_DATA + FD_DATA_SPT
+            add     hl,bc
+            ld      a,(de)
+            ld      (hl),a
+            inc     de
+            inc     hl
+            ld      a,(de)
+            ld      (hl),a
+            inc     de
+            inc     hl
+            ld      a,(de)
+            ld      (hl),a
             ret
 
-fd_probe_unit$:
-            ld      d,b
-            ld      a,#FD_CMD_SENSE_DRIVE
+            ;; ----------------------------------------------------------------
+            ;; <hl> rc <= fd_init()
+            ;; ----------------------------------------------------------------
+            ;; driver-level i8272 setup, run once at kernel start. the rom uses
+            ;; polled i/o, so the controller is NOT in dma mode: we issue
+            ;; SPECIFY (nd = 0) to switch it to dma transfers, then install the
+            ;; kernel's completion-interrupt handler into the im 2 table.
+            ;; per-unit recalibrate is in fd_open.
+            ;; ----------------------------------------------------------------
+fd_init::
+            ld      a,#FD_CMD_SPECIFY
             call    fd_write_data$
-            ret     c
-            ld      a,d
+            ld      a,#FD_SPEC_SRT_HUT
+            call    fd_write_data$
+            ld      a,#FD_SPEC_HLT_ND       ; nd = 0 -> dma data transfers
+            call    fd_write_data$
+            ;; install the fdc completion-interrupt handler
+            ld      a,#FD_VEC
+            out     (FD_PORT_INT_VEC),a     ; fdc im 2 vector register
+            ld      a,#FD_VEC
+            ld      de,#_fd_isr
+            call    _ir_set
+            ld      a,(__sys_nvram_cache + FD_NVRAM_TYPE_BYTE)
+            rlca
+            rlca
             and     #0x03
-            call    fd_write_data$
-            ret     c
-            call    fd_read_data$
-            ret     c
-            and     #FD_ST3_READY
-            ret     z
-
-            ld      b,d
-            call    fd_dev_by_unit$
-            push    bc
-            ld      de,#fd_dev_drv
-            call    drv_reset_dev
-            pop     bc
-
-            push    hl
-            ld      de,#DEV_DATA
-            add     hl,de
-            ld      a,b
-            ld      (hl),a
-            pop     hl
-
-            push    hl
-            ld      de,#DEV_NAME
-            add     hl,de
-            ld      a,#'f'
-            ld      (hl),a
-            inc     hl
-            ld      a,#'d'
-            ld      (hl),a
-            inc     hl
-            ld      a,(fd_probe_count$)
-            add     a,#'0'
-            ld      (hl),a
-            pop     de
-
-            ld      hl,(fd_probe_head$)
-            ld      a,h
-            or      l
-            jr      nz,fdp_link$
-            ld      (fd_probe_head$),de
-            jr      fdp_tail$
-fdp_link$:
-            ld      hl,(fd_probe_tail$)
-            ld      (hl),e
-            inc     hl
-            ld      (hl),d
-fdp_tail$:
-            ld      (fd_probe_tail$),de
-            ld      a,(fd_probe_count$)
-            inc     a
-            ld      (fd_probe_count$),a
-            or      a
+            ld      hl,#fd_dev0$
+            call    fd_seed_geom$
+            ld      a,(__sys_nvram_cache + FD_NVRAM_TYPE_BYTE)
+            and     #0x30
+            rrca
+            rrca
+            rrca
+            rrca
+            ld      hl,#fd_dev1$
+            call    fd_seed_geom$
+            ld      a,(__sys_nvram_cache + FD_NVRAM_TYPE_BYTE)
+            and     #0x0c
+            rrca
+            rrca
+            ld      hl,#fd_dev2$
+            call    fd_seed_geom$
+            ld      a,(__sys_nvram_cache + FD_NVRAM_TYPE_BYTE)
+            and     #0x03
+            ld      hl,#fd_dev3$
+            call    fd_seed_geom$
+            ld      hl,#DRV_OK
             ret
 
 fd_open::
@@ -119,93 +129,250 @@ fd_open::
             call    drv_open_pos0
             pop     hl
             call    fd_recal_dev$
-            jp      c,fd_err$
+            jp      c,drv_err
             ld      hl,#DRV_OK
             ret
 
+            ;; ----------------------------------------------------------------
+            ;; <hl> rc <= fd_read (<hl> dev, <de> buf, <bc> count, <ix> event)
+            ;; <hl> rc <= fd_write(<hl> dev, <de> buf, <bc> count, <ix> event)
+            ;; ----------------------------------------------------------------
+            ;; asynchronous, dma + interrupt driven. records the request, then
+            ;; arms the first sector; the fdc completion isr (fd_isr) moves the
+            ;; transfer forward sector by sector and signals the event when the
+            ;; whole request is done. read and write share everything except the
+            ;; dma direction and the fdc command (fd_io_dir$). returns DRV_OK
+            ;; once started, DRV_ERR on a bad (mis-aligned) request.
+            ;; ----------------------------------------------------------------
 fd_read::
-            ld      a,b
-            or      c
-            jr      nz,fdr_go$
-            ld      hl,#DRV_OK
-            ret
-fdr_go$:
-            ld      (fd_io_ptr$),de
-fdr_loop$:
-            push    bc
-            push    hl
-            call    drv_prep_rw256
-            ld      a,h
-            or      l
-            jr      nz,fdr_prep_fail$
-            pop     hl
-            call    fd_lba_to_chs$
-            ld      de,(fd_io_ptr$)
-            call    fd_read_sector$
-            jr      c,fdr_xfer_fail$
-            ld      (fd_io_ptr$),de
-            call    drv_advance_pos256
-            pop     bc
-            djnz    fdr_loop$
-            ld      hl,#DRV_OK
-            ret
-fdr_prep_fail$:
-            pop     de
-            pop     bc
-            ret
-fdr_xfer_fail$:
-            pop     bc
-            jp      fd_err$
+            call    drv_zero_ok_bc_ix
+            ret     z
+            xor     a                   ; dir = 0 (read)
+            jr      fd_xfer_start$
 
 fd_write::
-            ld      a,b
-            or      c
-            jr      nz,fdw_go$
-            ld      hl,#DRV_OK
-            ret
-fdw_go$:
-            ld      (fd_io_ptr$),de
-fdw_loop$:
-            push    bc
-            push    hl
-            call    drv_prep_rw256
+            call    drv_zero_ok_bc_ix
+            ret     z
+            ld      a,#1                ; dir = 1 (write)
+
+fd_xfer_start$:                         ; a=dir, hl=dev, de=buf, bc=count, ix=event
+            ld      (fd_io_dir$),a
+            ld      (fd_io_dev$),hl
+            ld      (fd_io_buf$),de
+            push    ix
+            pop     de
+            ld      (fd_io_event$),de
+            xor     a
+            ld      (fd_io_err$),a
+            ld      a,#0xff
+            ld      (fd_io_cur_cyl$),a  ; force a seek on the first sector
+            ;; load this unit's geometry (spt / sector-size code / size>>8)
+            push    bc                  ; save count
+            ld      de,#DEV_DATA + FD_DATA_SPT
+            add     hl,de
+            ld      a,(hl)
+            ld      (fd_io_spt$),a
+            inc     hl
+            ld      a,(hl)
+            ld      (fd_io_n$),a
+            inc     hl
+            ld      a,(hl)
+            ld      (fd_io_ssh$),a
+            ld      hl,(fd_io_dev$)     ; hl = dev
+            pop     bc                  ; bc = count
+            ;; validate 256-alignment and fetch the 256-block index
+            call    drv_prep_rw256      ; de = offset>>8, b = count>>8, hl = rc
             ld      a,h
             or      l
-            jr      nz,fdw_prep_fail$
-            pop     hl
-            call    fd_lba_to_chs$
-            ld      de,(fd_io_ptr$)
-            call    fd_write_sector$
-            jr      c,fdw_xfer_fail$
-            ld      (fd_io_ptr$),de
+            ret     nz                  ; bad params -> DRV_ERR, no event
+            ;; advance the byte cursor over the whole request (b 256-byte blocks)
+            push    de                  ; 256-block index
+            push    bc                  ; 256-block count
+fdx_adv$:
+            push    bc
+            ld      hl,(fd_io_dev$)
             call    drv_advance_pos256
             pop     bc
-            djnz    fdw_loop$
+            djnz    fdx_adv$
+            pop     bc                  ; b = 256-block count
+            pop     de                  ; de = 256-block index
+            ;; convert to the unit's sectors: 512-byte sectors halve lba+count
+            ld      a,(fd_io_ssh$)
+            cp      #2
+            jr      nz,fdx_have$
+            srl     d
+            rr      e                   ; sector lba = (offset>>8) >> 1
+            srl     b                   ; sector count = (count>>8) >> 1
+fdx_have$:
+            ld      (fd_io_lba$),de
+            ld      a,b
+            ld      (fd_io_left$),a     ; sectors remaining
+            ;; arm the first sector with interrupts masked so the seek's
+            ;; sense-int handshake cannot re-enter the fdc handler mid-setup.
+            call    _ir_disable
+            call    fd_dma_start_sector$
+            call    _ir_enable
             ld      hl,#DRV_OK
             ret
-fdw_prep_fail$:
-            pop     de
-            pop     bc
+
+            ;; ----------------------------------------------------------------
+            ;; fd_dma_start_sector$()
+            ;; ----------------------------------------------------------------
+            ;; seeks (only if the cylinder changed), programs the dma for the
+            ;; current sector's buffer and issues the dma-mode read/write
+            ;; command. expects interrupts masked. uses the fd_io_* state.
+            ;; ----------------------------------------------------------------
+fd_dma_start_sector$:
+            ld      de,(fd_io_lba$)
+            call    fd_lba_to_chs$      ; c = cyl, b = head, a = sector
+            ld      (fd_io_sec$),a
+            ld      a,b
+            ld      (fd_io_head$),a
+            ld      a,c
+            ld      (fd_io_cyl$),a
+            ld      hl,#fd_io_cur_cyl$
+            cp      (hl)                ; same cylinder as last time?
+            jr      z,fdss_ready$
+            ld      (hl),a              ; remember new cylinder
+            ld      hl,(fd_io_dev$)
+            call    fd_seek_dev$        ; hl=dev, b=head, c=cyl (polled)
+fdss_ready$:
+            ld      hl,(fd_io_buf$)
+            call    fd_dma_setup$       ; program the dma for this sector
+            jp      fd_dma_issue_cmd$   ; send the dma-mode read/write command
+
+            ;; ----------------------------------------------------------------
+            ;; fd_dma_setup$(<hl> buffer)
+            ;; ----------------------------------------------------------------
+            ;; programs the z80 dma to move one 256-byte sector between the fdc
+            ;; data port (port b, fixed) and the buffer (port a, increment). the
+            ;; direction (wr0 0x79 read = b->a, 0x7d write = a->b) follows
+            ;; fd_io_dir$. this is the exact boot-rom byte stream the emulator's
+            ;; dma model understands, parameterized by buffer and direction.
+            ;; ----------------------------------------------------------------
+fd_dma_setup$:
+            ld      a,#0x05
+            out     (FD_PORT_DMA),a     ; reset dma
+            ld      a,#0xcf
+            out     (FD_PORT_DMA),a
+            ld      a,(fd_io_dir$)
+            or      a
+            ld      a,#0x79             ; read: port b (fdc) -> port a (mem)
+            jr      z,fdds_wr0$
+            ld      a,#0x7d             ; write: port a (mem) -> port b (fdc)
+fdds_wr0$:
+            out     (FD_PORT_DMA),a     ; wr0: direction, addr+len follow
+            ld      a,l
+            out     (FD_PORT_DMA),a     ; buffer low
+            ld      a,h
+            out     (FD_PORT_DMA),a     ; buffer high
+            ld      a,#0xff
+            out     (FD_PORT_DMA),a     ; length low (sector_size - 1)
+            ld      a,(fd_io_ssh$)
+            dec     a
+            out     (FD_PORT_DMA),a     ; length high (ssh - 1: 256->0, 512->1)
+            ld      hl,#fd_dma_cfg$
+            ld      b,#9
+            ld      c,#FD_PORT_DMA
+            otir                        ; wr1/wr2 + fixed-io port + enable/load
             ret
-fdw_xfer_fail$:
-            pop     bc
-            jp      fd_err$
+
+fd_dma_cfg$:
+            .db     0x14,0x28,0x85,FD_PORT_DATA,0x8a,0xcf,0x01,0xcf,0x87
+
+            ;; ----------------------------------------------------------------
+            ;; fd_dma_issue_cmd$()
+            ;; ----------------------------------------------------------------
+            ;; sends the i8272 READ/WRITE DATA command for one sector (per
+            ;; fd_io_dir$). in dma mode the controller moves the 256 data bytes
+            ;; through the dma; no inline data phase. completion raises the fdc
+            ;; interrupt (fd_isr).
+            ;; ----------------------------------------------------------------
+fd_dma_issue_cmd$:
+            ld      a,(fd_io_dir$)
+            or      a
+            ld      a,#FD_CMD_READ_DATA
+            jr      z,fddi_cmd$
+            ld      a,#FD_CMD_WRITE_DATA
+fddi_cmd$:
+            call    fd_write_data$
+            ld      hl,(fd_io_dev$)
+            ld      a,(fd_io_head$)
+            ld      b,a
+            call    fd_get_hu$          ; head/unit byte
+            call    fd_write_data$
+            ld      a,(fd_io_cyl$)
+            call    fd_write_data$      ; C
+            ld      a,(fd_io_head$)
+            call    fd_write_data$      ; H
+            ld      a,(fd_io_sec$)
+            call    fd_write_data$      ; R
+            ld      a,(fd_io_n$)
+            call    fd_write_data$      ; N (sector size code)
+            ld      a,(fd_io_sec$)
+            call    fd_write_data$      ; EOT = R (one sector)
+            ld      a,#FD_RW_GPL
+            call    fd_write_data$      ; GPL
+            ld      a,#FD_RW_DTL
+            jp      fd_write_data$      ; DTL (tail)
+
+            ;; ----------------------------------------------------------------
+            ;; _fd_isr()  -- im 2 fdc completion handler
+            ;; ----------------------------------------------------------------
+            ;; runs when a dma sector transfer finishes. reads the result phase,
+            ;; advances the transfer, arms the next sector, or signals the
+            ;; completion event when the whole request is done. holds the ir
+            ;; bracket because drv_signal_done -> evt_set walks kernel lists.
+            ;; ----------------------------------------------------------------
+_fd_isr::
+            call    drv_isr_enter
+
+            call    fd_finish_rw$       ; read result phase; cf = error
+            jr      c,fdi_err$
+            ld      hl,(fd_io_buf$)
+            ld      a,(fd_io_ssh$)
+            add     a,h
+            ld      h,a                 ; advance buffer by one sector (ssh*256)
+            ld      (fd_io_buf$),hl
+            ld      hl,(fd_io_lba$)
+            inc     hl
+            ld      (fd_io_lba$),hl
+            ld      a,(fd_io_left$)
+            dec     a
+            ld      (fd_io_left$),a
+            jr      z,fdi_done$
+            call    fd_dma_start_sector$ ; arm the next sector
+            jr      fdi_exit$
+fdi_err$:
+            ld      a,#1
+            ld      (fd_io_err$),a
+fdi_done$:
+            ld      ix,(fd_io_event$)
+            call    drv_signal_done     ; unblock the waiting thread
+fdi_exit$:
+            jp      drv_isr_exit
 
 fd_ioctl::
             jp      drv_ioctl_pos24
 
+            ;; de = sector lba -> c = cyl, b = head (0/1), a = sector (1-based).
+            ;; uses the unit's sectors/track (l = spt, h = 2*spt per cylinder).
 fd_lba_to_chs$:
+            ld      a,(fd_io_spt$)
+            ld      l,a
+            add     a,a
+            ld      h,a                 ; h = sectors per cylinder (2 heads)
             ld      c,#0
 fdc_cyl$:
             ld      a,d
             or      a
-            jr      nz,fdc_sub36$
+            jr      nz,fdc_subcyl$
             ld      a,e
-            cp      #FD_SECTRK * FD_HEADS
+            cp      h
             jr      c,fdc_head$
-fdc_sub36$:
+fdc_subcyl$:
             ld      a,e
-            sub     #FD_SECTRK * FD_HEADS
+            sub     h
             ld      e,a
             jr      nc,fdc_noborrow$
             dec     d
@@ -215,9 +382,9 @@ fdc_noborrow$:
 fdc_head$:
             ld      b,#0
             ld      a,e
-            cp      #FD_SECTRK
+            cp      l
             jr      c,fdc_sector$
-            sub     #FD_SECTRK
+            sub     l
             ld      e,a
             ld      b,#1
 fdc_sector$:
@@ -320,120 +487,6 @@ fdf_res$:
             scf
             ret
 
-fd_read_sector$:
-            push    af
-            call    fd_seek_dev$
-            jr      c,fdrs_fail$
-            ld      a,#FD_CMD_READ_DATA
-            call    fd_write_data$
-            jr      c,fdrs_fail$
-            call    fd_get_hu$
-            call    fd_write_data$
-            jr      c,fdrs_fail$
-            ld      a,c
-            call    fd_write_data$
-            jr      c,fdrs_fail$
-            ld      a,b
-            call    fd_write_data$
-            jr      c,fdrs_fail$
-            pop     af
-            push    af
-            call    fd_write_data$
-            jr      c,fdrs_fail$
-            ld      a,#FD_SECTOR_N
-            call    fd_write_data$
-            jr      c,fdrs_fail$
-            pop     af
-            push    af
-            call    fd_write_data$
-            jr      c,fdrs_fail$
-            ld      a,#FD_RW_GPL
-            call    fd_write_data$
-            jr      c,fdrs_fail$
-            ld      a,#FD_RW_DTL
-            call    fd_write_data$
-            jr      c,fdrs_fail$
-            pop     af
-            ld      c,#0
-fdrs_data$:
-            call    fd_read_data$
-            jr      c,fdrs_fail_nc$
-            ld      (de),a
-            inc     de
-            dec     c
-            jr      nz,fdrs_data$
-            call    fd_finish_rw$
-            ret
-fdrs_fail$:
-            pop     af
-fdrs_fail_nc$:
-            scf
-            ret
-
-fd_write_sector$:
-            push    af
-            call    fd_seek_dev$
-            jr      c,fdws_fail$
-            ld      a,#FD_CMD_WRITE_DATA
-            call    fd_write_data$
-            jr      c,fdws_fail$
-            call    fd_get_hu$
-            call    fd_write_data$
-            jr      c,fdws_fail$
-            ld      a,c
-            call    fd_write_data$
-            jr      c,fdws_fail$
-            ld      a,b
-            call    fd_write_data$
-            jr      c,fdws_fail$
-            pop     af
-            push    af
-            call    fd_write_data$
-            jr      c,fdws_fail$
-            ld      a,#FD_SECTOR_N
-            call    fd_write_data$
-            jr      c,fdws_fail$
-            pop     af
-            push    af
-            call    fd_write_data$
-            jr      c,fdws_fail$
-            ld      a,#FD_RW_GPL
-            call    fd_write_data$
-            jr      c,fdws_fail$
-            ld      a,#FD_RW_DTL
-            call    fd_write_data$
-            jr      c,fdws_fail$
-            pop     af
-            ld      c,#0
-fdws_data$:
-            ld      a,(de)
-            call    fd_write_data$
-            jr      c,fdws_fail_nc$
-            inc     de
-            dec     c
-            jr      nz,fdws_data$
-            call    fd_finish_rw$
-            ret
-fdws_fail$:
-            pop     af
-fdws_fail_nc$:
-            scf
-            ret
-
-fd_dev_by_unit$:
-            ld      hl,#fd_dev0$
-            ld      a,b
-            or      a
-            ret     z
-            dec     a
-            ld      hl,#fd_dev1$
-            ret     z
-            dec     a
-            ld      hl,#fd_dev2$
-            ret     z
-            ld      hl,#fd_dev3$
-            ret
-
 fd_write_data$:
             ld      e,a
             call    fd_wait_cmd_ready$
@@ -451,86 +504,97 @@ fd_read_data$:
             ret
 
 fd_wait_cmd_ready$:
-            ld      bc,#FD_POLL_TIMEOUT
-fdw_cmd$:
-            in      a,(FD_PORT_MSR)
-            and     #FD_MSR_PHASE_MASK
-            cp      #FD_MSR_CMD_READY
-            ret     z
-            dec     bc
-            ld      a,b
-            or      c
-            jr      nz,fdw_cmd$
-            scf
-            ret
+            ld      e,#FD_MSR_CMD_READY
+            jr      fd_wait_phase$
 
 fd_wait_res_ready$:
+            ld      e,#FD_MSR_RES_READY
+fd_wait_phase$:
             ld      bc,#FD_POLL_TIMEOUT
-fdw_res$:
+fdw_phase$:
             in      a,(FD_PORT_MSR)
             and     #FD_MSR_PHASE_MASK
-            cp      #FD_MSR_RES_READY
+            cp      e
             ret     z
             dec     bc
             ld      a,b
             or      c
-            jr      nz,fdw_res$
+            jr      nz,fdw_phase$
             scf
-            ret
-
-fd_err$:
-            ld      hl,#DRV_ERR
             ret
 
 fd_dev_drv::
+            .dw     hd_dev_drv
             .dw     0x0000
-            .dw     fd_probe
+            .dw     fd_init
             .dw     fd_open
             .dw     drv_close_nop
             .dw     fd_read
             .dw     fd_write
             .dw     fd_ioctl
 
+fd_dev0::
 fd_dev0$:
             .dw     0x0000
-            .db     'f','d','0',0,0,0,0,0
+            .db     'f','d','0',0,0,0
             .db     0x00
             .db     0x00
-            .ds     16
+            .ds     DEV_DATA_SIZE-1
             .dw     fd_dev_drv
 
+fd_dev1::
 fd_dev1$:
             .dw     0x0000
-            .db     'f','d','0',0,0,0,0,0
+            .db     'f','d','1',0,0,0
             .db     0x00
-            .db     0x00
-            .ds     16
+            .db     0x01
+            .ds     DEV_DATA_SIZE-1
             .dw     fd_dev_drv
 
+fd_dev2::
 fd_dev2$:
             .dw     0x0000
-            .db     'f','d','0',0,0,0,0,0
+            .db     'f','d','2',0,0,0
             .db     0x00
-            .db     0x00
-            .ds     16
+            .db     0x02
+            .ds     DEV_DATA_SIZE-1
             .dw     fd_dev_drv
 
+fd_dev3::
 fd_dev3$:
             .dw     0x0000
-            .db     'f','d','0',0,0,0,0,0
+            .db     'f','d','3',0,0,0
             .db     0x00
-            .db     0x00
-            .ds     16
+            .db     0x03
+            .ds     DEV_DATA_SIZE-1
             .dw     fd_dev_drv
 
-fd_probe_head$:
-            .dw     0x0000
-
-fd_probe_tail$:
-            .dw     0x0000
-
-fd_io_ptr$:
-            .dw     0x0000
-
-fd_probe_count$:
-            .db     0x00
+            ;; --- interrupt-driven transfer state -----------------------------
+fd_io_dev$:
+            .dw     0x0000              ; device being transferred
+fd_io_buf$:
+            .dw     0x0000              ; current dma buffer address
+fd_io_lba$:
+            .dw     0x0000              ; current sector (lba)
+fd_io_event$:
+            .dw     0x0000              ; completion event to signal
+fd_io_left$:
+            .db     0x00                ; sectors remaining
+fd_io_err$:
+            .db     0x00                ; non-zero after a failed transfer
+fd_io_sec$:
+            .db     0x00                ; current sector number (1-based)
+fd_io_head$:
+            .db     0x00                ; current head
+fd_io_cyl$:
+            .db     0x00                ; current cylinder
+fd_io_cur_cyl$:
+            .db     0x00                ; last cylinder actually seeked to
+fd_io_dir$:
+            .db     0x00                ; 0 = read (b->a), 1 = write (a->b)
+fd_io_spt$:
+            .db     0x00                ; sectors per track (this transfer)
+fd_io_n$:
+            .db     0x00                ; fdc sector-size code (this transfer)
+fd_io_ssh$:
+            .db     0x00                ; sector size >> 8 (this transfer)

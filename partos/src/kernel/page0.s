@@ -35,6 +35,7 @@
             .equ    BANK1_PORT,        0x90 ; hardware bank 2, logical bank 1
             .equ    NVRAM_PORT_BASE,   0xa8
             .equ    NVRAM_SIZE,        8
+            .equ    PAGE0_INSTALL_OFF, 0x006b
             .equ    PAGE0_SIZE,        0x0100
 
             ;; ----------------------------------------------------------------
@@ -125,28 +126,10 @@ __sys_info_end::
             .db     0
 __sys_page0_end::
 
-            ;; ----------------------------------------------------------------
-            ;; page-0 installation helpers
-            ;; ----------------------------------------------------------------
-            ;; these routines live after the copied low-page image in the same
-            ;; _PAGE0 segment, so bootstrap can call them from the loaded
-            ;; kernel buffer without copying them into bank 0 or bank 1 page 0.
-            ;;
-            ;;   __sys_page0_install:
-            ;;       A  = version byte
-            ;;       B  = model byte
-            ;;       C  = flags byte (bank bit ignored here)
-            ;;       D  = meta1 byte
-            ;;       HL = continuation address
-            ;;
-            ;; current rom usage is smaller than this full interface:
-            ;; it meaningfully sets B and HL, leaves A holding the model byte
-            ;; as a side effect, and does not deliberately initialize C or D.
-            ;;
-            ;; output:
-            ;;   installs the low-page image into both banks, returns to the
-            ;;   continuation address with logical bank 0 selected.
-            ;; ----------------------------------------------------------------
+            ;; the copied low-page template ends before 0x006b. keep the real
+            ;; installer body inside the reserved 256-byte page block so it
+            ;; does not also consume shared _CODE space.
+            .ds     PAGE0_INSTALL_OFF - (__sys_page0_end-__sys_page0)
 __sys_page0_install::
             ld      (page0_ret$),hl
             ld      (#__sys_version),a
@@ -206,12 +189,6 @@ page0_nvram_copy$:
             jp      (hl)
 
 page0_ret$:
-            ;; 2-byte scratch return address for __sys_page0_install
             .db     0,0
-
 __sys_page0_free::
-            ;; 38-byte explicit zero-filled free tail after page0_ret$ so
-            ;; _PAGE0 totals exactly 256 bytes.
-            .db     0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 ; 16 bytes
-            .db     0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 ; 16 bytes
-            .db     0,0,0,0,0,0                      ; 6 bytes
+            .ds     PAGE0_SIZE - (__sys_page0_free-__sys_page0)

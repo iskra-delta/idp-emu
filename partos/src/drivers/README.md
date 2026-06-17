@@ -10,6 +10,7 @@ The authoritative documentation now lives in:
 Current driver families:
 
 - serial I/O
+- parallel I/O
 - RTC
 - NVRAM
 - GDP

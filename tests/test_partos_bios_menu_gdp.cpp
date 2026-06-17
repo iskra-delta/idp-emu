@@ -44,16 +44,6 @@ static bool has_gdp_text(const scn2674_t &avdc, int row, int col, const char *te
     return true;
 }
 
-static bool wait_for_gdp_text(partner_gdp &emu, int row, int col, const char *text)
-{
-    for (uint64_t ticks = 0; ticks < TICK_LIMIT; ++ticks) {
-        emu.tick();
-        if (has_gdp_text(emu.get_avdc(), row, col, text))
-            return true;
-    }
-    return false;
-}
-
 static bool enter_bios_setup(partner_gdp &emu, bool &saw_banner)
 {
     saw_banner = false;

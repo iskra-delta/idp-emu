@@ -3,8 +3,8 @@
 // Headless verification that the PartOS boot ROM loads the OS image byte-for-
 // byte. It does NOT boot into an OS: it lets the bootstrap decompress stage-1,
 // redirects execution straight to boot_main$ (isolating the load path from the
-// NVRAM/setup-window gate), runs until the loader hands off at
-// __sys_page0_install (0xFF6B), then compares RAM against the disk bytes.
+// NVRAM/setup-window gate), runs until the loader hands off at the linked
+// __sys_page0_install entry, then compares RAM against the disk bytes.
 //
 // Layout the loader produces (start.s):
 //   disk sector 0      -> 0xDF00..0xDFFF   (boot record)
@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
+#include <regex>
 #include <string>
 #include <vector>
 
@@ -24,7 +25,6 @@ constexpr uint16_t PC_START_MAIN = 0x2000; // stage-1 entry (decompressed)
 constexpr uint16_t PC_STAGE1_READY = 0x2003; // overlay disabled, about to call model_detect
 constexpr uint16_t PC_FD_PATH    = 0x2046; // boot_fd_path in start.s
 constexpr uint16_t PC_HD_PATH    = 0x2052; // boot_hd_path in start.s
-constexpr uint16_t PC_HANDOFF    = 0xFF6B; // jp __sys_page0_install target
 constexpr uint16_t ADDR_MODEL    = 0xDE0C; // model byte (_SYSVARS @ 0xDE00)
 constexpr uint16_t ADDR_NV_VALID = 0xDE15; // bios_nvram_valid
 
@@ -37,16 +37,35 @@ std::vector<uint8_t> read_file(const std::string &p) {
     f.read(reinterpret_cast<char *>(v.data()), (std::streamsize)n);
     return v;
 }
+
+uint16_t read_area_addr(const std::string &path, const std::string &area) {
+    std::ifstream f(path);
+    if (!f) {
+        fprintf(stderr, "cannot open map %s\n", path.c_str());
+        exit(2);
+    }
+    const std::regex re("^" + area + R"(\s+([0-9A-Fa-f]{8})\s+)");
+    std::string line;
+    std::smatch m;
+    while (std::getline(f, line)) {
+        if (std::regex_search(line, m, re))
+            return (uint16_t)std::stoul(m[1].str(), nullptr, 16);
+    }
+    fprintf(stderr, "area %s not found in %s\n", area.c_str(), path.c_str());
+    exit(2);
+}
 } // namespace
 
 int main(int argc, char **argv) {
     std::string rom  = (argc > 1) ? argv[1] : "partos/bin/partos.rom";
     std::string mode = (argc > 2) ? argv[2] : "fd"; // "fd" or "hd"
+    std::string kmap = "partos/build/kernel.map";
     bool hd = (mode == "hd");
     std::string srcdisk  = hd ? "disks/hdd-dos.img" : "disks/fdd-dos.img";
     std::string testdisk = hd ? "/tmp/hdd-bootload-test.img"
                               : "/tmp/fdd-bootload-test.img";
     uint16_t redirect = hd ? PC_HD_PATH : PC_FD_PATH;
+    const uint16_t pc_handoff = (uint16_t)(read_area_addr(kmap, "_PAGE0") + 0x006B);
 
     constexpr int SEC = 256;
     constexpr int NPLANT = 33; // boot record + 32 OS sectors
@@ -103,7 +122,7 @@ int main(int argc, char **argv) {
     guard = 0;
     uint16_t lastpc = 0xFFFF;
     std::vector<uint16_t> trail_first;
-    while (idp.get_current_pc() != PC_HANDOFF) {
+    while (idp.get_current_pc() != pc_handoff) {
         idp.tick();
         uint16_t pc = idp.get_current_pc();
         if (pc != lastpc) {

@@ -57,7 +57,8 @@ KERNEL_ENTRY_SRC := $(filter src/kernel/init.s,$(KERNEL_DISCOVERED_SRC))
 KERNEL_PAGE0_SRC := $(filter src/kernel/page0.s,$(KERNEL_DISCOVERED_SRC))
 KERNEL_LOCAL_SRC := $(filter-out $(KERNEL_ENTRY_SRC) $(KERNEL_PAGE0_SRC),$(KERNEL_DISCOVERED_SRC))
 KERNEL_DRIVER_SRC := $(sort $(wildcard src/drivers/*.s))
-KERNEL_SRC := $(KERNEL_ENTRY_SRC) $(KERNEL_LOCAL_SRC) $(KERNEL_DRIVER_SRC) $(KERNEL_PAGE0_SRC)
+KERNEL_OS_SRC := $(sort $(wildcard src/os/*.s))
+KERNEL_SRC := $(KERNEL_ENTRY_SRC) $(KERNEL_LOCAL_SRC) $(KERNEL_DRIVER_SRC) $(KERNEL_OS_SRC) $(KERNEL_PAGE0_SRC)
 
 BOOTSTRAP_RELS := $(patsubst src/%.s,$(BUILD)/%.rel,$(BOOTSTRAP_SRC))
 STAGE1_RELS := $(patsubst src/%.s,$(BUILD)/%.rel,$(BIOS_STAGE1_SRC))
@@ -105,9 +106,15 @@ $(KERNEL_IHX): $(KERNEL_RELS)
 	    echo "error: kernel _PAGE0 must be exactly 256 bytes, got $$PAGE0_SIZE"; \
 	    exit 1; \
 	fi; \
-	KERNEL_BASE=$$(( $$(printf '%d' $(KERNEL_HEAP_BASE)) - $$(printf '%d' $$HEAP_ADDR) )); \
+	MIN_PINNED=$$(printf '%d' $(KERNEL_HEAP_BASE)); \
+	P=$$(printf '%d' $(KERNEL_PAGE0_BASE)); [ $$P -lt $$MIN_PINNED ] && MIN_PINNED=$$P; \
+	I=$$(printf '%d' $(KERNEL_IM2_BASE)); [ $$I -lt $$MIN_PINNED ] && MIN_PINNED=$$I; \
+	SV_SIZE=$$(awk '$$1=="_SYSVARS" {print "0x"$$3; exit}' $$PRE_MAP); \
+	SYSVARS_BASE=$$(( $$MIN_PINNED - $$(printf '%d' $$SV_SIZE) )); \
+	KERNEL_BASE=$$(( $$SYSVARS_BASE - $$(printf '%d' $$HEAP_ADDR) )); \
 	$(LD) -n -m -i $(abspath $@) \
 	      -b _CODE=$$(printf '0x%04X' $$KERNEL_BASE) \
+	      -b _SYSVARS=$$(printf '0x%04X' $$SYSVARS_BASE) \
 	      -b _HEAP=$(KERNEL_HEAP_BASE) \
 	      -b _IM2=$(KERNEL_IM2_BASE) \
 	      -b _PAGE0=$(KERNEL_PAGE0_BASE) \
@@ -127,7 +134,28 @@ $(KERNEL_IHX): $(KERNEL_RELS)
 	    echo "error: kernel _PAGE0 expected at $(KERNEL_PAGE0_BASE), got $$PAGE0_FINAL"; \
 	    exit 1; \
 	fi; \
-	TOTAL=$$(( ( $$(printf '%d' $$PAGE0_FINAL) + $$(printf '%d' $(KERNEL_PAGE0_SIZE)) ) - $$KERNEL_BASE )); \
+	INIT_ADDR=$$(awk '$$1=="_INITIALIZED" {print "0x"$$2; exit}' $$FINAL_MAP); \
+	INIT_SIZE=$$(awk '$$1=="_INITIALIZED" {print "0x"$$3; exit}' $$FINAL_MAP); \
+	INIT_END=$$(( $$(printf '%d' $$INIT_ADDR) + $$(printf '%d' $$INIT_SIZE) )); \
+	if [ $$INIT_END -gt $$(printf '%d' $(KERNEL_PAGE0_BASE)) ]; then \
+	    OVER=$$(( $$INIT_END - $$(printf '%d' $(KERNEL_PAGE0_BASE)) )); \
+	    echo "error: _INITIALIZED ends at $$(printf '0x%04X' $$INIT_END), overruns _PAGE0 ($(KERNEL_PAGE0_BASE)) by $$OVER bytes."; \
+	    echo "       page0_install would corrupt initialized data (e.g. device-name strings)."; \
+	    echo "       reclaim $$OVER bytes of _CODE/_INITIALIZED, or raise KERNEL_PAGE0_BASE."; \
+	    exit 1; \
+	fi; \
+	SV_ADDR=$$(awk '$$1=="_SYSVARS" {print "0x"$$2; exit}' $$FINAL_MAP); \
+	SV_SIZE=$$(awk '$$1=="_SYSVARS" {print "0x"$$3; exit}' $$FINAL_MAP); \
+	SV_END=$$(( $$(printf '%d' $$SV_ADDR) + $$(printf '%d' $$SV_SIZE) )); \
+	if [ $$SV_END -gt 65536 ]; then \
+	    OVER=$$(( $$SV_END - 65536 )); \
+	    echo "error: _SYSVARS ends at $$(printf '0x%05X' $$SV_END), wraps past 0xFFFF into page 0 by $$OVER bytes."; \
+	    echo "       FAT scratch/queue state would collide with the installed low page."; \
+	    echo "       reclaim $$OVER bytes so _CODE+_INITIALIZED+_SYSVARS fit below _PAGE0."; \
+	    exit 1; \
+	fi; \
+	TOP_END=$$(( $$(printf '%d' $(KERNEL_IM2_BASE)) + $$(printf '%d' $(KERNEL_IM2_SIZE)) )); \
+	TOTAL=$$(( $$TOP_END - $$KERNEL_BASE )); \
 	echo "$@: kernel_base=$$(printf '0x%04X' $$KERNEL_BASE) heap=$$HEAP_FINAL im2=$$IM2_FINAL page0=$$PAGE0_FINAL total=$$TOTAL"
 
 $(ZX0):
@@ -142,9 +170,8 @@ $(BUILD)/stage1.bin: $(BUILD)/stage1.ihx
 $(KERNEL_BIN): $(KERNEL_IHX)
 	@mkdir -p $(BIN)
 	@CODE_ADDR=$$(awk '$$1=="_CODE" {print "0x"$$2; exit}' $(BUILD)/kernel.map); \
-	PAGE0_ADDR=$$(awk '$$1=="_PAGE0" {print "0x"$$2; exit}' $(BUILD)/kernel.map); \
-	PAGE0_SIZE=$$(awk '$$1=="_PAGE0" {print "0x"$$3; exit}' $(BUILD)/kernel.map); \
-	TOTAL=$$(( ( $$(printf '%d' $$PAGE0_ADDR) + $$(printf '%d' $$PAGE0_SIZE) ) - $$(printf '%d' $$CODE_ADDR) )); \
+	TOP_END=$$(( $$(printf '%d' $(KERNEL_IM2_BASE)) + $$(printf '%d' $(KERNEL_IM2_SIZE)) )); \
+	TOTAL=$$(( $$TOP_END - $$(printf '%d' $$CODE_ADDR) )); \
 	$(OBJCOPY) -I ihex -O binary $< $@; \
 	truncate -s $$TOTAL $@; \
 	echo "$@: $$(stat -c%s $@) bytes"

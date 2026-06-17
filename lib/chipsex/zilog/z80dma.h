@@ -631,6 +631,13 @@ uint64_t z80dma_write(z80dma_t *dma, uint8_t data)
             dma->direction_ab = false;     // Port B (I/O) -> Port A (memory)
             dma->compat_state = 1;         // Expect A address + count
             return dma->pins;
+        case 0x7D:
+            // WR0 with bit 2 set: A->B direction (Port A memory -> Port B I/O).
+            // Same address+count programming as 0x79; only the transfer
+            // direction differs, so device writes (RAM -> FDC/SASI) work too.
+            dma->direction_ab = true;      // Port A (memory) -> Port B (I/O)
+            dma->compat_state = 1;         // Expect A address + count
+            return dma->pins;
         case 0x14:
             dma->wr[1] = data;
             dma->port_a.is_memory = true;

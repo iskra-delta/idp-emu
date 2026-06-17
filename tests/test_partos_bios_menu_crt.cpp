@@ -36,59 +36,6 @@ bool write_invalid_nvram(const std::filesystem::path &path)
     return (bool)file;
 }
 
-std::vector<std::string> split_lines(const std::string &text)
-{
-    std::vector<std::string> lines;
-    std::string current;
-    for (char ch : text) {
-        if (ch == '\n') {
-            lines.push_back(current);
-            current.clear();
-        } else {
-            current.push_back(ch);
-        }
-    }
-    if (!current.empty())
-        lines.push_back(current);
-    return lines;
-}
-
-bool has_line_fragment(const std::vector<std::string> &lines,
-                       size_t row,
-                       size_t col,
-                       const std::string &fragment)
-{
-    if (row >= lines.size())
-        return false;
-    const std::string &line = lines[row];
-    if (line.size() < col + fragment.size())
-        return false;
-    return line.compare(col, fragment.size(), fragment) == 0;
-}
-
-bool wait_for_fragment(partner_crt &emu,
-                       size_t row,
-                       size_t col,
-                       const std::string &fragment)
-{
-    for (uint64_t ticks = 0; ticks < TICK_LIMIT; ++ticks) {
-        emu.tick();
-        if (has_line_fragment(split_lines(emu.dump_terminal_text()), row, col, fragment))
-            return true;
-    }
-    return false;
-}
-
-bool wait_for_text_contains(partner_crt &emu, const std::string &fragment)
-{
-    for (uint64_t ticks = 0; ticks < TICK_LIMIT; ++ticks) {
-        emu.tick();
-        if (emu.dump_terminal_text().find(fragment) != std::string::npos)
-            return true;
-    }
-    return false;
-}
-
 bool wait_for_any_text(partner_crt &emu,
                        const std::string &a,
                        const std::string &b)

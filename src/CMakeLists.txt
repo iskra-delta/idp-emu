@@ -47,6 +47,10 @@ target_link_libraries(idp-gdp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL:
 add_executable(idp-bootload-probe probe_bootload.cpp ${IDP_CORE_SOURCES})
 target_link_libraries(idp-bootload-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
 
+add_executable(idp-kernel-probe probe_kernel.cpp ${IDP_CORE_SOURCES})
+target_link_libraries(idp-kernel-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
+target_compile_definitions(idp-kernel-probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+
 # Optional: define your own debug macro if needed
 target_compile_definitions(idp-emu PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)
 target_compile_definitions(idp-probe PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)

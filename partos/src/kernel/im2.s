@@ -1,13 +1,15 @@
             ;; im2.s
             ;;
-            ;; reserved top-of-common-ram im 2 vector page for the kernel.
-            ;; this page sits between the system heap and the final kernel
-            ;; page/stack block.
+            ;; reserved top-of-common-ram im 2 vector table for the kernel.
+            ;; it spans the final two pages of memory. the kernel stack and heap
+            ;; now live directly below it, and the table stays page-aligned
+            ;; because the cpu forms each handler address as (i << 8) | vector.
             ;;
             ;;   ... kernel code/data ...
-            ;;   0xf800..0xfdff  kernel heap         (1536 bytes)
-            ;;   0xfe00..0xfeff  kernel im 2 table   (256 bytes)
-            ;;   0xff00..0xffff  kernel page 0/stack (256 bytes)
+            ;;   0xf900..0xf9ff  kernel page0 block  (256 bytes)
+            ;;   0xfa00..0xfd7f  kernel heap         (896 bytes)
+            ;;   0xfd80..0xfdff  kernel stack        (128 bytes)
+            ;;   0xfe00..0xffff  kernel im 2 table   (512 bytes)
             ;;
             ;; 2026-06-14   tstih
             .module im2

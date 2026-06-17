@@ -38,6 +38,8 @@
 fd_init::
             ld      d,a
 
+            call    fd_set_geom$        ; a=unit -> fd_spt$ / fd_n$ from nvram
+
             call    fd_controller_init$
             jr      c,fdi_fail$
 
@@ -101,6 +103,41 @@ fd_recal_unit$:
 fdru_fail$:
             scf
             ret
+
+            ;; ----------------------------------------------------------------
+            ;; fd_set_geom$()
+            ;; ----------------------------------------------------------------
+            ;; boot is always fd0, so read its 2-bit floppy type from nvram byte
+            ;; 1 (bits 7:6) and store the read geometry (sectors/track + fdc
+            ;; sector-size code n) the sector reader needs. absent -> PARTNER.
+            ;; ----------------------------------------------------------------
+fd_set_geom$:
+            ld      a,(bios_nvram_cache + FD_NVRAM_TYPE_BYTE)
+            and     #FD_NVRAM_FD0_MASK
+            rlca
+            rlca                        ; a = type (1..3), 0 if absent
+            or      a
+            jr      nz,fsg_type$
+            inc     a                   ; absent -> PARTNER (type 1)
+fsg_type$:
+            dec     a
+            add     a,a                 ; (type-1) * 2 (2 bytes per entry)
+            ld      e,a
+            ld      d,#0
+            ld      hl,#fd_geom_table$
+            add     hl,de
+            ld      a,(hl)
+            ld      (fd_spt$),a         ; sectors per track
+            inc     hl
+            ld      a,(hl)
+            ld      (fd_n$),a           ; fdc sector-size code (1=256, 2=512)
+            ret
+
+            ;; per floppy type (1..3): sectors/track, fdc sector-size code.
+fd_geom_table$:
+            .db     18,1                ; 1: PARTNER  18 spt, 256-byte
+            .db      9,2                ; 2: DOS-720K  9 spt, 512-byte
+            .db      9,2                ; 3: DOS-360K  9 spt, 512-byte
 
 fd_wait_int$:
             ld      b,#64
@@ -176,19 +213,26 @@ fdw_ph$:
 fd_read_lba::
             ld      (fd_dest$),hl       ; stash destination for the data phase
 
-            ;; lba -> head (0/1) + sector R (1-based); cylinder is always 0
+            ;; lba -> head (0/1) + sector R (1-based) using the configured spt;
+            ;; cylinder is always 0 (the rom only reads cylinder 0).
+            ld      c,a                 ; c = lba
+            ld      a,(fd_spt$)
+            ld      b,a                 ; b = spt
             ld      e,#0                ; head 0
-            cp      #FD_BOOT_SPT
+            ld      a,c
+            cp      b
             jr      c,frl_h0$
-            sub     #FD_BOOT_SPT
+            sub     b
             inc     e                   ; head 1
 frl_h0$:
-            ;; patch the variable fields of the command template (fd_cmd$ lives
-            ;; in the decompressed RAM image, so it is writable). C and N/GPL/DTL
-            ;; are pre-baked in the template.
+            ;; patch the variable command-template fields (fd_cmd$ is in the
+            ;; decompressed ram image, so it is writable). C/GPL/DTL are baked
+            ;; in; R, EOT, N and the head/unit byte vary per call + geometry.
             inc     a                   ; a = R (1-based sector)
             ld      (fd_cmd$+4),a       ; R
             ld      (fd_cmd$+6),a       ; EOT = R
+            ld      a,(fd_n$)
+            ld      (fd_cmd$+5),a       ; N (sector-size code from nvram)
             ld      a,e
             ld      (fd_cmd$+3),a       ; H = head
             add     a,a
@@ -209,16 +253,24 @@ frl_send$:
             inc     hl
             djnz    frl_send$
 
-            ;; execution phase: pull 256 data bytes into the destination
+            ;; execution phase: pull one sector (256 bytes for n=1, 512 for n=2)
+            ;; in 256-byte passes (fd_read_data$ clobbers bc, so the inner byte
+            ;; count stays in h and the pass count on the stack).
             ld      de,(fd_dest$)
+            ld      a,(fd_n$)
+            ld      b,a                 ; 256-byte passes = n (1 for 256, 2 for 512)
+frl_pass$:
+            push    bc
             ld      h,#0                ; 256-iteration counter
 frl_data$:
             call    fd_read_data$
-            jr      c,frl_fail$
+            jr      c,frl_dfail$
             ld      (de),a
             inc     de
             dec     h
             jr      nz,frl_data$
+            pop     bc
+            djnz    frl_pass$
 
             ;; result phase: ST0 must report normal termination, then drain the
             ;; remaining 6 status bytes so the controller returns to idle.
@@ -235,6 +287,8 @@ frl_res$:
             xor     a
             ret
 
+frl_dfail$:
+            pop     bc                  ; drop the pass counter
 frl_fail$:
             ld      a,#1
             or      a
@@ -252,3 +306,11 @@ fd_init_done$:
             .db     0x00
 fd_dest$:
             .ds     2
+fd_spt$:
+            .ds     1                   ; boot floppy sectors/track (from nvram)
+            .globl  fd_n$
+fd_n$:
+            ;; fdc sector-size code (1=256, 2=512). doubles as the boot loader's
+            ;; sector size >> 8: fd_set_geom$ sets it for the floppy, the hd boot
+            ;; path forces it to 1. see boot_device$ in start.s.
+            .ds     1

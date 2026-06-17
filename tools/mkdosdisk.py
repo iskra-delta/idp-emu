@@ -17,6 +17,7 @@
 #
 # 2026-06-15   tstih
 import math
+import os
 import struct
 import sys
 
@@ -24,6 +25,36 @@ SECTOR = 256                      # logical sector size (Partner hardware)
 OS_STAGING_BYTES = 8 * 1024       # 8 KiB reserved for the OS, after the boot sector
 OS_STAGING_SECTORS = OS_STAGING_BYTES // SECTOR
 RESERVED_SECTORS = 1 + OS_STAGING_SECTORS   # boot sector + OS staging
+
+
+def build_fake_shell_xl():
+    """Return one minimal valid XL image whose entry just idles forever.
+
+    Layout:
+      12-byte XL header
+      0 relocation entries
+      244-byte payload
+
+    The payload is:
+      halt
+      jr $-1 to the halt
+
+    so once the shell thread starts it simply sleeps between interrupts.
+    Total file size is exactly 256 bytes, which matches the current PartOS
+    boot loader contract (whole-file reads must stay 256-byte aligned).
+    """
+    code = bytearray(244)
+    code[0:3] = bytes((0x76, 0x18, 0xFD))  # halt ; jr back to halt
+
+    hdr = bytearray(12)
+    hdr[0:2] = b"XL"
+    hdr[2] = 0x01                          # version
+    hdr[3] = 0x00                          # flags
+    struct.pack_into("<H", hdr, 4, 0x0000)    # entry offset within payload
+    struct.pack_into("<H", hdr, 6, len(code))  # payload bytes
+    struct.pack_into("<H", hdr, 8, 0x0000)     # relocation count
+    struct.pack_into("<H", hdr, 10, 0x0000)    # reserved
+    return bytes(hdr + code)
 
 
 def fat_sectors(total, reserved, num_fats, root_sectors, spc, fat_bits):
@@ -73,8 +104,22 @@ def build_bpb(total_sectors, spc, root_entries, media, spt, heads,
     return bs
 
 
+def _set_fat(fat, fat_bits, cluster, value):
+    if fat_bits == 12:
+        off = cluster + (cluster >> 1)              # cluster * 3 / 2
+        if cluster & 1:
+            fat[off] = (fat[off] & 0x0F) | ((value << 4) & 0xF0)
+            fat[off + 1] = (value >> 4) & 0xFF
+        else:
+            fat[off] = value & 0xFF
+            fat[off + 1] = (fat[off + 1] & 0xF0) | ((value >> 8) & 0x0F)
+    else:
+        struct.pack_into("<H", fat, cluster * 2, value & 0xFFFF)
+
+
 def build_image(path, total_sectors, spc, root_entries, media, spt, heads,
-                fat_bits, drive_num, label):
+                fat_bits, drive_num, label, files=None):
+    os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     root_sectors = math.ceil(root_entries * 32 / SECTOR)
     fatsz, clusters = fat_sectors(total_sectors, RESERVED_SECTORS, 2,
                                   root_sectors, spc, fat_bits)
@@ -99,16 +144,43 @@ def build_image(path, total_sectors, spc, root_entries, media, spt, heads,
         fat[2] = 0xFF
         fat[3] = 0xFF
     fat_start = RESERVED_SECTORS
-    for i in range(2):
-        off = (fat_start + i * fatsz) * SECTOR
-        img[off:off + len(fat)] = fat
 
-    # root directory: a single volume-label entry
+    # root directory: a single volume-label entry, then any requested files.
     root_start = fat_start + 2 * fatsz
+    data_start = root_start + root_sectors
     vol = bytearray(32)
     vol[0:11] = label.ljust(11)[:11].encode("ascii")
     vol[11] = 0x08                                  # ATTR_VOLUME_ID
     img[root_start * SECTOR: root_start * SECTOR + 32] = vol
+
+    # place requested files in the data region, chaining clusters in the FAT
+    # and writing one 8.3 root entry each. (small test fixtures only.)
+    next_cluster = 2
+    slot = 1
+    cluster_bytes = spc * SECTOR
+    for name11, data in (files or []):
+        nclusters = max(1, math.ceil(len(data) / cluster_bytes))
+        start_cluster = next_cluster
+        for i in range(nclusters):
+            cl = start_cluster + i
+            sec = data_start + (cl - 2) * spc
+            chunk = data[i * cluster_bytes:(i + 1) * cluster_bytes]
+            img[sec * SECTOR: sec * SECTOR + len(chunk)] = chunk
+            eoc = 0xFFF if fat_bits == 12 else 0xFFFF
+            _set_fat(fat, fat_bits, cl, eoc if i == nclusters - 1 else cl + 1)
+        ent = bytearray(32)
+        ent[0:11] = name11.ljust(11)[:11].encode("ascii")
+        ent[11] = 0x20                              # ATTR_ARCHIVE (regular file)
+        struct.pack_into("<H", ent, 26, start_cluster)
+        struct.pack_into("<I", ent, 28, len(data))
+        eoff = root_start * SECTOR + slot * 32
+        img[eoff:eoff + 32] = ent
+        slot += 1
+        next_cluster += nclusters
+
+    for i in range(2):
+        off = (fat_start + i * fatsz) * SECTOR
+        img[off:off + len(fat)] = fat
 
     with open(path, "wb") as f:
         f.write(img)
@@ -122,6 +194,19 @@ def build_image(path, total_sectors, spc, root_entries, media, spt, heads,
 
 
 def main():
+    shell = build_fake_shell_xl()
+
+    # test-fixture mode: a FAT12 floppy carrying one /SHELL.XL file, for the
+    # kernel smoke test (idp-kernel-probe). usage: mkdosdisk.py --shelldisk PATH
+    if len(sys.argv) > 1 and sys.argv[1] == "--shelldisk":
+        path = sys.argv[2] if len(sys.argv) > 2 else "/tmp/fat-shell.img"
+        build_image(path, total_sectors=80 * 2 * 18, spc=1, root_entries=112,
+                    media=0xF9, spt=18, heads=2, fat_bits=12,
+                    drive_num=0x00, label="FDD DOS    ",
+                    files=[("SHELL   XL ", shell)])
+        print(f"{path}: FAT12 floppy with /SHELL.XL ({len(shell)} bytes)")
+        return
+
     out_dir = sys.argv[1] if len(sys.argv) > 1 else "disks"
 
     # Floppy: 720 KiB, 80 cyl x 2 heads x 18 spt x 256 B = 737,280 bytes.
@@ -129,14 +214,16 @@ def main():
     build_image(f"{out_dir}/fdd-dos.img",
                 total_sectors=80 * 2 * 18, spc=1, root_entries=112,
                 media=0xF9, spt=18, heads=2, fat_bits=12,
-                drive_num=0x00, label="FDD DOS    ")
+                drive_num=0x00, label="FDD DOS    ",
+                files=[("SHELL   XL ", shell)])
 
     # Hard disk: Seagate ST-412, 306 cyl x 4 heads x 32 spt x 256 B
     # = 10,027,008 bytes. The Xebec presents pure LBA blocks of 256 B.
     build_image(f"{out_dir}/hdd-dos.img",
                 total_sectors=306 * 4 * 32, spc=2, root_entries=512,
                 media=0xF8, spt=32, heads=4, fat_bits=16,
-                drive_num=0x80, label="HDD DOS    ")
+                drive_num=0x80, label="HDD DOS    ",
+                files=[("SHELL   XL ", shell)])
 
 
 if __name__ == "__main__":

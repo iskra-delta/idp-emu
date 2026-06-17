@@ -555,10 +555,6 @@ void partner_gdp::render_to(display &disp)
     const auto avdc_char_addr = [&](const std::vector<uint16_t>& line_bases, int row, int col) -> uint16_t {
         return (uint16_t)((line_bases[(size_t)row] + col) & 0x3FFFu);
     };
-    const auto map_avdc_to_disp = [&](int ax, int ay, int& dx, int& dy) {
-        const int fx = (ax * FULL_W) / avdc_raster_w;
-        map_full_to_disp(fx, ay, dx, dy);
-    };
     const auto map_avdc_x_span_to_disp = [&](int ax, int& dx0, int& dx1) {
         dx0 = (ax * FULL_W) / avdc_raster_w;
         dx1 = ((ax + 1) * FULL_W) / avdc_raster_w;

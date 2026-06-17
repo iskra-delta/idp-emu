@@ -978,6 +978,30 @@ void partner::apply_pio_device_output(pio_port_id port, uint8_t data)
     }
 }
 
+void partner::pulse_pio_output_ack(pio_port_id port)
+{
+    const int idx = pio_port_index(port);
+    if (pio_device_cfg_[idx].kind == pio_device_kind::none)
+        return;
+
+    uint64_t bus = pio.pins;
+    bus &= ~(Z80PIO_CE | Z80PIO_IORQ | Z80PIO_RD | Z80PIO_M1);
+    if (port == pio_port_id::a) {
+        bus |= Z80PIO_BSTB;
+        bus &= ~Z80PIO_ASTB;        // active-low strobe assert
+        bus = z80pio_tick(&pio, bus);
+        bus |= Z80PIO_ASTB;         // deassert -> ready clears, interrupt requests
+        bus = z80pio_tick(&pio, bus);
+    } else {
+        bus |= Z80PIO_ASTB;
+        bus &= ~Z80PIO_BSTB;
+        bus = z80pio_tick(&pio, bus);
+        bus |= Z80PIO_BSTB;
+        bus = z80pio_tick(&pio, bus);
+    }
+    pio.pins = bus;
+}
+
 void partner::apply_sio_modem_inputs(uint64_t &bus_pins, sio_port_id port_a, sio_port_id port_b)
 {
     auto eval_modem = [&](sio_port_id port) {
@@ -1480,6 +1504,8 @@ void partner::tick()
         bool ready = true;
         if (!src.is_memory)
         {
+            // Read direction (device -> RAM): the source is an I/O port, so
+            // wait until the source device actually has a byte to hand over.
             const uint8_t src_port = (uint8_t)(src.address & 0xFF);
             if (dma.state == Z80DMA_STATE_WRITE) {
                 // Once a byte has been latched, keep RDY asserted long enough
@@ -1489,6 +1515,24 @@ void partner::tick()
                 ready = (fdc.phase == I8272_PHASE_EXECUTE);
             } else if (src_port == 0x11) {
                 ready = idpartner_sasi_drq(&sasi_);
+            }
+        }
+        else
+        {
+            // Write direction (RAM -> device): the source is memory (always
+            // ready), so gate on whether the destination I/O device can accept
+            // a byte yet. This makes DMA writes to the FDC/SASI work.
+            const z80dma_port_t &dst = dma.direction_ab ? dma.port_b : dma.port_a;
+            if (!dst.is_memory)
+            {
+                const uint8_t dst_port = (uint8_t)(dst.address & 0xFF);
+                if (dma.state == Z80DMA_STATE_WRITE) {
+                    ready = true;
+                } else if (dst_port == 0xF1) {
+                    ready = (fdc.phase == I8272_PHASE_EXECUTE);
+                } else if (dst_port == 0x11) {
+                    ready = idpartner_sasi_drq(&sasi_);
+                }
             }
         }
         dma_ready_input_ = ready;
@@ -1931,7 +1975,11 @@ void partner::io_write(uint16_t port, uint8_t data)
         const pio_port_id pio_port = (port & 0x02) ? pio_port_id::b : pio_port_id::a;
         z80pio_cpu_write(&pio, (uint8_t)port, data);
         if (is_data_write)
+        {
             apply_pio_device_output(pio_port, pio.port[(port & 0x02) ? Z80PIO_PORT_B : Z80PIO_PORT_A].output);
+            if (pio.port[(port & 0x02) ? Z80PIO_PORT_B : Z80PIO_PORT_A].mode == Z80PIO_MODE_OUTPUT)
+                pulse_pio_output_ack(pio_port);
+        }
         return;
     }
 
