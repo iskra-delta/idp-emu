@@ -25,6 +25,8 @@
             .globl  fat_update_file_dirent$
 
             .globl  fat_load_de$
+            .globl  fat_fs_de$
+            .globl  fat_fs_byte$
             .globl  fat_store_de$
             .globl  fat_read_volume_sector$
             .globl  fat_write_volume_sector$
@@ -49,16 +51,12 @@
             ;; ----------------------------------------------------------------
 fat_write_fat_copies$:
             ld      (fat_mut_sector$),de
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_SECTORS_PER_FAT
-            add     hl,bc
-            call    fat_load_de$
+            call    fat_fs_de$
             ld      (fat_mut_step$),de
 
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_NUM_FATS
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             ld      (fat_mut_count$),a
 
 fwfc_loop$:
@@ -87,10 +85,8 @@ fwfc_ok$:
             ;; fat_eoc_value$() -> <hl> eoc_marker
             ;; ----------------------------------------------------------------
 fat_eoc_value$:
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_FAT_BITS
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             cp      #12
             ld      hl,#0xffff
             ret     nz
@@ -132,10 +128,8 @@ fat_set_fat_entry$:
             ld      (fat_fat_offset_tmp$),de
 
             push    de
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_FAT_START
-            add     hl,bc
-            call    fat_load_de$
+            call    fat_fs_de$
             pop     hl
             ld      a,l
             ld      (fat_offset_low$),a
@@ -156,10 +150,8 @@ fat_set_fat_entry$:
             add     hl,de
 
             push    hl
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_FAT_BITS
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             pop     hl
             cp      #12
             jp      nz,fsfe_16$
@@ -260,10 +252,8 @@ fsfe_16$:
             ;; FAT entry. the winning cluster number is returned in de.
             ;; ----------------------------------------------------------------
 fat_find_free_cluster$:
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_ALLOC_HINT
-            add     hl,bc
-            call    fat_load_de$
+            call    fat_fs_de$
             push    de
             call    fat_cluster_valid$
             pop     de
@@ -371,10 +361,8 @@ fat_zero_cluster$:
             ld      bc,#FAT_SECTOR_SIZE - 1
             ldir
 
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_SECTORS_PER_CL
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             ld      (fat_mut_count$),a
 
 fzc_loop$:
@@ -438,8 +426,6 @@ fufd_have_sector$:
             add     hl,de
             push    hl
             ld      hl,(fat_mut_file$)
-            ld      bc,#FATFILE_FIRST_CLUSTER
-            add     hl,bc
             call    fat_load_de$
             pop     hl
             call    fat_store_de$

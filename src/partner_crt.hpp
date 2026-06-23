@@ -33,6 +33,6 @@ private:
     terminal_profile terminal_profile_ = terminal_profile::vt52;
     std::unique_ptr<terminal_emulator> terminal_;
     std::string raw_serial_;
-    std::array<std::deque<uint8_t>, 4> key_fifos_{};
+    std::deque<uint8_t> key_fifo_;
     uint16_t last_pc_ = 0xFFFF;
 };

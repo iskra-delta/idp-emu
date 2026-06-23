@@ -2,19 +2,21 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "PartOS GDP Floppy",
+      "name": "PartOS Boot",
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/bin/idp-emu",
       "args": [
         "--model",
-        "gdp",
+        "crt",
         "--rom",
         "${workspaceFolder}/partos/bin/partos.rom",
         "--nvram",
         "${workspaceFolder}/partos/partos_shadow_nvram.bin",
         "--disk",
-        "${workspaceFolder}/disks/fdd-partner-g.img"
+        "${workspaceFolder}/disks/fdd-dos.img",
+        "--hdd",
+        "${workspaceFolder}/disks/hdd-dos.img"
       ],
       "cwd": "${workspaceFolder}",
       "stopAtEntry": false,

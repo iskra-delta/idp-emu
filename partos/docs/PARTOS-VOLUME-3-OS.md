@@ -1,152 +1,176 @@
 # PARTOS VOLUME 3: OS
 
-This volume is the honest one. If Volume 1 is about the ROM that already
-boots and Volume 2 is about the kernel that already lands safely in memory,
-Volume 3 is about the part that is still mostly ahead of us.
+Volume 1 covers the ROM, Volume 2 covers the micro-kernel, and this volume now
+describes the layer that begins once the kernel jumps into `os.sys` at
+`0xC000`.
 
-There is a real direction here, but not a finished operating system yet.
+This volume is no longer about a planned OS. There is a real boot path, a real
+public service table, a real shell, and the first real user-space commands.
 
-## Current State
+## Current Boot Chain
 
-Right now the live PartOS build produces two concrete binary artifacts:
+The current boot flow is:
 
-- `partos/bin/partos.rom`
-- `partos/bin/kernel.bin`
+1. the ROM uncompresses itself to safe RAM, disables the ROM overlay, and
+   reads the split reserved image from disk
+2. the ROM loads:
+   - sectors `1..8` (`2 KiB`) to `0x0000` as `kernel.sys`
+   - sectors `9..72` (`16 KiB`) to `0xC000` as `os.sys`
+3. the ROM jumps to the kernel page-0 entry
+4. the kernel initializes memory, system objects, threads, vectors, and jumps
+   into the first OS thread
+5. `os.sys`:
+   - caches the detected Partner model
+   - snapshots the NVRAM setup block
+   - installs the `rst 0x10` service-query bridge
+   - wires the CTC tick into the scheduler / timer chain
+   - initializes and probes drivers
+   - registers the public `"partos"` service
+   - mounts the boot FAT volume
+   - loads `/SHELL.COM`
+6. the shell later resolves `/NAME.COM` and launches commands as normal
+   processes
 
-`src/os/` exists as the reserved home for higher-level operating-system code,
-but it does not yet contain the shell, utilities, or system programs that
-would make the project feel like a complete OS.
+## Reserved-Sector Image
 
-So the current stack is:
+The ROM-to-OS contract is now concrete.
 
-- ROM: real
-- kernel scaffold: real
-- drivers: real
-- higher-level OS layer: planned, not implemented
+The bootable hard-disk image reserves `73` sectors at the start:
 
-## What the ROM Expects from "the OS"
+- sector `0`: BPB / boot sector (`0x55AA` present)
+- sectors `1..8`: `kernel.sys`
+- sectors `9..72`: `os.sys`
 
-The ROM only knows a few simple facts:
+`tools/mkdosdisk.py` is the house tool that packs those split images into the
+reserved region and then builds a DOS-style FAT volume around them.
 
-1. it may enter setup for a few seconds after the `PARTOS` banner
-2. it should try `fd0` first and `sda` second
-3. it should read sector `0` plus sectors `1..32`
-4. it should require `0x55AA` at the end of sector `0`
-5. it should jump to `__sys_page0_install` at `0xFF6B`
+## OS Responsibilities
 
-That is enough to boot something, but it is not yet a full formal OS-image
-specification.
+The OS layer now owns:
 
-The biggest gap is the continuation target:
+- the public `"partos"` syscall service
+- console and keyboard policy above the raw drivers
+- process creation and teardown
+- relocatable program loading
+- FAT-backed boot-volume access
+- shell command resolution (`NAME` -> `/NAME.COM`)
+- the first user-space tools
 
-- the ROM sets `HL = 0xE000`
-- `__sys_page0_install` eventually jumps to `HL`
-- the linked kernel proper begins at `0xE818`
+The kernel still owns:
 
-So there is still a missing piece of written contract around what must live
-at `0xE000..0xE817` in the reserved-sector image.
+- page 0 and vector plumbing
+- interrupt reference counting
+- memory allocator primitives
+- thread scheduling and waits
+- low-level device model and IM2 dispatch
 
-## Disk Format Foundation
+## Public Service
 
-Even though the ROM does raw sector reads, the media layout is already being
-shaped to coexist with ordinary FAT expectations.
+The named service is `"partos"`.
 
-`tools/mkdosdisk.py` builds Partner-friendly superfloppy images with:
+It currently exports:
 
-- `256`-byte sectors
-- no MBR
-- a BPB in sector `0`
-- `33` reserved sectors total
-- normal FAT region after the reserved area
-- normal fixed root directory after the FATs
+- system snapshot access (`get_sys_info`)
+- console calls (`clear_screen`, `set_xy`, `write_console`)
+- keyboard calls (`peek_keyboard`, `read_keyboard`)
+- command launch (`run_command`)
+- intrusive list helpers
+- memory allocation/free
+- interrupt/vector helpers
+- service registration/query
+- events and timers
+- thread calls
+- process calls
+- FAT mount / lookup / open / create / read / write / readdir
 
-That reserved area is the bridge between today's ROM and tomorrow's OS:
+User-space commands obtain this table through `rst 0x10` and then stay on the
+public ABI surface. They do not call private kernel labels directly.
 
-- sector `0` is the boot record plus BPB plus `0x55AA`
-- sectors `1..32` are an `8 KiB` staging window for OS code
+## Executable Format
 
-Current geometries:
+User programs are distributed as `.COM` files.
 
-| Medium | Geometry | Size |
-|---|---|---:|
-| floppy | `80 x 2 x 18 x 256` | `737280` bytes |
-| hard disk | `306 x 4 x 32 x 256` | `10027008` bytes |
+Each `.COM` file is:
 
-The project goal is DOS-style and Atari-ST-friendly media layout. The ROM is
-not the piece that provides that compatibility. The image format and future
-OS code are.
+- a fixed 16-byte COM header
+- one embedded relocatable `.XL` image
+- optional zero padding to the chosen media/block alignment
 
-## What Belongs in the OS Layer
+The COM header currently carries:
 
-I want the split between kernel and OS to stay conceptually clean.
+- magic/version (`"CM"`, version `1`)
+- requested process stack size
+- entry hint for the embedded XL payload
+- embedded XL offset and size
+- two reserved words for future metadata
 
-The kernel and drivers should own:
+The embedded XL image carries:
 
-- banking-sensitive low-level setup
-- page 0 and vector policy
-- interrupt plumbing
-- heap and object primitives
-- device enumeration and device I/O entry points
+- magic/version (`"XL"`, version `1`)
+- linked entry offset
+- code/data payload size
+- relocation count
+- relocation table entries
+- payload bytes
 
-The higher-level OS should eventually own:
+The runtime path is:
 
-- boot-time system initialization beyond the current `halt` loop
-- filesystem policy on top of block devices
-- console and program-launch behavior
-- shell and utilities
-- long-lived system services
-- user-facing error handling and configuration tools
+1. read the whole `.COM` file into a user-heap buffer
+2. validate the COM header
+3. locate and validate the embedded XL image
+4. relocate the XL payload in place
+5. allocate a process object and a separate thread stack
+6. start the process at the relocated entry point
+7. transfer the image-buffer owner to the process
+8. reap the process, stack, events, timers, services, and image block when the
+   last thread exits
 
-`src/os/` is where that software should live once it exists.
+## Current Userland
 
-## The Open Questions That Matter Most
+The tree now ships these commands:
 
-These are not bookkeeping details. They are the decisions that will define
-what PartOS feels like when it grows past bring-up.
+- `SHELL.COM`: interactive shell
+- `LS.COM`: lists `/` or one chosen directory on the boot volume
+- `PS.COM`: shows the live process list and main-thread states
+- `MEM.COM`: prints system/user heap usage
+- `CAT.COM`: dumps one aligned file
+- `CP.COM`: copies one aligned file
+- `MV.COM`: moves one aligned file by copy+delete
+- `DEL.COM` / `RM.COM`: remove one file
+- `MKDIR.COM` / `RMDIR.COM`: create/remove directories
+- `TOUCH.COM`: create one empty file
+- `CLEAR.COM`: clear the active console
+- `ECHO.COM`: print the current argument string
+- `HELP.COM`: print the current command set
 
-### Final reserved-sector image format
+The shell itself is also a relocatable COM application. It uses only the
+public `"partos"` service for screen output, keyboard input, command launch,
+and foreground command waiting.
 
-The ROM loader behavior is stable enough to test, but the exact contents of
-the `0xE000..0xFFFF` image still need a proper contract.
+## Current Limitations
 
-At minimum that contract should say:
+The current OS is real, but it is still early.
 
-- what code begins at `0xE000`
-- where the linked kernel payload sits inside the image
-- what metadata, if any, sits ahead of it
-- how versioning will be handled
+Known limits:
 
-### Stable ROM-to-kernel ABI
+- the shell has no current-directory state yet; commands are still resolved in `/`
+- `ps` is intentionally minimal
+- file tools still operate in 256-byte aligned FAT blocks; partial-byte file
+  streaming is not finished yet
+- there is still no finished `cd` / current-directory model
+- the public system snapshot exposes the active shared/system heap and the
+  current-bank user heap, but not a full cross-bank memory view yet
+- console behavior still depends on the quality of the current emulator model,
+  especially for scrolling and terminal edge cases
 
-`__sys_page0_install` can accept version, model, flags, meta1, and a
-continuation address, but the current ROM caller only meaningfully supplies
-the model and the continuation. The interface needs to be narrowed or made
-real.
+## What Comes Next
 
-### Boot policy versus setup policy
+The immediate next OS tasks are:
 
-Today the ROM always tries `fd0` and then `sda`. That is easy to reason
-about, but it may or may not be the long-term user experience we want.
-
-### Multi-disk growth
-
-The ROM setup screen already has selectors for `sda` and `sdb`, but the
-kernel currently only publishes `sda`. If the OS is going to treat setup as
-truth, the driver layer will eventually need to catch up.
-
-### User-space and service ABI
-
-The kernel already exposes useful low-level pieces, but there is no stable
-user-facing ABI above them yet. The OS volume is where that future contract
-will need to be written.
-
-## What I Would Call Success for This Volume
-
-I do not need this volume to pretend the operating system is further along
-than it is. I need it to do two simpler jobs well:
-
-1. describe the current state without romance
-2. leave a clear runway for the next stage of work
-
-That is where PartOS stands today. The ROM can load. The kernel can land.
-The operating system itself is the next chapter.
+1. add a real current-directory model (`cd`, relative paths, `pwd`)
+2. expose the additional kernel/OS state needed for a true cross-bank memory
+   viewer
+3. lift the current 256-byte aligned file-I/O restriction
+4. keep improving shell editing/error reporting
+5. keep tightening the public ABI so future commands remain cleanly decoupled
+   from kernel internals

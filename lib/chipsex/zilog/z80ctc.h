@@ -449,17 +449,27 @@ static uint64_t _z80ctc_int(z80ctc_t* ctc, uint64_t pins) {
             // inhibit interrupt handling on downstream devices for the
             // entire duration of interrupt servicing
             pins &= ~Z80CTC_IEIO;
-            // set INT pint active until the CPU acknowledges the interrupt
-            if (chn->int_state & Z80CTC_INT_NEEDED) {
-                pins |= Z80CTC_INT;
-                chn->int_state = (chn->int_state & ~Z80CTC_INT_NEEDED) | Z80CTC_INT_REQUESTED;
-            }
-            // interrupt ackowledge from CPU (M1|IORQ): put interrupt vector
-            // on data bus, clear INT pin and go into "serviced" state.
-            if ((chn->int_state & Z80CTC_INT_REQUESTED) && ((pins & (Z80CTC_IORQ|Z80CTC_M1)) == (Z80CTC_IORQ|Z80CTC_M1))) {
-                Z80CTC_SET_DATA(pins, chn->int_vector);
-                chn->int_state = (chn->int_state & ~Z80CTC_INT_REQUESTED) | Z80CTC_INT_SERVICED;
-                pins &= ~Z80CTC_INT;
+            // A channel that is already being serviced must keep IEO low, but
+            // it must NOT re-assert INT until the CPU executes RETI. If a
+            // fresh timer expiry arrives while SERVICED is set, keep it parked
+            // in INT_NEEDED and promote it only after RETI clears SERVICED.
+            if ((chn->int_state & Z80CTC_INT_SERVICED) == 0) {
+                // Keep INT asserted from the first pending timer/counter expiry
+                // until the CPU acknowledges it, matching the level-like
+                // daisy-chain behavior already used by the SIO/PIO models.
+                if (chn->int_state & (Z80CTC_INT_NEEDED | Z80CTC_INT_REQUESTED)) {
+                    pins |= Z80CTC_INT;
+                }
+                if (chn->int_state & Z80CTC_INT_NEEDED) {
+                    chn->int_state = (chn->int_state & ~Z80CTC_INT_NEEDED) | Z80CTC_INT_REQUESTED;
+                }
+                // interrupt ackowledge from CPU (M1|IORQ): put interrupt vector
+                // on data bus, clear INT pin and go into "serviced" state.
+                if ((chn->int_state & Z80CTC_INT_REQUESTED) && ((pins & (Z80CTC_IORQ|Z80CTC_M1)) == (Z80CTC_IORQ|Z80CTC_M1))) {
+                    Z80CTC_SET_DATA(pins, chn->int_vector);
+                    chn->int_state = (chn->int_state & ~Z80CTC_INT_REQUESTED) | Z80CTC_INT_SERVICED;
+                    pins &= ~Z80CTC_INT;
+                }
             }
         }
     }

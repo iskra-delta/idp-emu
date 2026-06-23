@@ -129,8 +129,7 @@ _list_find::
             push    af
             call    __list_find$
             ex      de,hl
-            call    _ir_enable
-            ret
+            jp      _ir_enable
 
             ;; ----------------------------------------------------------------
             ;; __list_iterate$(<hl> first, <iy> fn, <bc> arg)
@@ -197,13 +196,11 @@ _list_insert::
             ld      (hl),e
             inc     hl
             ld      (hl),d
-            call    _ir_enable
-            ret
+            jp      _ir_enable
 
 lii_fail$:
             ld      de,#0x0000
-            call    _ir_enable
-            ret
+            jp      _ir_enable
 
             ;; ----------------------------------------------------------------
             ;; <de> <= _list_remove(<hl> **first, <de> *el)
@@ -250,19 +247,20 @@ lrm_found$:
             ld      (hl),c
             inc     hl
             ld      (hl),b
-            call    _ir_enable
-            ret
+            jp      _ir_enable
 
 lrm_fail$:
             ld      de,#0x0000
-            call    _ir_enable
-            ret
+            jp      _ir_enable
 
             ;; ----------------------------------------------------------------
             ;; <de> <= _list_append(<hl> **first, <de> *chain)
             ;; ----------------------------------------------------------------
             ;; appends the supplied element or pre-linked chain to the tail of
-            ;; the list and returns the appended head in hl.
+            ;; the list and returns the appended head in hl. idempotent: if the
+            ;; chain head is already linked into this list it is left in place
+            ;; (re-appending an already-linked node would splice the list onto
+            ;; itself and make it circular -- e.g. a second device-probe pass).
             ;; ----------------------------------------------------------------
 _list_append::
             call    _ir_disable
@@ -278,6 +276,13 @@ lap_walk$:
             ld      a,b
             or      c
             jr      z,lap_link$
+            ld      a,c
+            cp      e
+            jr      nz,lap_step$
+            ld      a,b
+            cp      d
+            jr      z,lap_done$         ; node already in list: skip
+lap_step$:
             ld      h,b
             ld      l,c
             jr      lap_walk$
@@ -286,10 +291,9 @@ lap_link$:
             ld      (hl),e
             inc     hl
             ld      (hl),d
-            call    _ir_enable
-            ret
+lap_done$:
+            jp      _ir_enable
 
 lap_fail$:
             ld      de,#0x0000
-            call    _ir_enable
-            ret
+            jp      _ir_enable

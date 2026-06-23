@@ -29,6 +29,7 @@
             .equ    FAT_ENAMETOOLONG,       0xfff5
             .equ    FAT_ECORRUPT,           0xfff4
             .equ    FAT_EFBIG,              0xfff3
+            .equ    FAT_ENOTEMPTY,          0xfff2
 
             ;; --- public constants -------------------------------------------
             .equ    FAT_SECTOR_SIZE,        256
@@ -52,7 +53,14 @@
             .equ    FAT_SPACE,              ' '
 
             ;; --- worker configuration ---------------------------------------
-            .equ    FAT_WORKER_STACK,       32
+            ;; the worker's call chain is deep: fat_worker -> fat_handle_mount ->
+            ;; fat_read_block -> fat_dev_call3 (pushes 4 words) -> fd_xfer_start ->
+            ;; fd_dma_start_sector -> fd_seek_dev -> fd_wait_int -> fd_write_data.
+            ;; worker + bootstrap stacks both live in the user heap; a sacrificial
+            ;; guard block is allocated between them so a deep lookup cannot
+            ;; scribble into the bootstrap stack. (user-heap only, not kernel.)
+            .equ    FAT_USER_STACK_GUARD,   8192
+            .equ    FAT_WORKER_STACK,       12288
 
             ;; --- fat_fs_t offsets (30 bytes) --------------------------------
             .equ    FATFS_DEV,              0
@@ -82,6 +90,14 @@
             .equ    FATDIRENT_ATTR,         9
             .equ    FATDIRENT_STATUS,       10
             .equ    FATDIRENT_SIZEOF,       12
+
+            ;; --- fat_dirinfo_t offsets (25 bytes) ---------------------------
+            ;; readdir output. first 12 bytes match fat_dirent_t so the worker
+            ;; reuses fat_fill_dirent_from_entry$. index (in) selects the entry;
+            ;; name (out) is the raw 8.3 field (space-padded, no embedded dot).
+            .equ    FATDIRINFO_INDEX,       12
+            .equ    FATDIRINFO_NAME,        14
+            .equ    FATDIRINFO_SIZEOF,      25
 
             ;; --- fat_file_t offsets (18 bytes) ------------------------------
             ;; first 12 bytes intentionally match fat_dirent_t exactly.
@@ -115,6 +131,10 @@
             .equ    FATREQ_OP_READ,         3
             .equ    FATREQ_OP_WRITE,        4
             .equ    FATREQ_OP_CREATE,       5
+            .equ    FATREQ_OP_READDIR,      6
+            .equ    FATREQ_OP_UNLINK,       7
+            .equ    FATREQ_OP_MKDIR,        8
+            .equ    FATREQ_OP_RMDIR,        9
 
             .equ    FATREQ_FLAG_FILE_ONLY,  0x01
 
@@ -124,6 +144,7 @@
             .equ    FAT_SCAN_END,           2
             .equ    FAT_WALK_LOOKUP,        0
             .equ    FAT_WALK_CREATE,        1
+            .equ    FAT_WALK_READDIR,       2
 
             ;; --- boot sector offsets (FAT12/FAT16) --------------------------
             .equ    FATBOOT_BPS,            11

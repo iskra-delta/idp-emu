@@ -1,35 +1,33 @@
 # os
 
-This directory is reserved for the higher-level operating-system layer: the
-part above the kernel and drivers.
+This directory now holds the higher-level PartOS layer that starts after the
+micro-kernel has installed page 0, brought the scheduler online, and jumped to
+`0xC000`.
 
-The authoritative documentation now lives in:
+The live pieces here are:
+
+- `entry.s`: first OS thread entry; caches the machine model, snapshots NVRAM,
+  installs `rst 0x10`, wires the scheduler tick, initializes drivers, and
+  registers the public `"partos"` service.
+- `boot.s`: boot-volume bootstrap; mounts the ROM-selected FAT volume, loads
+  `/SHELL.COM`, starts it as a normal process, and later resolves `/NAME.COM`
+  launches for the shell.
+- `console.s`: public console/keyboard bridge used by userland commands.
+- `process.s`: process objects, COM/XL loader, relocator, and process reaping.
+- `service.s`, `syscall.s`, `sysinfo.s`, `timer.s`: named services, exported
+  syscall table, shared system snapshot, and soft timers.
+- `fat*.s`: async FAT12/FAT16 mount, lookup, open/read/write, create, readdir,
+  and mutation support on top of the block-device layer.
+
+The current user-visible OS stack is no longer hypothetical:
+
+- the boot volume is FAT-backed,
+- the shell is a relocatable `.COM` program,
+- the current command set includes `ls`, `ps`, `mem`, `cat`, `cp`, `mv`,
+  `del`/`rm`, `mkdir`/`rmdir`, `touch`, `clear`, `echo`, and `help`,
+- commands are loaded into heap-backed buffers, relocated in place, started as
+  processes with their own stacks, and cleaned up on exit.
+
+The authoritative design notes live in:
 
 - `partos/docs/PARTOS-VOLUME-3-OS.md`
-
-That higher-level OS software is still in its first steps. The concrete pieces
-now living here are:
-
-- `fat.s`, `fat_mount.s`, `fat_lookup.s`, `fat_file.s`, `fat_create.s`,
-  `fat_mutate.s` plus `fat.inc`: a small async FAT12/FAT16 service built on
-  top of the kernel event and block-device interfaces
-- `process.s` plus `process.inc`: the current process object and XL-image
-  loader built on top of kernel threads, events and ownership
-- `syscall.s`: the current empty `"yos"` syscall service registration
-- `boot.s`: the first OS bootstrap thread that mounts the boot volume and
-  launches `/SHELL.XL`
-
-This first cut is intentionally narrow:
-
-- queue async mount and lookup requests as sysobj-shaped nodes,
-- run one dedicated FAT worker thread,
-- parse superfloppy or MBR-backed FAT12/FAT16 boot metadata,
-- fill `fat_fs_t` and perform DOS 8.3 path lookup,
-- open or create regular files asynchronously,
-- transfer 256-byte blocks and grow files by cluster when needed.
-
-The current completion/minimization plan for this FAT work lives in:
-
-- `partos/docs/FAT-MINIMIZATION-PLAN.md`
-
-The real bootable binaries today are still the ROM and the early kernel.

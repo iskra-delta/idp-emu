@@ -173,19 +173,25 @@ hdx_adv$:
             djnz    hdx_adv$
             pop     bc
             pop     de
+            ld      (hd_io_lba$),de       ; stash SASI lba before dma setup reuses de
             ld      a,b
             ld      (hd_xfer_count$),a
             call    _ir_disable
             call    hd_begin_session$
             jr      c,hdx_begin_fail$
             ;; arm the DMA before the command is issued so the first DRQ edge
-            ;; of the data phase can be consumed immediately.
+            ;; of the data phase can be consumed immediately. de still holds the
+            ;; lba for hd_issue_rw6$; push it before repurposing de as the dma
+            ;; length-1 word (hd_dma_setup$ clobbers de via otir).
+            push    de
             ld      hl,(hd_io_ptr$)
             ld      a,(hd_xfer_count$)
             dec     a
             ld      d,a                 ; length-1 high = count - 1
             ld      e,#0xff             ; length-1 low  = 255  (count*256 - 1)
             call    hd_dma_setup$
+            pop     de                  ; drop dma length-1; lba lives in hd_io_lba$
+            ld      de,(hd_io_lba$)
             ld      a,(hd_xfer_count$)
             ld      b,a
             ld      a,(hd_io_dir$)
@@ -324,12 +330,13 @@ hd_issue_rw6$:
             jr      c,hdirw_fail$
             push    de
             push    bc
-            push    hl
+            ld      hl,(hd_io_dev$)
             ld      bc,#DEV_DATA + DRV_DATA_UNIT
             add     hl,bc
             ld      a,(hl)
-            pop     hl
             and     #0x07
+            add     a,a               ; lun lives in bits 7:5 of CDB byte 1
+            add     a,a
             add     a,a
             add     a,a
             add     a,a
@@ -340,10 +347,11 @@ hd_issue_rw6$:
             ld      a,d
             call    hd_write_cmd_byte$
             jr      c,hdirw_fail$
+            ld      de,(hd_io_lba$)      ; phase wait clobbers de/e
             ld      a,e
             call    hd_write_cmd_byte$
             jr      c,hdirw_fail$
-            ld      a,b
+            ld      a,(hd_xfer_count$)   ; phase wait clobbers bc
             call    hd_write_cmd_byte$
             jr      c,hdirw_fail$
             xor     a
@@ -359,21 +367,27 @@ hdirw_fail$:
             ret
 
 hd_write_cmd_byte$:
-            ld      e,a
+            ld      e,a             ; survive phase wait (bc/de/hl preserved)
             call    hd_wait_cmd_phase$
-            ret     c
+            jr      c,hwcb_fail$
             ld      a,e
             out     (HD_PORT_DATA),a
             or      a
+            ret
+hwcb_fail$:
+            scf
             ret
 
 hd_write_data_byte$:
             ld      e,a
             call    hd_wait_data_out$
-            ret     c
+            jr      c,hwdb_fail$
             ld      a,e
             out     (HD_PORT_DATA),a
             or      a
+            ret
+hwdb_fail$:
+            scf
             ret
 
 hd_finish_cmd$:
@@ -411,33 +425,35 @@ hdw_fail$:
             scf
             ret
 
+            ;; phase waits share one loop. the compare operand is patched in
+            ;; place; bc is only the timeout counter and de/hl stay intact for
+            ;; callers that still hold an lba or block count across bytes.
 hd_wait_cmd_phase$:
-            ld      e,#HD_STATUS_CMD
-            jr      hd_wait_phase$
-
-hd_wait_data_in$:
-            ld      e,#HD_STATUS_DATA_IN
-            jr      hd_wait_phase$
-
-hd_wait_data_out$:
-            ld      e,#HD_STATUS_DATA_OUT
-            jr      hd_wait_phase$
-
+            ld      a,#HD_STATUS_CMD
+            jr      hd_wph$
 hd_wait_resp_phase$:
-            ld      e,#HD_STATUS_RESP
-hd_wait_phase$:
+            ld      a,#HD_STATUS_RESP
+            jr      hd_wph$
+hd_wait_data_in$:
+            ld      a,#HD_STATUS_DATA_IN
+            jr      hd_wph$
+hd_wait_data_out$:
+            ld      a,#HD_STATUS_DATA_OUT
+hd_wph$:
+            ld      (hd_wph_cp$+1),a
             ld      bc,#HD_POLL_TIMEOUT
-hdw_phase$:
+hdw_ph$:
             in      a,(HD_PORT_STATUS)
             cp      #0xff
             jr      z,hdw_fail$
             and     #HD_ST_REQ | HD_ST_IO | HD_ST_CD
-            cp      e
+hd_wph_cp$:
+            cp      #0x00               ; operand patched per phase
             ret     z
             dec     bc
             ld      a,b
             or      c
-            jr      nz,hdw_phase$
+            jr      nz,hdw_ph$
             jr      hdw_fail$
 
             ;; ----------------------------------------------------------------
@@ -451,6 +467,16 @@ hdw_phase$:
             ;; ----------------------------------------------------------------
 _hd_isr::
             call    drv_isr_enter
+            ;; ignore spurious vector-0x90 acknowledges that arrive while the
+            ;; device is not marked busy for an async dma transfer.
+            ld      hl,(hd_io_dev$)
+            ld      a,h
+            or      l
+            jr      z,hdi_spurious$
+            ld      de,#DEV_FLAGS
+            add     hl,de
+            bit     1,(hl)
+            jr      z,hdi_spurious$
 
             call    hd_finish_cmd$
             jr      c,hdi_err$
@@ -474,8 +500,14 @@ hdi_done$:
 hdi_noerr$:
             res     2,(hl)
 hdi_signal$:
+            ld      hl,(hd_io_event$)
+            ld      a,h
+            or      l
+            jp      z,hdi_spurious$
             ld      ix,(hd_io_event$)
             call    drv_signal_done
+            jp      drv_isr_exit
+hdi_spurious$:
             jp      drv_isr_exit
 
 hd_dev_drv::
@@ -498,6 +530,9 @@ hd_dev0$:
             .dw     hd_dev_drv
 
 hd_io_ptr$:
+            .dw     0x0000
+
+hd_io_lba$:
             .dw     0x0000
 
 hd_io_dev$:

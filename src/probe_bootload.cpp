@@ -1,32 +1,36 @@
 // probe_bootload.cpp
 //
-// Headless verification that the PartOS boot ROM loads the OS image byte-for-
-// byte. It does NOT boot into an OS: it lets the bootstrap decompress stage-1,
-// redirects execution straight to boot_main$ (isolating the load path from the
-// NVRAM/setup-window gate), runs until the loader hands off at the linked
-// __sys_page0_install entry, then compares RAM against the disk bytes.
+// Headless verification that the PartOS boot ROM loads the split OS image
+// byte-for-byte. It does NOT continue through the kernel: it lets the
+// bootstrap decompress stage-1, redirects execution straight to the selected
+// boot path (isolating the load path from the NVRAM/setup-window gate), runs
+// until the ROM hands off to the low-page kernel entry at 0x0000, then
+// compares RAM against the disk bytes.
 //
 // Layout the loader produces (start.s):
-//   disk sector 0      -> 0xDF00..0xDFFF   (boot record)
-//   disk sectors 1..32 -> 0xE000..0xFFFF   (8 KB OS image)
+//   disk sector 0           -> BOOT_RECORD_BUF  (boot record scratch)
+//   disk sectors 1..8       -> 0x0000           (micro-kernel)
+//   disk sectors 9..72      -> 0xC000           (OS payload)
+//
+// One exception is expected after the copy completes: the ROM writes a tiny
+// boot-hint block into the dead bytes at page-0+4..+7 before it jumps to the
+// kernel. Those bytes are therefore excluded from the byte-for-byte compare.
 //
 // 2026-06-15   tstih
 #include "partner_crt.hpp"
 #include <cstdint>
 #include <cstdio>
 #include <fstream>
-#include <regex>
 #include <string>
 #include <vector>
 
 namespace {
 // Absolute addresses from partos/build/stage1.map + start.lst:
-constexpr uint16_t PC_START_MAIN = 0x2000; // stage-1 entry (decompressed)
 constexpr uint16_t PC_STAGE1_READY = 0x2003; // overlay disabled, about to call model_detect
-constexpr uint16_t PC_FD_PATH    = 0x2046; // boot_fd_path in start.s
-constexpr uint16_t PC_HD_PATH    = 0x2052; // boot_hd_path in start.s
-constexpr uint16_t ADDR_MODEL    = 0xDE0C; // model byte (_SYSVARS @ 0xDE00)
-constexpr uint16_t ADDR_NV_VALID = 0xDE15; // bios_nvram_valid
+constexpr uint16_t PC_BOOT_FD    = 0x2046; // boot_fd_path in start.s
+constexpr uint16_t PC_BOOT_HD    = 0x2052; // boot_hd_path in start.s
+constexpr uint16_t ADDR_MODEL       = 0xDE0E; // model byte
+constexpr uint16_t ADDR_NV_CACHE    = 0xDE0F; // bios_nvram_cache
 
 std::vector<uint8_t> read_file(const std::string &p) {
     std::ifstream f(p, std::ios::binary | std::ios::ate);
@@ -38,41 +42,25 @@ std::vector<uint8_t> read_file(const std::string &p) {
     return v;
 }
 
-uint16_t read_area_addr(const std::string &path, const std::string &area) {
-    std::ifstream f(path);
-    if (!f) {
-        fprintf(stderr, "cannot open map %s\n", path.c_str());
-        exit(2);
-    }
-    const std::regex re("^" + area + R"(\s+([0-9A-Fa-f]{8})\s+)");
-    std::string line;
-    std::smatch m;
-    while (std::getline(f, line)) {
-        if (std::regex_search(line, m, re))
-            return (uint16_t)std::stoul(m[1].str(), nullptr, 16);
-    }
-    fprintf(stderr, "area %s not found in %s\n", area.c_str(), path.c_str());
-    exit(2);
-}
 } // namespace
 
 int main(int argc, char **argv) {
     std::string rom  = (argc > 1) ? argv[1] : "partos/bin/partos.rom";
     std::string mode = (argc > 2) ? argv[2] : "fd"; // "fd" or "hd"
-    std::string kmap = "partos/build/kernel.map";
     bool hd = (mode == "hd");
     std::string srcdisk  = hd ? "disks/hdd-dos.img" : "disks/fdd-dos.img";
     std::string testdisk = hd ? "/tmp/hdd-bootload-test.img"
                               : "/tmp/fdd-bootload-test.img";
-    uint16_t redirect = hd ? PC_HD_PATH : PC_FD_PATH;
-    const uint16_t pc_handoff = (uint16_t)(read_area_addr(kmap, "_PAGE0") + 0x006B);
+    uint16_t redirect = hd ? PC_BOOT_HD : PC_BOOT_FD;
+    const uint16_t pc_handoff = 0x0000; // ROM jp's here after the split load
 
     constexpr int SEC = 256;
-    constexpr int NPLANT = 33; // boot record + 32 OS sectors
+    constexpr int UKSEC = 8, SVSEC = 64;        // 2 KB low + 16 KB high (partos.inc)
+    constexpr int NPLANT = 1 + UKSEC + SVSEC;   // boot record + split OS image
 
     // Build a test disk: copy the real image, plant a deterministic pattern in
-    // the first 33 sectors, then restore the sector-0 boot signature so the
-    // loader accepts the medium.
+    // the full split reserved region, then restore the sector-0 boot signature
+    // so the loader accepts the medium.
     auto disk = read_file(srcdisk);
     if (disk.size() < (size_t)NPLANT * SEC) {
         fprintf(stderr, "disk too small\n"); return 2;
@@ -108,8 +96,11 @@ int main(int argc, char **argv) {
 
     // 2) Isolate the load path: force the plain-text print route, give the
     //    loader a stack, and jump straight to boot_main$.
+    static const std::vector<uint8_t> k_nvram = {
+        0x00, 0x40, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x02,
+    };
     idp.write_debug_memory(ADDR_MODEL, {0x00});
-    idp.write_debug_memory(ADDR_NV_VALID, {0x00});
+    idp.write_debug_memory(ADDR_NV_CACHE, k_nvram);
     auto st = idp.capture_debug_cpu_state();
     st.sp = 0xBFFF;
     idp.apply_debug_cpu_state(st);
@@ -118,7 +109,7 @@ int main(int argc, char **argv) {
            idp.get_current_pc(), idp.capture_debug_cpu_state().sp,
            idp.peek_mem(ADDR_MODEL));
 
-    // 3) Run until the loader hands off to the kernel installer.
+    // 3) Run until the ROM hands off to the low-page kernel entry.
     guard = 0;
     uint16_t lastpc = 0xFFFF;
     std::vector<uint16_t> trail_first;
@@ -129,7 +120,7 @@ int main(int argc, char **argv) {
             lastpc = pc;
             if ((int)trail_first.size() < 90) trail_first.push_back(pc);
         }
-        if (++guard > 8000000ULL) {
+        if (++guard > 120000000ULL) { // 72 sectors; floppy reads are slow
             printf("FAIL: loader never reached handoff (pc=%04X)\n", pc);
             printf("[trace] first distinct PCs from redirect:\n");
             for (size_t k = 0; k < trail_first.size(); k++)
@@ -143,22 +134,23 @@ int main(int argc, char **argv) {
     int mism = 0, first = -1;
     auto check = [&](uint16_t ram, int diskoff, int n) {
         for (int i = 0; i < n; i++) {
-            uint8_t got = idp.peek_mem((uint16_t)(ram + i));
+            const uint16_t addr = (uint16_t)(ram + i);
+            if (addr >= 0x0004 && addr <= 0x0007)
+                continue;               // ROM-owned boot-hint scratch
+            uint8_t got = idp.peek_mem(addr);
             uint8_t exp = disk[diskoff + i];
             if (got != exp) { mism++; if (first < 0) first = diskoff + i; }
         }
     };
-    check(0xDF00, 0, 256);       // boot record  <- sector 0
-    check(0xE000, 256, 8192);    // 8 KB OS image <- sectors 1..32
+    check(0x0000, 1 * SEC, UKSEC * SEC);            // micro-kernel <- sectors 1..8
+    check(0xC000, (1 + UKSEC) * SEC, SVSEC * SEC);  // services   <- sectors 9..72
 
     if (mism == 0) {
-        printf("PASS: boot record (0xDF00) and 8 KB OS image (0xE000-0xFFFF) "
-               "match disk bytes exactly (%llu ticks)\n",
-               (unsigned long long)idp.get_tick_count());
-        // spot values for visibility
-        printf("  0xE000=%02X (disk sec1[0]=%02X)  0xFFFF=%02X (disk sec32[255]=%02X)\n",
-               idp.peek_mem(0xE000), disk[256],
-               idp.peek_mem(0xFFFF), disk[256 + 8191]);
+        printf("PASS: split OS image loaded exactly (2 KB @ 0x0000 + 16 KB @ 0xC000, "
+               "%llu ticks)\n", (unsigned long long)idp.get_tick_count());
+        printf("  0x0000=%02X (disk sec1[0]=%02X)  0xC000=%02X (disk sec9[0]=%02X)\n",
+               idp.peek_mem(0x0000), disk[1 * SEC],
+               idp.peek_mem(0xC000), disk[(1 + UKSEC) * SEC]);
         return 0;
     }
     printf("FAIL: %d byte mismatches, first at disk offset %d "

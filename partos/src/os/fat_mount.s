@@ -23,7 +23,7 @@
             .globl  _fat_init
             .globl  _fat_mount_dev
             .globl  _fat_mount
-            .globl  _find_dev_drv
+            .globl  __find_dev_drv
 
             .globl  fat_ret_clean2$
             .globl  fat_alloc_req$
@@ -41,6 +41,7 @@
             .globl  fat_work_fs$
             .globl  fat_work_dev$
             .globl  fat_work_event$
+            .globl  fat_submit_event$
             .globl  fat_candidate_base$
             .globl  fat_cluster_shift$
             .globl  fat_spc_raw$
@@ -561,15 +562,19 @@ fat_mount_common$:
             pop     de
             pop     bc
 
+            ;; _fat_init's thread/event bring-up runs deep enough to clobber a
+            ;; stacked event word; keep the caller's pointer off-stack now.
+            ld      (fat_submit_event$),bc
+
             push    bc
             push    de
             push    hl
             call    _fat_init
-            pop     hl
-            pop     de
+            ld      a,d                 ; test _fat_init's result NOW: the pops
+            or      e                   ; below restore de to the dev pointer,
+            pop     hl                  ; and pop does not affect flags, so the
+            pop     de                  ; z result survives to the jr below.
             pop     bc
-            ld      a,d
-            or      e
             jr      z,fmc_inited$
             jp      fat_complete_fs$
 
@@ -578,15 +583,13 @@ fmc_inited$:
             call    fat_prepare_fs_busy$
             pop     de
 
-            push    bc                  ; save event
-            push    de                  ; save dev
             push    hl                  ; save fs
+            push    de                  ; save dev
             call    fat_alloc_req$
-            pop     hl                  ; restore fs
-            pop     de                  ; restore dev
-            pop     bc                  ; restore event
 
             jr      nz,fmc_have_req$
+            pop     de                  ; drop dev
+            pop     hl                  ; drop fs
             ld      de,#FAT_ENOMEM
             jp      fat_complete_fs$
 
@@ -594,6 +597,9 @@ fmc_have_req$:
             ;; fill the request. the heap block itself is system-owned; the
             ;; embedded req->owner field still records the logical caller
             ;; owner so dead-owner cleanup can unlink queued work later on.
+            ld      bc,(fat_submit_event$)
+            pop     de                  ; dev
+            pop     hl                  ; fs
             push    de                  ; save dev
             push    hl                  ; save fs
             call    fat_req_base$
@@ -601,14 +607,15 @@ fmc_have_req$:
             inc     hl
             ld      (hl),a              ; flags = 0
             inc     hl
-            ld      (hl),c
+            ld      (hl),c              ; event lo
             inc     hl
-            ld      (hl),b              ; event
+            ld      (hl),b              ; event hi
             inc     hl
             pop     de                  ; fs
             call    fat_store_de$
             pop     de                  ; dev
             call    fat_store_de$
+            xor     a
             ld      (hl),a              ; buf lo
             inc     hl
             ld      (hl),a              ; buf hi
@@ -665,7 +672,7 @@ _fat_mount::
             jr      z,fm_invalid_restore$
             push    bc                  ; keep event across the lookup
             push    de                  ; keep fs across the lookup
-            call    _find_dev_drv
+            call    __find_dev_drv
             ex      de,hl               ; de = dev, hl = driver (ignored now)
             pop     hl                  ; hl = fs
             pop     bc                  ; bc = event

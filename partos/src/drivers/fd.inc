@@ -6,6 +6,7 @@
 
             .equ    FD_PORT_MSR,        0xf0
             .equ    FD_PORT_DATA,       0xf1
+            .equ    FD_PORT_MOTOR,      0x98 ; OUT = motor on, IN bit0 = running
 
             .equ    FD_MSR_PHASE_MASK,  0xc0
             .equ    FD_MSR_CMD_READY,   0x80

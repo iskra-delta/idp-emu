@@ -22,21 +22,29 @@
             .include "ctc.inc"
 
             .globl  ctc_init
+            .globl  ctc_enable_tick
             .globl  ctc_dev
             .globl  sio_dev_drv
             .globl  drv_read_unsupported
             .globl  drv_write_unsupported
             .globl  drv_ioctl_unsupported
+            .globl  __sys_model
+
+            .equ    MODEL_F_GRAPHICS,   0x01
 
             .area   _CODE
 
             ;; ----------------------------------------------------------------
             ;; ctc_init()
             ;; ----------------------------------------------------------------
-            ;; resets the ctc, sets the im 2 vector base and arms channel 3
-            ;; (avdc vertical blank) as the periodic tick. does NOT load the i
-            ;; register or enable cpu interrupts (im 2 / ei): wiring the handler
-            ;; and lighting up interrupts is the scheduler's job.
+            ;; resets the ctc and seeds the im 2 vector base, but leaves the
+            ;; periodic scheduler source stopped. boot-time disk/driver waits
+            ;; only need device completion interrupts; the os enables the
+            ;; preemption tick later, once the first shell process is live.
+            ;;
+            ;; does NOT load the i register or enable cpu interrupts
+            ;; (im 2 / ei): wiring the handler and lighting up interrupts is
+            ;; the scheduler's job.
             ;;
             ;; destroys:
             ;;  a
@@ -54,6 +62,32 @@ ctc_init::
             ld      a,#CTC_VEC_BASE
             out     (CTC_CH0),a
 
+            ld      hl,#DRV_OK
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; ctc_enable_tick()
+            ;; ----------------------------------------------------------------
+            ;; arms the model-appropriate periodic scheduler source after the
+            ;; rest of the os bootstrap is ready to tolerate preemption:
+            ;;   - plain crt partner: ch2 internal timer
+            ;;   - graphics partner : ch3 vertical blank counter
+            ;; ----------------------------------------------------------------
+ctc_enable_tick::
+            ld      a,(__sys_model)
+            and     #MODEL_F_GRAPHICS
+            jr      nz,ctci_graphics$
+
+            ;; plain CRT Partner: no AVDC vertical blank exists, so use channel 2
+            ;; as a periodic internal timer to drive the scheduler/soft-timer tick.
+            ld      a,#(CTC_INT | CTC_PRE256 | CTC_TC | CTC_RESET | CTC_CW) ; 0xa7
+            out     (CTC_CH2),a
+            ld      a,#CTC_TIMER_DIV
+            out     (CTC_CH2),a
+            ld      hl,#DRV_OK
+            ret
+
+ctci_graphics$:
             ;; channel 3 = vbl: counter mode, rising edge, interrupt enabled,
             ;; time constant follows. (edge matches the emulator's rising-edge
             ;; vb detection; verify against the schematic if it never ticks.)

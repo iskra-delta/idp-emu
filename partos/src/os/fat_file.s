@@ -32,12 +32,15 @@
             .globl  fat_complete_dirent$
             .globl  fat_store_de$
             .globl  fat_load_de$
+            .globl  fat_fs_de$
+            .globl  fat_fs_byte$
             .globl  fat_decode_req_evfdev$
             .globl  fat_prepare_dirent_busy$
             .globl  fat_queue_req$
             .globl  fat_queue_push$
             .globl  fat_req_base$
             .globl  fat_submit_path_req$
+            .globl  fat_submit_frame$
             .globl  fat_read_volume_sector$
             .globl  fat_write_volume_sector$
             .globl  fat_cluster_to_sector$
@@ -95,8 +98,6 @@ flc_index_ready$:
             ld      (fat_file_tmp16$),hl
 
             ld      hl,(fat_file_ptr$)
-            ld      bc,#FATFILE_FIRST_CLUSTER
-            add     hl,bc
             call    fat_load_de$
             ld      (fat_file_cluster$),de
             ld      a,d
@@ -162,8 +163,6 @@ fat_store_file_pos$:
             ;; ----------------------------------------------------------------
 fat_store_file_first_cluster$:
             push    hl
-            ld      bc,#FATFILE_FIRST_CLUSTER
-            add     hl,bc
             call    fat_store_de$
             pop     hl
             ret
@@ -196,25 +195,36 @@ _fat_create::
 fat_file_path_submit$:
             call    fat_path_submit_check$
 
-            push    bc                  ; keep op/flags while we prepare file
-            push    de                  ; keep path while we prepare the file
-            push    hl                  ; keep fs while we prepare the file
-            ld      hl,#8
+            ld      (fat_submit_frame$),hl
+            ld      (fat_submit_frame$ + 2),de
+
+            push    bc                  ; op/flags
+            push    de                  ; path
+            push    hl                  ; fs
+
+            ld      hl,#10
             add     hl,sp
-            ld      c,(hl)
-            inc     hl
-            ld      b,(hl)              ; bc = stacked file pointer
-            pop     de                  ; de = fs
-            push    de                  ; keep fs for later restore
-            ld      h,b
-            ld      l,c
-            push    hl
+            call    fat_load_de$
+            ld      (fat_file_ptr$),de    ; stacked file*
+
+            ld      hl,(fat_submit_frame$)
+            push    hl                  ; fs value
+            ld      hl,(fat_file_ptr$)
             ld      bc,#FATFILE_FS
+            add     hl,bc               ; hl = &file->fs
+            pop     de                  ; de = fs
+            call    fat_store_de$
+
+            ld      hl,(fat_file_ptr$)
+            call    fat_prepare_dirent_busy$
+
+            ;; freshly returned handles always start at byte 0. without an
+            ;; explicit clear here, file->pos kept stale garbage and the first
+            ;; block read/write was rejected as FAT_ENOTSUP by the alignment
+            ;; checks in fat_handle_io$.
+            ld      hl,(fat_file_ptr$)
+            ld      bc,#FATFILE_POS
             add     hl,bc
-            ld      (hl),e
-            inc     hl
-            ld      (hl),d
-            inc     hl
             xor     a
             ld      (hl),a
             inc     hl
@@ -223,14 +233,10 @@ fat_file_path_submit$:
             ld      (hl),a
             inc     hl
             ld      (hl),a
-            pop     hl
-            call    fat_prepare_dirent_busy$
-            pop     hl                  ; restore fs
-            pop     de                  ; restore path
-            pop     bc                  ; restore packed op/flags
 
-            push    de                  ; save path
-            push    hl                  ; save fs
+            pop     hl                  ; drop saved fs
+            pop     de                  ; drop saved path
+            pop     bc                  ; op/flags
             ld      d,b
             ld      e,c
             jp      fat_submit_path_req$
@@ -239,7 +245,16 @@ fat_file_path_submit$:
             ;; fat_file_submit$(<a> op, <hl> file, <de> buf, <stack> bytes,event)
             ;; ----------------------------------------------------------------
 fat_file_submit$:
-            push    af
+            ;; sdcc clean4 frame on entry: [sp]=ret [sp+2]=bytes [sp+4]=event
+            ;; a=op, hl=file, de=buf. validate the pointers first (while the
+            ;; stack is still the bare caller frame so the einval4 exit stays
+            ;; aligned), then build a [op][file][buf] save frame. file/buf MUST
+            ;; be saved before fat_evt_reset$, _fat_init and fat_alloc_req$ run:
+            ;; every one of those clobbers hl/de (fat_evt_reset$ in particular
+            ;; returns de=event), so the old code that pushed the post-reset
+            ;; registers leaked two words onto the worker stack and made the
+            ;; final fat_ret_clean4$ pop a garbage return address.
+            push    af                  ; hold op across the pointer tests
             ld      a,h
             or      l
             jr      z,ffs_invalid$
@@ -248,142 +263,143 @@ fat_file_submit$:
             jr      nz,ffs_valid$
 
 ffs_invalid$:
-            pop     bc
+            pop     bc                  ; drop saved op
             jp      fat_ret_einval4$
 
 ffs_valid$:
-            push    de
-            push    hl
-            ld      hl,#10
+            pop     af                  ; a = op again, sp back to caller frame
+            push    de                  ; [sp+4] = buf
+            push    hl                  ; [sp+2] = file
+            push    af                  ; [sp+0] = op (op byte at sp+1)
+            ;; frame: [sp]=op [sp+2]=file [sp+4]=buf [sp+6]=ret
+            ;;        [sp+8]=bytes [sp+10]=event
+
+            ;; mark the caller-visible file result busy: file->status = EBUSY
+            ld      hl,#2
             add     hl,sp
             ld      a,(hl)
             inc     hl
             ld      h,(hl)
-            ld      l,a
-            call    fat_evt_reset$
-            pop     hl
-            pop     de
-
-            push    hl
+            ld      l,a                 ; hl = file
             ld      bc,#FATFILE_STATUS
             add     hl,bc
             ld      (hl),#<FAT_EBUSY
             inc     hl
             ld      (hl),#>FAT_EBUSY
-            pop     hl
 
-            push    de
-            push    hl
-            call    _fat_init
-            pop     hl
-            pop     de
-            ld      a,d
-            or      e
-            jr      z,ffs_inited$
-            jr      ffs_complete_de_pop$
-
-ffs_inited$:
-            push    de
-            push    hl
-            call    fat_alloc_req$
-            pop     hl
-            pop     de
-
-            jr      nz,ffs_have_req$
-            ld      de,#FAT_ENOMEM
-            jr      ffs_complete_de_pop$
-
-ffs_have_req$:
-            pop     af                  ; restore op, drop saved af
-            push    de                  ; save buf
-            push    hl                  ; save file
-            ld      b,a                 ; save op in b
-            call    fat_req_base$
-            ld      a,b
-            ld      (hl),a              ; op
-            inc     hl
-            xor     a
-            ld      (hl),a              ; flags = 0
-            inc     hl
-
-            push    hl
+            ;; reset the completion event so the caller can wait on it
             ld      hl,#10
             add     hl,sp
-            ld      c,(hl)
+            ld      a,(hl)
             inc     hl
-            ld      b,(hl)              ; bc = stacked event
-            pop     hl
-            ld      (hl),c
+            ld      h,(hl)
+            ld      l,a                 ; hl = event
+            call    fat_evt_reset$
+
+            call    _fat_init
+            ld      a,d
+            or      e
+            jr      nz,ffs_fail_de$     ; de = init rc
+
+            call    fat_alloc_req$      ; ix = req, Z set on failure
+            jr      nz,ffs_pack$
+            ld      de,#FAT_ENOMEM
+            jr      ffs_fail_de$
+
+ffs_pack$:
+            ld      hl,#1
+            add     hl,sp
+            ld      b,(hl)              ; b = op
+            call    fat_req_base$       ; hl = &req->op (ix preserved)
+            ld      (hl),b              ; req->op
             inc     hl
-            ld      (hl),b
-            inc     hl
+            ld      (hl),#0             ; req->flags = 0
+            inc     hl                  ; hl = &req->event
 
             push    hl
-            ld      hl,#2
+            ld      hl,#12
             add     hl,sp
             ld      e,(hl)
             inc     hl
-            ld      d,(hl)              ; de = saved file
+            ld      d,(hl)              ; de = stacked event
             pop     hl
+            call    fat_store_de$       ; req->event, hl -> &req->fs
+
             push    hl
-            ex      de,hl               ; hl = file
+            ld      hl,#4
+            add     hl,sp
+            ld      a,(hl)
+            inc     hl
+            ld      h,(hl)
+            ld      l,a                 ; hl = file
             ld      bc,#FATFILE_FS
             add     hl,bc
             call    fat_load_de$        ; de = file->fs
             pop     hl
-            call    fat_store_de$
+            call    fat_store_de$       ; req->fs (de still = fs), hl -> &req->dev
 
             push    hl
-            ex      de,hl               ; hl = fs
+            ld      h,d
+            ld      l,e                 ; hl = fs
             ld      bc,#FATFS_DEV
             add     hl,bc
             call    fat_load_de$        ; de = fs->dev
             pop     hl
-            call    fat_store_de$
+            call    fat_store_de$       ; req->dev, hl -> &req->buf
+
+            push    hl
+            ld      hl,#6
+            add     hl,sp
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)              ; de = buf
+            pop     hl
+            call    fat_store_de$       ; req->buf, hl -> &req->bytes
+
+            push    hl
+            ld      hl,#10
+            add     hl,sp
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)              ; de = stacked bytes
+            pop     hl
+            call    fat_store_de$       ; req->bytes, hl -> &req->arg
 
             push    hl
             ld      hl,#4
             add     hl,sp
             ld      e,(hl)
             inc     hl
-            ld      d,(hl)              ; de = saved buf
+            ld      d,(hl)              ; de = file
             pop     hl
-            call    fat_store_de$
+            call    fat_store_de$       ; req->arg = file
 
-            push    hl
-            ld      hl,#8
-            add     hl,sp
-            ld      e,(hl)
-            inc     hl
-            ld      d,(hl)              ; de = stacked bytes
-            pop     hl
-            call    fat_store_de$
-
-            push    hl
-            ld      hl,#2
-            add     hl,sp
-            ld      e,(hl)
-            inc     hl
-            ld      d,(hl)              ; de = saved file
-            pop     hl
-            call    fat_store_de$       ; arg = file
-
-            pop     bc                  ; discard saved file
-            pop     bc                  ; discard saved buf
-
-            call    fat_queue_req$
+            call    fat_queue_req$      ; de = FAT_OK
+            pop     bc                  ; drop op
+            pop     bc                  ; drop file
+            pop     bc                  ; drop buf
             jp      fat_ret_clean4$
 
-ffs_complete_de_pop$:
-            pop     bc                  ; discard saved af
-            push    hl
-            ld      hl,#6
+ffs_fail_de$:
+            ;; de = status code; signal the file result, then unwind the save
+            ;; frame and return through the shared clean4 tail.
+            ld      hl,#10
             add     hl,sp
             ld      c,(hl)
             inc     hl
             ld      b,(hl)              ; bc = stacked event
-            pop     hl                  ; hl = file
+            ld      hl,#2
+            add     hl,sp
+            ld      a,(hl)
+            inc     hl
+            ld      h,(hl)
+            ld      l,a                 ; hl = file
+            push    de                  ; preserve sdcc rc across completion
             call    fat_complete_dirent$
+            pop     de
+            pop     bc                  ; drop op
+            pop     bc                  ; drop file
+            pop     bc                  ; drop buf
             jp      fat_ret_clean4$
 
 _fat_read::
@@ -443,10 +459,8 @@ fhio_have_count$:
             or      e
             jr      z,fhio_ebadf_mid$
 
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_MOUNTED
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             or      a
             jr      z,fhio_ebadf_mid$
 
@@ -540,10 +554,8 @@ fhio_efbig$:
             jr      fhio_err_finish$
 fhio_in_range$:
 
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_SECTORS_PER_CL
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             ld      (fat_file_spc$),a
             call    fat_spc_shift$
             jr      nc,fhio_shift_ok$

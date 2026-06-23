@@ -1,380 +1,405 @@
 # PARTOS VOLUME 2: KERNEL
 
-This volume is about the code that lives above the ROM and below any future
-user-facing operating system. Right now that means two closely related parts:
-the early kernel in `src/kernel/` and the hardware-facing driver layer in
-`src/drivers/`.
-
-The most important thing to say up front is also the simplest: the kernel is
-real, but it is still early. It already has a genuine memory map, page-0
-installer, vector table, heap, list helpers, system-object helpers, and
-drivers. What it does not have yet is the rest of the operating-system life
-around those pieces.
-
-## Current Build Shape
-
-The verified current kernel image is `partos/bin/kernel.bin`, and it is
-`6120` bytes long.
-
-Its linked top-of-memory layout is:
-
-| Region | Address | Size | Meaning |
-|---|---|---:|---|
-| `_CODE` | `0xE818` | `4072` bytes | kernel code plus linked drivers |
-| `_HEAP` | `0xF800` | `1536` bytes | early heap |
-| `_IM2` | `0xFE00` | `256` bytes | reserved IM 2 page |
-| `_PAGE0` | `0xFF00` | `256` bytes | page-0 image plus installer helpers |
-
-Two small data areas also exist inside the final linked image:
-
-| Region | Address | Size |
-|---|---|---:|
-| `_SYSVARS` | `0xFF00` | `4` bytes |
-| `_INITIALIZED` | `0xFF04` | `20` bytes |
-
-The practical result is that the kernel owns the very top of common RAM.
-
-## The Real ROM-to-Kernel Boundary Today
-
-This part deserves extra care because older comments in the tree described a
-slightly grander contract than the live ROM caller actually uses.
-
-### What the ROM really does now
-
-After loading sector `0` to `0xDF00` and sectors `1..32` to `0xE000..0xFFFF`,
-the ROM:
-
-- sets `HL = 0xE000`
-- sets `B = model byte`
-- leaves `A` holding the model byte as a side effect of the current path
-- does not intentionally initialize `C` or `D`
-- jumps to `0xFF6B`
-
-`0xFF6B` is the fixed address of `__sys_page0_install` inside the loaded
-image.
-
-### What `__sys_page0_install` supports
-
-The installer itself still accepts the larger register contract:
-
-- `A` = version byte
-- `B` = model byte
-- `C` = flags byte
-- `D` = meta1 byte
-- `HL` = continuation address
-
-That is the capability of the routine. It is not the full reality of the
-current ROM caller.
-
-### What happens next
-
-`__sys_page0_install`:
-
-1. stores `HL` into a 2-byte scratch slot
-2. writes version, model, flags, and meta bytes into the page-0 template
-3. copies 8 bytes from MM58167 NVRAM ports `0xA8..0xAF` into the low-page
-   info block
-4. clears and installs page 0 into logical bank 0
-5. clears and installs page 0 into logical bank 1
-6. patches bit 0 of `__sys_flags` so each page-0 copy knows which bank it is
-7. switches back to logical bank 0
-8. jumps to the saved continuation address without using the stack
-
-Because the live ROM caller sets `HL = 0xE000`, the continuation currently
-goes to `0xE000`, not directly to `__sys_kernel`.
-
-That detail is important. It means the reserved-sector image is expected to
-contain valid continuation code at `0xE000`, while the linked kernel proper
-still begins at `0xE818`. The final image contract is therefore not just
-"drop `kernel.bin` into sectors 1..32 and forget about it."
-
-## Page 0, Vectors, and Low-Memory Policy
-
-The final page at `0xFF00..0xFFFF` contains both the copied low-page image
-and the helper code used to install it.
-
-### Copied low-page image
-
-The copied image provides:
-
-- `RST 0x00` with `di` and `jp __sys_entry`
-- metadata bytes at offsets `0x04..0x07`:
-  - `__sys_version`
-  - `__sys_model`
-  - `__sys_flags`
-  - `__sys_meta1`
-- `RST 0x08 .. 0x38` stubs that load handler addresses from the shared vector
-  table and jump through them
-- a 38-byte low-page info block
-- an 8-byte NVRAM cache at `__sys_nvram_cache`
-- NMI entry at `0x66`
-
-### Shared vector table
-
-The shared vector table lives in `_INITIALIZED` and currently defaults to:
-
-- `__sys_vec_entry -> __sys_kernel`
-- `__sys_vec_rst08 .. __sys_vec_rst30 -> ret`
-- `__sys_vec_rst38 -> reti`
-- `__sys_vec_nmi -> retn`
-
-Only the reset entry currently points into live kernel behavior. The rest are
-safe stubs until real services arrive.
-
-## What the Kernel Actually Does Today
-
-The current first shared-memory entry is `__sys_kernel` in `init.s`.
-
-Today it:
-
-1. executes `di`
-2. sets `sp = 0xFFFF`
-3. calls `_ir_init`
-4. calls `_ir_disable`
-5. initializes the heap with `mem_init(__sys_heap, 0x0600)`
-6. falls into a `halt` loop
-
-So the system already has a genuine landing zone after ROM handoff, but it
-is still a scaffold rather than a finished early boot sequence.
-
-## Core Kernel Services Already Present
-
-The tree already contains some small but solid building blocks.
-
-### List helpers
-
-`list.s` provides intrusive single-linked-list helpers:
-
-- `list_match_eq`
-- `list_find`
-- `list_iterate`
-- `list_append`
-- `list_insert`
-- `list_remove`
-- `list_remove_first`
-
-Both native assembly entry points and SDCC `sdcccall(1)` wrappers are
-exported.
-
-### Heap and system objects
-
-`mem.s` provides:
-
-- `mem_init`
-- `mem_allocate`
-- `mem_free`
-- `mem_free_owner`
-
-`sysobj.s` provides:
-
-- `so_create`
-- `so_destroy`
-
-Again, both native assembly and SDCC-callable wrappers exist.
-
-### Interrupt reference counting
-
-`ir.s` provides the small interrupt reference-counting layer used by the
-current kernel entry.
-
-## Driver Model
-
-The current driver ABI is intentionally compact and static.
-
-### `dev_drv_s`
-
-`dev_drv_s` is `14` bytes:
-
-| Offset | Size | Field |
-|---|---:|---|
-| `0` | 2 | `next` |
-| `2` | 2 | `probe` |
-| `4` | 2 | `open` |
-| `6` | 2 | `close` |
-| `8` | 2 | `read` |
-| `10` | 2 | `write` |
-| `12` | 2 | `ioctl` |
-
-### `dev_s`
-
-`dev_s` is `30` bytes:
-
-| Offset | Size | Field |
-|---|---:|---|
-| `0` | 2 | `next` |
-| `2` | 8 | `name[8]` |
-| `10` | 1 | `reserved` |
-| `11` | 1 | `flags` |
-| `12` | 16 | `data[16]` |
-| `28` | 2 | `driver` |
-
-The design rule I want to preserve is that `next` is first in every listable
-structure.
-
-### Probe model
-
-Probe is chain-based:
-
-- a driver returns `HL = head_of_chain`
-- `HL = 0` means "nothing found"
-- `_dev_probe_all()` appends the chain to the single global list
-
-Current probe order:
-
-1. `sio_probe`
-2. `rtc_probe`
-3. `nvram_probe`
-4. `gdp_probe`
-5. `fd_probe`
-6. `hd_probe`
-
-### Return convention
-
-The current assembly drivers use a blunt success convention:
-
-- success: `HL = 0x0000`
-- failure: `HL = 0xFFFF`
-
-There is no rich errno-style scheme yet.
-
-## Current Drivers
-
-### `sio`
-
-- publishes `ttyS0` through `ttyS3`
-- `open()` programs the channel
-- `read`, `write`, and `ioctl` are still stubbed
-
-Per-device `data[]`:
-
-- `0` = data port
-- `1` = control port
-- `2` = chip index
-- `3` = channel index
-
-### `rtc`
-
-- publishes one `rtc` device
-- transfers exactly 6 bytes:
-  `sec, min, hour, mday, mon, year`
-- converts between chip BCD and in-memory binary
-
-### `nvram`
-
-- publishes one `nvram` device
-- reads or writes exactly 8 raw bytes from `0xA8..0xAF`
-
-### `gdp`
-
-- publishes one `gdp` device when GDP hardware responds
-- `open()` initializes AVDC text mode
-- `write()` sends text through the GDP path
-- `ioctl()` supports:
-  - cursor position
-  - current text attribute
-  - cursor visibility
-
-Current GDP ioctls:
-
-- `0x20` = `GDP_IOCTL_GETPOS`
-- `0x21` = `GDP_IOCTL_SETPOS`
-- `0x22` = `GDP_IOCTL_GETATTR`
-- `0x23` = `GDP_IOCTL_SETATTR`
-- `0x24` = `GDP_IOCTL_CURSOR_OFF`
-- `0x25` = `GDP_IOCTL_CURSOR_ON`
-
-### `fd`
-
-- publishes `fd0`, `fd1`, and so on for detected floppy units
-- `open()` resets the byte cursor and recalibrates the drive
-- `read()` and `write()` require 256-byte alignment
-- `ioctl()` uses the shared 24-bit byte-position helper
-
-### `hd`
-
-- publishes `sda` when the SASI/Xebec adapter responds
-- `open()` resets the byte cursor
-- `read()` and `write()` use SASI `READ(6)` and `WRITE(6)` in 256-byte blocks
-- `ioctl()` uses the shared 24-bit byte-position helper
-
-The ROM setup screen already knows about both `sda` and `sdb`, but the
-kernel-side probe still only publishes `sda`.
-
-## Shared Driver Helpers
-
-`drv.s` provides the common helper layer used by the current block drivers.
-
-Shared meaning inside `dev.data[]` for disk-style devices:
-
-| Byte | Meaning |
+This volume describes the PartOS **micro-kernel**: the small, always-resident
+core that owns scheduling, memory, IPC and the interrupt plumbing. Everything
+else — drivers, the filesystem, named services, soft timers, the shell — lives
+**above** the kernel in a separate, swappable OS payload (see Volume 3).
+
+The guiding idea is an exokernel-style split:
+
+- a **2 KB micro-kernel** linked at `0x0000`, mirrored into both banks, and
+- a **16 KB OS payload** linked at `0xC000` in always-mapped shared RAM.
+
+The kernel knows nothing about devices, files or shells. It brings the machine
+up to a running scheduler and then hands control to whatever payload is loaded
+at `0xC000`. A bare program that brings its own runtime can replace that payload
+and run on the kernel alone.
+
+## Current Milestone
+
+At the end of the current boot milestone, the micro-kernel side is considered
+**implemented and verified up to OS bootstrap**.
+
+What works today:
+
+- the ROM reads the **boot sector** to scratch at `0x1800`, then loads
+  `kernel.sys` at `0x0000` and the OS payload at `0xC000`
+- `__sys_kernel` initializes the interrupt core, heaps and scheduler
+- the kernel mirrors its 2 KiB low page into the second bank
+- the kernel creates the idle thread and the first payload thread
+- the first payload thread enters `__os_entry` at `0xC000`
+- `__os_entry` performs the minimal OS-side setup and tail-hands off to
+  `_kernel_bootstrap`
+
+What this has been verified against:
+
+- `idp-kernel-probe` proves the direct `kernel -> __os_entry -> _kernel_bootstrap`
+  path without involving the ROM loader
+- `idp-full-boot-probe` proves the real `ROM -> kernel -> __os_entry ->
+  _kernel_bootstrap` chain
+
+This volume therefore describes a kernel whose boot contract is complete, but
+whose job still ends at the OS bootstrap handoff. Everything after
+`_kernel_bootstrap` belongs to the OS layer.
+
+---
+
+## 1. The Two Images
+
+The build produces two independent, fixed-base images (`make sys`):
+
+| Image | Source | Link base | Size today | Role |
+|---|---|---|---:|---|
+| `bin/kernel.sys` | `src/kernel/*.s` | `0x0000` | 2025 B (8 sectors) | the micro-kernel (this volume) |
+| `bin/os.sys` | `src/os/*.s` + `src/drivers/*.s` | `0xC000` | ~14 KB | the OS payload (Volume 3) |
+
+`kernel.sys` is currently a **2025-byte `_CODE` image** that fits inside the 2 KiB
+mirror budget with room to spare. The ABI table, low-page vectors, scheduler and
+the kernel's live list heads are all part of that fixed low-page image (the list
+heads are tucked into dead low-page pad, see §5). Its mutable runtime RAM
+(`_SYSVARS`, `_HEAP`, the IM2 table, the bank-routine exec scratch) is *not* in
+the image — it is reserved high in shared RAM and is brought up at boot.
+
+Because the two images link at constant bases, neither one's addresses drift
+when the other grows. The OS resolves the kernel functions it calls directly
+through an absolute-equate stub generated from the kernel link map
+(`build/kernel_imports.s`); an untrusted payload instead discovers the ABI at
+runtime via `rst 0x08` (see §6).
+
+---
+
+## 2. Memory Layout (Placement)
+
+```
+0x0000 ┌───────────────────────────────────────────────┐
+       │ MICRO-KERNEL  (kernel.sys, mirrored BOTH banks)│  2 KB
+       │   0x0000  rst/nmi low page (jp dispatch)       │  read-only
+       │   ...     kernel _CODE  + _INITIALIZED          │  after boot
+0x0800 ├───────────────────────────────────────────────┤
+       │ PROCESS ARENA  (banked, per-bank)              │  ~46 KB
+       │   thread stacks + process images               │  USER_HEAP
+0xC000 ├───────────────────────────────────────────────┤
+       │ OS PAYLOAD  (os.sys: OS + all drivers)         │
+       │   ...     (payload grows upward)               │  ← must stay
+       │                                                │     below 0xF940
+0xF940 ├───────────────────────────────────────────────┤  ┐
+       │ 0xF940  exec scratch (bank routine)  128 B     │  │ kernel
+       │ 0xF9C0  sysvars                        64 B     │  │ runtime
+       │ 0xFA00  system heap (kernel + OS)     768 B     │  │ reserve
+       │ 0xFD00  stack (isr 128 + kernel 128)  256 B     │  │ (NOT loaded)
+       │ 0xFE00  IM2 vector table (page-al.)   512 B     │  │
+0xFFFF └───────────────────────────────────────────────┘  ┘
+```
+
+Key facts:
+
+- **`0x0000–0x07FF` — micro-kernel.** Mirrored *identically* into both banks so
+  it is effectively always mapped. It holds **no mutable data**, so it can stay
+  **read-only after boot** — with one deliberate exception: the low-page `jp`
+  vectors are patched by `set_vector` (see §5). Holds the scheduler, allocator,
+  events, system objects, the interrupt core and the `kernel_table`.
+- **`0x0800–0xBFFF` — process arena.** The banked per-process heap (`USER_HEAP`,
+  base `0x0800` = just above the kernel). Thread stacks and process images come
+  from here; both banks use the same window.
+- **`0xC000 → 0xF9BF` — OS payload.** `os.sys` (the OS plus every driver) loads
+  at `0xC000` and grows upward. It must stay **below the kernel reserve floor**
+  (`KERNEL_SYSVARS_BASE` = `0xF9C0`); the build warns if it doesn't.
+- **`0xF9C0–0xFFFF` — kernel runtime reserve (≈1.5 KB).** A fixed top-of-RAM
+  region for the kernel's *mutable* state: sysvars, the system heap (small
+  kernel + OS objects), the stack, and the page-aligned IM2 table. It is
+  always-mapped shared RAM, set up by the kernel at boot, and is **not part of
+  any loaded image**.
+
+This split is a **fixed convention both the kernel and the OS know** (the
+constants live in `src/partos.inc`: `USER_HEAP_*`, `KERNEL_SYSVARS_BASE`,
+`KERNEL_HEAP_*`, `KERNEL_STACK_*`, `KERNEL_IM2_*`). Because the reserve is fixed
+rather than negotiated, the kernel may use these addresses as constants — the OS
+just has to respect the floor. If the kernel ever needs more runtime memory,
+grow the reserve here and the OS automatically gets less.
+
+---
+
+## 3. Boot & Load Sequence
+
+```
+power-on
+  └─ EPROM bootstrap
+       ├─ loads kernel  2 KB    → 0x0000  (mirrored into both banks)
+       ├─ loads OS     ≤14 KB   → 0xC000  (up to the 0xF9C0 reserve)
+       └─ jp 0x0000                       ; enter the micro-kernel
+0x0000: rst 0x00  →  di ; jp __sys_kernel  ; the low page IS the entry
+            └─ __sys_kernel  (init.s)      ; kernel bring-up  (see §4)
+                  └─ first thread = PAYLOAD_ENTRY (0xC000 = __os_entry)
+                        └─ OS payload init thread takes over (Volume 3)
+```
+
+Notes:
+
+- The kernel is **loaded at `0x0000` and entered at `0x0000`**. The very first
+  bytes are the `rst 0x00` slot (`di ; jp __sys_kernel`), so "jump to the kernel"
+  and "the reset vector" are the same thing.
+- The ROM only has to load the two split images and jump to `0x0000`. The
+  kernel itself performs the low-page **mirror** during `__sys_kernel` by
+  copying its 2 KB image into the other bank before it starts scheduling.
+
+---
+
+## 4. Kernel Initialization Sequence
+
+`__sys_kernel` (`src/kernel/init.s`) is the first kernel instruction stream.
+It runs entirely with interrupts **off** and, step by step:
+
+1. **`di`** and set the stack: `sp = KERNEL_STACK_TOP` (`0xFE00`).
+2. **`__ir_init`** — initialize the interrupt core (sets the `I` register to the
+   IM2 page = high byte of `KERNEL_IM2_BASE` = `0xFE`; does *not* yet `im 2`/`ei`).
+3. **Interrupt bracket seeded** — `__ir_init` sets `ir_refcnt = 1`, so boot
+   begins already inside the held interrupt-disable bracket and no separate
+   early `_ir_disable` call is needed.
+4. **Heap init** — `mem_init` for the user/process heap, then for the kernel
+   heap (`__sys_heap` at `KERNEL_HEAP_BASE`, `KERNEL_HEAP_SIZE`). The allocator
+   must be the first subsystem up.
+5. **Create the idle thread** (`__sys_idle`) — it guarantees the run list is
+   never empty, so the scheduler always has something to dispatch. It is what
+   the CPU runs when every other thread is blocked (see §6).
+6. **Create the payload thread = `PAYLOAD_ENTRY` (`0xC000`)** via
+   `thread_create` + `thread_resume`. This is the only place the kernel reaches
+   "up": it schedules the payload's entry point. The current payload begins at
+   `__os_entry`, a small OS-side setup stub that caches model/NVRAM state,
+   installs the `rst 0x10` service bridge, wires the timer hook and initializes
+   the driver layer before tail-calling `_kernel_bootstrap`. The outer
+   interrupt-disable bracket is kept held across that tail handoff, then
+   released by `_kernel_bootstrap` once the first OS bootstrap thread owns the
+   machine.
+7. **Hand off to the scheduler** — `im 2`, mark interrupts armed, `_ir_enable`
+   (which both enables interrupts and balances the early `_ir_disable`), then
+   `jp __thread_robin`. The **first dispatch happens inside `__thread_robin`**:
+   it selects the first runnable thread and `reti`s into it. The kernel's init
+   stack is simply abandoned — there is no `halt` idle loop in `init`, because
+   idling is the idle thread's job.
+
+Crucially, the kernel installs **no timer of its own**. There is no `ir_set` of
+a CTC vector and no CTC programming anywhere in the kernel — it owns no device.
+The scheduler tick is the `rst 0x18` vector (§6); whether anything drives it is
+the OS's decision.
+
+---
+
+## 5. The Low Page: rst Vectors
+
+The low page (`src/kernel/page0.s`) is linked **first** in `_CODE` so it lands at
+`0x0000` and the rst/nmi slots fall on their fixed 8-byte boundaries.
+
+Each hardware vector is a **direct `jp <handler>`** at its real address — there
+is no separate vector table. The slot *is* the table:
+
+| Address | Slot | Default target |
+|---|---|---|
+| `0x00` | reset / cold entry | `di ; jp __sys_kernel` (not vectorable) |
+| `0x04–0x07` | reserved | filler (machine identity is OS-owned) |
+| `0x08` | `rst 0x08` | `__kernel_api` — **returns `&kernel_table`** (§7) |
+| `0x10` | `rst 0x10` | `__sys_rst_default` (`ret`) — OS service-bridge slot |
+| `0x18` | `rst 0x18` | **`__thread_robin`** — scheduler tick / yield (§6) |
+| `0x20`–`0x30` | `rst 0x20..0x30` | `__sys_rst_default` (`ret`) |
+| `0x38` | `rst 0x38` (im 1) | `__sys_rst38_default` (`reti`) |
+| `0x66` | `nmi` | `__sys_nmi_default` (`retn`) |
+
+`set_vector` / `get_vector` (`src/kernel/vectors.s`) treat the **vector id as the
+slot address** (all `< 0x100`, so a byte):
+
+```
+set_vector(a = slot, de = handler)   ; patches the jp operand at slot+1/slot+2
+get_vector(a = slot) -> de = handler ; reads the jp operand back
+```
+
+`set_vector` returns nothing — read a slot back with `get_vector`. Both bracket
+the two-byte operand write under `di`/`ei` so an interrupt never sees a
+half-patched `jp`. The C ids are in `include/vector.h` / `include/kernel.h`:
+`VECTOR_RST08 = 0x08 … VECTOR_RST38 = 0x38`, `VECTOR_NMI = 0x66`.
+
+> Consequence: because handlers are patched into the low page, the low page is
+> self-modified by `set_vector` (it is not read-only after boot), and once
+> banking is on, `set_vector` must patch the operand in **both** bank mirrors.
+> `set_vector` is cold, so this is cheap.
+
+The scheduler tick lives in this table too — `rst 0x18 → __thread_robin` — and
+is the subject of the next section. A separate **soft-timer hook**
+(`__sys_vec_tick`, dispatched by `__tick_dispatch`) is *not* a vector: it is an
+indirect cell that `__thread_robin` calls on every tick, into which the OS's
+timer driver stores its chain routine.
+
+---
+
+## 6. Scheduling: the `rst 0x18` Tick
+
+The kernel owns **no clock**. The scheduler context switch, `__thread_robin`,
+sits behind the `rst 0x18` vector, and the kernel never fires it. Three things
+reach it, all through the same `0x18` slot:
+
+- a **thread yielding** — `wait_events` blocks by issuing `rst 0x18` (it does
+  *not* `halt` and wait for a tick); the idle thread does the same after each
+  `halt`;
+- the **OS routing a timer interrupt** at `0x18` — point a periodic timer's IM2
+  vector at the rst18 slot and `__thread_robin` runs as that timer's ISR.
+
+This gives a clean dial:
+
+| Timer wired at `rst 0x18`? | Behaviour |
 |---|---|
-| `0` | unit or target |
-| `1` | byte position low |
-| `2` | byte position mid |
-| `3` | byte position high |
+| no | **cooperative / single-tasking** — threads run until they block or yield |
+| yes | **preemptive / multitasking** — the timer slices the running threads |
 
-Shared helpers:
+Because `rst` pushes the return PC exactly like an interrupt acknowledge does,
+`__thread_robin`'s saved-context layout is identical whether it is entered by a
+software `rst 0x18` (yield) or a hardware timer vectored at `0x18` (preempt).
+One handler, both worlds.
 
-- `drv_reset_dev`
-- `drv_open_pos0`
-- `drv_prep_rw256`
-- `drv_advance_pos256`
-- `drv_ioctl_pos24`
+### The idle thread
 
-## Hardware Rules the Kernel Must Respect
+`init` creates a tiny kernel **idle thread** (`__sys_idle`) so the run list is
+never empty and the scheduler always has something to dispatch. It is the
+lowest-effort fallback: `halt` until any interrupt, then `rst 0x18` to re-enter
+the scheduler and pick up whatever just became runnable. With no timer wired,
+this is the entire idle/wake loop of a single-tasking system (an I/O completion
+ISR signals an event, idle wakes, re-selects, and the unblocked thread runs);
+with a timer wired, idle is simply preempted like any other thread.
 
-The same hardware facts that shape the ROM continue to matter here.
+### Driving it from the OS (CTC)
 
-### Banking rules
+Routing the tick is **OS policy**, not a kernel concern. The OS owns the CTC
+driver (`src/drivers/ctc.s`); to enable preemption it programs a CTC channel for
+a periodic interrupt and points that channel's IM2 vector at `0x18`. The kernel
+contains no CTC code at all — that is the whole point of moving the tick onto a
+vector.
 
-- never probe `0x80..0x97` casually
-- switching banks is done by touching those ports
-- code running in banked RAM must never switch away from itself
+---
 
-### Important device ports
+## 7. Calling the Kernel via `rst 0x08`
 
-| Ports | Meaning |
-|---|---|
-| `0x10..0x12` | SASI / Xebec adapter |
-| `0x20..0x2F` | EF9367 GDP |
-| `0x34..0x3F` | SCN2674 AVDC |
-| `0x98` | floppy motor latch / status |
-| `0xA8..0xAF` | MM58167 NVRAM bytes |
-| `0xD8..0xDB` | SIO chip 0 |
-| `0xE0..0xE3` | SIO chip 1 |
-| `0xF0..0xF1` | i8272 FDC |
+The kernel exposes its entire ABI as one read-only function-pointer table,
+`kernel_table`, whose layout is the `kernel_t` struct in `include/kernel.h`. A
+caller obtains a pointer to it by issuing **`rst 0x08`**:
 
-### Absence policy
+```
+            rst     0x08            ; hl = &kernel_table  (via __kernel_api)
+```
 
-The current code assumes absent GDP or SASI/Xebec hardware usually reads as
-`0xFF`, and the probe paths explicitly use that fact.
+That is the only thing `rst 0x08` does: it returns `hl = &kernel_table`. From
+there a caller indexes the table and calls through the slot. Entry 0 is
+`get_sys_vars`; each entry is a 2-byte pointer:
 
-### Interrupt topology
+```
+            rst     0x08            ; hl -> kernel_table
+            ;; call get_sys_vars() (table entry 0)
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)          ; de = &get_sys_vars
+            ex      de,hl
+            ld      de,#ret$        ; push a return address...
+            push    de
+            jp      (hl)            ; ...and tail into the function (call-by-jp)
+ret$:
+            ;; de/hl now hold the sysvars_t* per the kernel ABI
+```
 
-The daisy-chain priority order is:
+In C the same thing reads:
 
-1. DMA
-2. CTC
-3. SIO chip 0
-4. SIO chip 1
-5. PIO
+```c
+#include "kernel.h"
+const kernel_t *k = kernel_api();         /* rst 0x08 -> &kernel_table */
+sysvars_t *sv = k->get_sys_vars();
+void *p = k->allocate_memory(sv->sys_heap, 64, NONE);
+```
 
-The floppy controller is separate and uses the external vector latch at
-`0xE8`.
+**Two callers, two paths to the same code:**
 
-## Assembly Style I Want to Preserve
+- The **trusted OS** is linked alongside the kernel and always mapped, so it may
+  also call kernel functions **directly by their linked address** (resolved
+  through `build/kernel_imports.s`). It does not need `rst 0x08`, though the
+  table is identical either way.
+- An **untrusted / bare payload** uses `rst 0x08` so it needs *no* compile-time
+  knowledge of kernel addresses — only the stable table layout.
 
-The tree already has a recognizable assembly style, and I would rather keep
-it than let every file drift.
+### Kernel ABI surface (`kernel_table`)
 
-- labels start in column 0
-- instructions, directives, and standalone comments start at column 12
-- mnemonics and registers are lowercase
-- area names are uppercase
-- public symbols use `::`
-- local labels end in `$`
+The table, in order (see `include/kernel.h` and `src/kernel/kernel.s` — keep the
+two in lock-step):
+
+- **system vars:** `get_sys_vars`
+- **memory:** `allocate_memory`, `deallocate_memory`
+- **events:** `create_event`, `destroy_event`, `set_event`, `is_signalled`
+- **lists:** `insert_list`, `remove_list`, `find_list`, `iterate_list`,
+  `match_list_eq`
+- **threads:** `create_thread`, `resume_thread`, `suspend_thread`,
+  `exit_thread`, `wait_events`
+- **system objects:** `create_object`, `destroy_object`, `set_cleanup`,
+  `register_owner_cleanup`
+- **vectors:** `set_vector`, `get_vector`
+- **locks:** `acquire_lock`, `release_lock`, `test_lock`
+
+`get_sys_vars()` returns a `sysvars_t*` the kernel publishes: the three heap
+bases, the IM2 table address, and the live addresses of the kernel's list heads
+(threads current/suspended/running/waiting/terminated, and the event list). The
+OS writes its declared heap bases back into it.
+
+Named **services** and soft **timers** are deliberately *not* in this table —
+they moved to the OS. The kernel is discovered via `rst 0x08`; it never
+registers a service for itself, and it never wires the CTC tick to a timer
+chain (that is OS policy).
+
+### Calling convention
+
+All kernel asm entry points use `sdcccall(1)`: first argument in `HL` (or `A`
+for a 1-byte first arg such as the `set_vector` slot), second in `DE`, the rest
+on the stack (callee-cleaned); 16-bit/pointer results return in `DE`.
+
+---
+
+## 8. Building Blocks
+
+The kernel ships the primitives the OS builds everything else on:
+
+- **`list.s`** — intrusive single-linked-list helpers (`list_insert`,
+  `list_remove`, `list_find`, `list_iterate`, `list_match_eq`, …). `next` is
+  always the first field of any listable struct.
+- **`mem.s`** — `mem_init`, `mem_allocate`, `mem_free`, `mem_free_owner`
+  (owner-tracked heap).
+- **`sysobj.s`** — `so_create` / `so_destroy` over the heap, with a per-object
+  cleanup hook (`set_cleanup`) run by `so_destroy` and by the owner-death sweep.
+- **`evt.s`** — sync events (the block/wake primitive).
+- **`thread.s`** — cooperative + preemptive threads and the `__thread_robin`
+  context switch.
+- **`ir.s` / `vectors.s`** — the interrupt reference-count bracket and the
+  low-page vector management.
+- **`lock.s`** — spin locks over a one-byte cell.
+
+---
+
+## 9. Interrupt Topology
+
+- IM2 is used. The `I` register holds the IM2 page (high byte of
+  `KERNEL_IM2_BASE` = `0xFE`); a device vector `V` selects the handler pointer at
+  `0xFE00 + V`. The kernel sets up the page and enables `im 2`; the **OS**
+  installs the actual device ISRs.
+- The kernel programs **no interrupt source of its own**. The scheduler tick is
+  the `rst 0x18` vector (§6), driven by a thread yielding or by an OS timer
+  whose IM2 vector points at `0x18`. Historically the kernel armed CTC channel 3
+  (the AVDC ~50 Hz vertical blank) itself; that is now the OS CTC driver's job.
+- Daisy-chain priority: DMA › CTC › SIO0 › SIO1 › PIO. The i8272 floppy
+  controller is separate (external vector latch).
+- ISRs hold the `ir_refcnt` bracket across their body and do a manual `ei ; reti`
+  — see the interrupt notes in the source.
+
+---
+
+## 10. Assembly Style
+
+The tree has a deliberate, consistent style — please keep it:
+
+- labels start in column 0; instructions/directives/standalone comments at
+  column 12
+- mnemonics and registers lowercase; area names uppercase
+- public symbols use `::`; local labels end in `$`
 - SDAS immediates use `#`
-- routine headers document inputs, outputs, and destroyed registers
+- routine headers document inputs, outputs and destroyed registers
 
-That style is not cosmetic fluff. On a codebase like this, consistent layout
-is one of the cheapest ways to keep low-level work readable.
+Consistent layout is one of the cheapest ways to keep low-level work readable.

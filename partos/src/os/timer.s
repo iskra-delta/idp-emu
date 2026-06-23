@@ -33,8 +33,8 @@
             .globl  _tmr_uninstall
             .globl  __tmr_chain
             .globl  __tmr_first
-            .globl  _so_create
-            .globl  _so_destroy
+            .globl  __so_create
+            .globl  __so_destroy
             .globl  _list_iterate
 
             .equ    TIMER_HOOK,         4
@@ -59,10 +59,10 @@ _tmr_install::
             ld      e,(hl)
             inc     hl
             ld      d,(hl)              ; de = owner
-            push    de                  ; stack owner for so_create
+            push    de                  ; stack owner for __so_create
             ld      de,#TIMER_SIZE
             ld      hl,#__tmr_first
-            call    _so_create          ; de = timer or 0; owner left on stack
+            call    __so_create         ; de = timer or 0; owner left on stack
             pop     bc                  ; discard owner arg
             ld      a,d
             or      e
@@ -112,7 +112,7 @@ ti_ret$:
 _tmr_uninstall::
             ex      de,hl               ; de = timer
             ld      hl,#__tmr_first
-            jp      _so_destroy
+            jp      __so_destroy
 
             ;; ----------------------------------------------------------------
             ;; __tmr_chain()

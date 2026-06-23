@@ -55,9 +55,13 @@
             .globl  _fat_purge_owner
             .globl  fat_handle_mount$
             .globl  fat_handle_lookup$
+            .globl  fat_handle_readdir$
             .globl  fat_handle_create$
             .globl  fat_handle_read$
             .globl  fat_handle_write$
+            .globl  fat_handle_unlink$
+            .globl  fat_handle_mkdir$
+            .globl  fat_handle_rmdir$
 
             .globl  fat_ret_clean2$
             .globl  fat_ret_clean4$
@@ -66,8 +70,13 @@
             .globl  fat_evt_reset$
             .globl  fat_complete_fs$
             .globl  fat_complete_dirent$
+            .globl  fat_finish_dirent$
             .globl  fat_store_de$
             .globl  fat_load_de$
+            .globl  fat_fs_de$
+            .globl  fat_fs_byte$
+            .globl  fat_dirent_de$
+            .globl  fat_dirent_byte$
             .globl  fat_decode_req_evfdev$
             .globl  fat_alloc_req$
             .globl  fat_prepare_fs_busy$
@@ -88,9 +97,13 @@
 
             .globl  fat_queue_event$
             .globl  fat_io_event$
+            .globl  fat_worker_loop$
             .globl  fat_work_fs$
             .globl  fat_work_dev$
             .globl  fat_work_event$
+            .globl  fat_submit_event$
+            .globl  fat_submit_frame$
+
             .globl  fat_req_flags$
             .globl  fat_candidate_base$
             .globl  fat_cluster_shift$
@@ -144,13 +157,14 @@
             .globl  _thread_resume
             .globl  _thread_wait4events
             .globl  _thread_current
-            .globl  _find_dev_drv
+            .globl  __find_dev_drv
             .globl  _mem_allocate
             .globl  _mem_free
             .globl  _owner_cleanup_register
             .globl  _ir_disable
             .globl  _ir_enable
             .globl  __sys_heap
+            .globl  __usr_heap
             .globl  drv_owner_current
 
             .area   _CODE
@@ -216,7 +230,7 @@ fat_evt_state$:
             ret     z
             ld      a,b
             push    af
-            inc     sp                  ; evt_set expects a stacked 1-byte arg
+            inc     sp                 ; leave A (new state) as the 1-byte arg
             call    _evt_set            ; must CALL (evt_set reads arg above its
             ret                         ; return addr); a tail jp misaligns both
 
@@ -251,15 +265,23 @@ fat_complete_obj$:
             ld      a,b
             or      c
             ret     z
-            push    de
-            ld      h,b
-            ld      l,c
+            push    bc
+            pop     hl
             ld      a,#FAT_SIGNALED
-            push    af
-            inc     sp
-            call    _evt_set
-            pop     de
+            call    fat_evt_state$
             ret
+
+            ;; ----------------------------------------------------------------
+            ;; fat_finish_dirent$(<de> status)
+            ;; ----------------------------------------------------------------
+            ;; shared worker-side completion tail: store status into the current
+            ;; lookup result and signal its event. every path/dir handler ends
+            ;; here, so folding the three-instruction tail saves bytes per site.
+            ;; ----------------------------------------------------------------
+fat_finish_dirent$:
+            ld      hl,(fat_lookup_dirent$)
+            ld      bc,(fat_work_event$)
+            jp      fat_complete_dirent$
 
             ;; ----------------------------------------------------------------
             ;; fat_store_de$(<hl> addr, <de> value)
@@ -278,6 +300,40 @@ fat_load_de$:
             ld      e,(hl)
             inc     hl
             ld      d,(hl)
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; fat_fs_de$(<bc> offset)   -> <de> fs-field word, <hl> = fs+off+1
+            ;; fat_fs_byte$(<bc> offset)  -> <a>  fs-field byte, <hl> = fs+off
+            ;; ----------------------------------------------------------------
+            ;; shared accessors for the mounted-volume descriptor. callers used
+            ;; to open-code ld hl,(fat_work_fs$) / add hl,bc / load on every
+            ;; field; folding that here reclaims several bytes per call site.
+            ;; ----------------------------------------------------------------
+fat_fs_de$:
+            ld      hl,(fat_work_fs$)
+            add     hl,bc
+            jr      fat_load_de$
+fat_fs_byte$:
+            ld      hl,(fat_work_fs$)
+            add     hl,bc
+            ld      a,(hl)
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; fat_dirent_de$(<bc> offset)  -> <de> field, <hl> = dirent+off+1
+            ;; fat_dirent_byte$(<bc> offset) -> <a>  field, <hl> = dirent+off
+            ;; ----------------------------------------------------------------
+            ;; same idea as fat_fs_de$/byte$ for the current lookup result.
+            ;; ----------------------------------------------------------------
+fat_dirent_de$:
+            ld      hl,(fat_lookup_dirent$)
+            add     hl,bc
+            jr      fat_load_de$
+fat_dirent_byte$:
+            ld      hl,(fat_lookup_dirent$)
+            add     hl,bc
+            ld      a,(hl)
             ret
 
             ;; ----------------------------------------------------------------
@@ -389,6 +445,9 @@ fat_req_base$:
             ;; drops its own return address and exits through fat_ret_einval4$.
             ;; ----------------------------------------------------------------
 fat_path_submit_check$:
+            ;; sdcc clean4 frame below this helper's own return address:
+            ;;   [sp+0]=check_ret [sp+2]=caller_ret [sp+4]=event [sp+6]=file
+            ;; hl=fs, de=path
             ld      a,h
             or      l
             jr      z,fpsc_bad$
@@ -396,30 +455,35 @@ fat_path_submit_check$:
             or      e
             jr      z,fpsc_bad$
 
-            push    hl
-            ld      hl,#6
-            add     hl,sp
-            ld      a,(hl)
-            inc     hl
-            or      (hl)
-            pop     hl
-            jr      z,fpsc_bad$
+            push    de                  ; save path
+            push    hl                  ; save fs
+            push    bc                  ; save caller op/flags
 
-            push    bc
-            push    de
-            push    hl
             ld      hl,#12
             add     hl,sp
             ld      a,(hl)
             inc     hl
-            ld      h,(hl)
-            ld      l,a                 ; hl = stacked event pointer
+            or      (hl)
+            jr      z,fpsc_bad_pop$
+
+            ld      hl,#10
+            add     hl,sp
+            ld      c,(hl)
+            inc     hl
+            ld      b,(hl)
+            push    bc
+            pop     hl                  ; hl = stacked event pointer
             call    fat_evt_reset$
-            pop     hl
-            pop     de
-            pop     bc
+
+            pop     bc                  ; restore caller op/flags
+            pop     hl                  ; restore fs
+            pop     de                  ; restore path
             ret
 
+fpsc_bad_pop$:
+            pop     bc
+            pop     hl
+            pop     de
 fpsc_bad$:
             pop     bc                  ; drop our own return address first
             jp      fat_ret_einval4$
@@ -427,91 +491,128 @@ fpsc_bad$:
             ;; ----------------------------------------------------------------
             ;; fat_submit_path_req$(<d> op,<e> flags) -> no return
             ;; ----------------------------------------------------------------
-            ;; shared tail for path-based submissions whose stack layout is:
-            ;;   [sp+0] saved fs
-            ;;   [sp+2] saved path
-            ;;   [sp+4] caller return address
-            ;;   [sp+6] stacked dirent/file pointer
-            ;;   [sp+8] stacked event pointer
+            ;; shared tail for path-based submissions. callers leave fs/path in
+            ;; fat_submit_frame$ and keep the sdcc clean4 stack:
+            ;;   [sp+0] caller return address
+            ;;   [sp+2] stacked event pointer
+            ;;   [sp+4] stacked dirent/file pointer
             ;;
             ;; de carries the packed submit opcode/flags. this helper now also
             ;; absorbs the old "ready" stage: it runs fat_init, allocates one
             ;; request block, then finishes packing and queueing the request.
             ;; ----------------------------------------------------------------
 fat_submit_path_req$:
-            push    de                  ; save op/flags across init + alloc
-            call    _fat_init
-            ld      a,d
-            or      e
-            jr      z,fsptr_alloc$
-fsptr_fail$:
-            pop     bc                  ; drop saved op/flags
-            pop     bc                  ; drop saved fs
-            pop     bc                  ; drop saved path
-            jp      fat_complete_stacked_dirent4$
-
-fsptr_alloc$:
-            call    fat_alloc_req$
-            jr      nz,fsptr_pack$
-            ld      de,#FAT_ENOMEM
-            jr      fsptr_fail$
-
-fsptr_pack$:
-            pop     de                  ; de = packed op/flags
-            call    fat_req_base$
-            ld      a,d
-            ld      (hl),a              ; op
-            inc     hl
-            ld      a,e
-            ld      (hl),a              ; flags
-            inc     hl
-
-            push    hl
-            ld      hl,#10
+            ld      (fat_submit_op_flags$),de
+            ld      hl,#2
             add     hl,sp
-            ld      c,(hl)
+            ld      e,(hl)
             inc     hl
-            ld      b,(hl)              ; bc = stacked event
-            pop     hl
-            ld      (hl),c
-            inc     hl
-            ld      (hl),b
-            inc     hl
-
-            pop     de                  ; de = saved fs
-            call    fat_store_de$
-
-            push    hl
-            ex      de,hl               ; hl = fs
-            ld      bc,#FATFS_DEV
-            add     hl,bc
-            call    fat_load_de$        ; de = fs->dev
-            pop     hl
-            call    fat_store_de$
-
-            pop     de                  ; de = saved path
-            call    fat_store_de$
-
-            xor     a
-            ld      (hl),a
-            inc     hl
-            ld      (hl),a              ; bytes = 0
-            inc     hl
-            ld      (hl),a
-            inc     hl
-            ld      (hl),a
-            inc     hl
-
-            push    hl
+            ld      d,(hl)              ; de = stacked event
+            ld      (fat_submit_path_event$),de
             ld      hl,#4
             add     hl,sp
             ld      e,(hl)
             inc     hl
             ld      d,(hl)              ; de = stacked dirent/file
-            pop     hl
-            call    fat_store_de$       ; arg = dirent/file
+            ld      (fat_submit_event$),de
+            ld      hl,#fat_submit_op_flags$ + 1
+            ld      a,(hl)              ; packed op byte (de high on little-endian)
+            cp      #FATREQ_OP_MOUNT
+            jr      c,fsptr_einval_op$
+            cp      #FATREQ_OP_RMDIR + 1
+            jr      nc,fsptr_einval_op$
+            call    fsptr_validate_frame$
+            ld      a,h
+            or      l
+            jr      nz,fsptr_einval_op$
+            call    _fat_init
+            ld      a,d
+            or      e
+            jr      z,fsptr_alloc$
+            jr      fsptr_fail_de$
 
+fsptr_alloc$:
+            call    fat_alloc_req$
+            jr      nz,fsptr_pack$
+            ld      de,#FAT_ENOMEM
+            jr      fsptr_fail_de$
+
+fsptr_einval_op$:
+            ld      de,#FAT_EINVAL
+            jr      fsptr_fail_de$
+
+            ;; ----------------------------------------------------------------
+            ;; fsptr_validate_frame$() -> <hl> FAT_OK | error
+            ;; ----------------------------------------------------------------
+            ;; rejects path submissions whose caller frame lost fs/path or
+            ;; points at a volume that is not mounted+ready.
+            ;; ----------------------------------------------------------------
+fsptr_validate_frame$:
+            ld      de,(fat_submit_frame$)
+            ld      a,d
+            or      e
+            jr      z,fvf_fail$
+            push    de
+            pop     hl
+            ld      bc,#FATFS_MOUNTED
+            add     hl,bc
+            ld      a,(hl)
+            dec     a
+            jr      nz,fvf_fail$
+            inc     hl
+            ld      a,(hl)
+            inc     hl
+            or      (hl)
+            jr      nz,fvf_fail$
+            ld      de,(fat_submit_frame$ + 2)
+            ld      a,d
+            or      e
+            jr      z,fvf_fail$
+            ld      hl,#FAT_OK
+            ret
+fvf_fail$:
+            ld      hl,#FAT_EINVAL
+            ret
+
+fsptr_pack$:
+            ld      de,(fat_submit_op_flags$)
+            call    fat_req_base$
+            ld      a,d
+            ld      (hl),a
+            inc     hl
+            ld      a,e
+            ld      (hl),a
+            inc     hl
+            ld      de,(fat_submit_path_event$)
+            call    fat_store_de$       ; stacked event
+            ld      de,(fat_submit_frame$)
+            call    fat_store_de$
+            push    hl
+            ld      de,(fat_submit_frame$)
+            ex      de,hl
+            ld      bc,#FATFS_DEV
+            add     hl,bc
+            call    fat_load_de$
+            pop     hl
+            call    fat_store_de$
+            ld      de,(fat_submit_frame$ + 2)
+            call    fat_store_de$
+            xor     a
+            ld      (hl),a
+            inc     hl
+            ld      (hl),a
+            inc     hl
+            ld      de,(fat_submit_frame$ + 6)
+            call    fat_store_de$       ; frame+6 = stacked dirent/file
             call    fat_queue_req$
+            jp      fat_ret_clean4$
+
+fsptr_fail_de$:
+            ld      hl,(fat_submit_event$)
+            ld      bc,(fat_submit_path_event$)
+            push    de                  ; preserve sdcc return code across completion
+            call    fat_complete_dirent$
+            pop     de
             jp      fat_ret_clean4$
 
             ;; ----------------------------------------------------------------
@@ -688,12 +789,13 @@ fat_dev_read$:
 
 fat_dev_write$:
             ld      a,#DRV_WRITE
+            jr      fat_dev_call3$
 
 fat_dev_call3$:
-            push    af                  ; save vtable offset
             push    bc                  ; save arg #3
-            push    de                  ; save arg #2
-            push    hl                  ; save dev
+            push    de                  ; save arg #2 (must stay intact: ld d,#off
+            push    hl                  ; would clobber the buf pointer high byte)
+            push    af                  ; save vtable offset from a
             ld      bc,#DEV_DRIVER
             add     hl,bc
             ld      c,(hl)
@@ -704,10 +806,9 @@ fat_dev_call3$:
             jr      z,fdc_fail_pop$
             ld      h,b
             ld      l,c                 ; hl = dev->driver
-            pop     af
-            push    af                  ; keep the saved offset for final pop
-            ld      c,a
+            pop     af                  ; restore vtable offset
             ld      b,#0
+            ld      c,a
             add     hl,bc
             call    fat_load_de$        ; de = real driver function
             ld      a,d
@@ -718,14 +819,13 @@ fat_dev_call3$:
             pop     hl                  ; restore dev
             pop     de                  ; restore arg #2
             pop     bc                  ; restore arg #3
-            pop     af                  ; discard saved offset
             push    iy
             ret
 fdc_fail_pop$:
+            pop     af
             pop     hl
             pop     de
             pop     bc
-            pop     af
             ld      hl,#DRV_ERR
             ret
 
@@ -737,14 +837,15 @@ fdc_fail_pop$:
             ;; immediately and we pay almost nothing for fake-async drivers.
             ;; ----------------------------------------------------------------
 fat_wait_one$:
-            push    hl
-            ld      hl,#0
-            add     hl,sp
+            ;; stable one-element wait array: nested call cannot clobber the
+            ;; event pointer or the fat_handle_lookup$ return slot on the stack.
+            ld      (fat_wait_evt$),hl
+            ld      hl,#fat_wait_evt$
             ld      a,#1
             push    af
             inc     sp
+            call    _ir_enable
             call    _thread_wait4events
-            pop     de
             ret
 
             ;; ----------------------------------------------------------------
@@ -788,9 +889,17 @@ fat_xfer_block$:
             ld      bc,#FAT_SECTOR_SIZE
             ld      ix,(fat_io_event$)
             pop     af
+            ;; branch explicitly on the direction flag: fat_dev_read$ returns
+            ;; with arbitrary flags, so a `call z,read / call nz,write` pair would
+            ;; retest read's leftover flags and spuriously call write with hl=0
+            ;; (a NULL device) -> fat_dev_call3$ dispatches a garbage vtable.
             or      a
-            call    z,fat_dev_read$
-            call    nz,fat_dev_write$
+            jr      nz,fxb_do_write$
+            call    fat_dev_read$
+            jr      fxb_io_tested$
+fxb_do_write$:
+            call    fat_dev_write$
+fxb_io_tested$:
             ld      a,h
             or      l
             jr      nz,fxb_fail$
@@ -815,10 +924,8 @@ fxb_fail$:
             ;; ----------------------------------------------------------------
 fat_write_volume_sector$:
             push    de
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_LBA_BASE
-            add     hl,bc
-            call    fat_load_de$
+            call    fat_fs_de$
             pop     hl
             add     hl,de
             ex      de,hl
@@ -976,6 +1083,7 @@ fpo_done$:
             ;; next request, executes it, frees the queue node and loops forever.
             ;; ----------------------------------------------------------------
 fat_worker$:
+fat_worker_loop$:
 fw_loop$:
             call    fat_queue_pop$
             ld      a,d
@@ -1002,6 +1110,14 @@ fw_dispatch$:
             jr      z,fw_write$
             dec     a
             jr      z,fw_create$
+            dec     a
+            jr      z,fw_readdir$
+            dec     a
+            jr      z,fw_unlink$
+            dec     a
+            jr      z,fw_mkdir$
+            dec     a
+            jr      z,fw_rmdir$
 
             ;; unknown op: fail the target fs and free the request anyway.
             call    fat_decode_req_evfdev$
@@ -1029,6 +1145,22 @@ fw_write$:
 
 fw_create$:
             call    fat_handle_create$
+            jr      fw_after$
+
+fw_readdir$:
+            call    fat_handle_readdir$
+            jr      fw_after$
+
+fw_unlink$:
+            call    fat_handle_unlink$
+            jr      fw_after$
+
+fw_mkdir$:
+            call    fat_handle_mkdir$
+            jr      fw_after$
+
+fw_rmdir$:
+            call    fat_handle_rmdir$
 
 fw_after$:
             pop     de
@@ -1080,11 +1212,24 @@ _fat_init::
             or      e
             jr      z,fi_fail_queue_evt$
 
-            ld      hl,#fat_worker$
-            ld      de,#FAT_WORKER_STACK
+            ;; sacrificial user-heap block between bootstrap and worker stacks.
+            ld      hl,#__usr_heap
+            ld      de,#FAT_USER_STACK_GUARD
             ld      bc,#0x0000
-            push    bc                  ; process = NONE
-            call    _thread_create
+            push    bc
+            call    _mem_allocate
+            pop     bc
+            ld      a,d
+            or      e
+            jr      z,fi_nomem$
+
+            ld      hl,#fat_worker$
+            ld      de,#FAT_WORKER_STACK + 2048
+            ld      bc,#0x0000
+            push    bc                  ; thread_data = NONE
+            ld      bc,#1
+            push    bc                  ; bank = 1 (current/boot bank)
+            call    _thread_create     ; callee-clean: pops both stacked args
             ld      (fat_worker_thread$),de
             ld      a,d
             or      e
@@ -1141,6 +1286,8 @@ fat_worker_thread$:
             .dw     0x0000
 fat_init_state$:
             .db     FAT_INIT_NONE
+fat_wait_evt$:
+            .dw     0x0000
 
             .area   _SYSVARS
 
@@ -1152,6 +1299,11 @@ fat_work_dev$:
             .ds     2
 fat_work_event$:
             .ds     2
+fat_submit_frame$:
+            .ds     10
+            .equ    fat_submit_op_flags$, (fat_submit_frame$ + 4)
+            .equ    fat_submit_event$, (fat_submit_frame$ + 6)
+            .equ    fat_submit_path_event$, (fat_submit_frame$ + 8)
 fat_candidate_base$:
 fat_file_ptr$:
 fat_create_entry$:

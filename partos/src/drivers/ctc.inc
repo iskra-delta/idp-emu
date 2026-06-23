@@ -28,7 +28,12 @@
             ;; base must be a multiple of 8 (low 3 bits zero; bit0 = 0 also
             ;; marks the write to ch0 as a vector, not a control word).
             .equ    CTC_VEC_BASE,   0x88 ; ch3 (vbl) vector = 0x8e
+            .equ    CTC_VEC_TICK,   CTC_VEC_BASE + 4 ; ch2 periodic timer
             .equ    CTC_VEC_VBL,    CTC_VEC_BASE + 6 ; ch3 vertical-blank vector
+
+            ;; --- ch2 (plain-model timer) time constant ------------------------
+            ;; timer mode with /256 prescaler: ~50 hz on a 2.5 MHz-class clock.
+            .equ    CTC_TIMER_DIV,  195
 
             ;; --- ch3 (vbl) time constant -------------------------------------
             ;; number of vertical blanks per interrupt; 1 = every frame (~50 hz).

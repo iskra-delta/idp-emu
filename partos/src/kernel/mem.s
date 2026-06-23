@@ -17,7 +17,7 @@
             ;;     in : hl = heap start, de = payload pointer
             ;;     out: hl = payload pointer of resulting free block or 0
             ;;
-            ;;   _mem_free_owner:
+            ;;   __mem_free_owner:
             ;;     in : hl = heap start, de = owner
             ;;     out: a = number of blocks freed
             ;;
@@ -30,7 +30,7 @@
             .globl  _mem_init
             .globl  _mem_allocate
             .globl  _mem_free
-            .globl  _mem_free_owner
+            .globl  __mem_free_owner
             .globl  _ir_disable
             .globl  _ir_enable
 
@@ -44,7 +44,10 @@
 
             .equ    BLOCK_STAT,         4
             .equ    BLOCK_SIZE,         5
-            .equ    BLOCK_DATA,         7
+            ;; per-object cleanup hook, called before the block is freed (0 =
+            ;; none, free memory only). sits just before the payload (payload-2).
+            .equ    BLOCK_DTOR,         7
+            .equ    BLOCK_DATA,         9
             .equ    BLK_SIZE,           BLOCK_DATA
             .equ    SPLIT_THRESHOLD,    BLK_SIZE + MIN_CHUNK_SIZE + 1
 
@@ -267,7 +270,12 @@ ma_mark$:
             ld      (hl),#ALLOCATED
             inc     hl
             inc     hl
-            inc     hl                  ; hl = block->data
+            inc     hl                  ; hl = block->dtor (block+7)
+            xor     a
+            ld      (hl),a              ; dtor = 0 (free memory only by default)
+            inc     hl
+            ld      (hl),a
+            inc     hl                  ; hl = block->data (block+9)
             ret
 
 _mem_allocate::
@@ -284,7 +292,38 @@ _mem_allocate::
             ;; ----------------------------------------------------------------
             ;; <hl> <= __mem_free$(<hl> heap, <de> payload)
             ;; ----------------------------------------------------------------
+            ;; ----------------------------------------------------------------
+            ;; mem_run_dtor$(<hl> payload)
+            ;; ----------------------------------------------------------------
+            ;; calls the block's cleanup hook stored at payload-2 with hl =
+            ;; payload, if it is non-zero. tail-calls the hook; returns to the
+            ;; caller of mem_run_dtor$ either way (no hook -> immediate ret).
+            ;; ----------------------------------------------------------------
+mem_run_dtor$:
+            dec     hl
+            dec     hl                  ; hl = &cleanup (payload-2)
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)              ; de = cleanup hook
+            inc     hl                  ; hl = payload
+            ld      a,d
+            or      e
+            ret     z                   ; no hook -> nothing to do
+            ld      bc,#mrd_ret$
+            push    bc                  ; return address for the hook
+            push    de
+            ret                         ; jp (hook) with hl = payload
+mrd_ret$:
+            ret
+
 __mem_free$:
+            ;; run the object's cleanup hook first; memory is released last.
+            push    hl                  ; save heap
+            push    de                  ; save payload
+            ex      de,hl               ; hl = payload
+            call    mem_run_dtor$
+            pop     de                  ; de = payload
+            pop     hl                  ; hl = heap
             ld      a,e
             sub     #BLOCK_DATA
             ld      e,a
@@ -381,23 +420,26 @@ _mem_free::
             ret
 
             ;; ----------------------------------------------------------------
-            ;; <a> <= _mem_free_owner(<hl> heap, <de> owner)
+            ;; <a> <= __mem_free_owner(<hl> heap, <de> owner)
             ;; ----------------------------------------------------------------
-_mem_free_owner::
+__mem_free_owner::
             call    _ir_disable
-            push    hl
-            exx
-            pop     hl                  ; hl' = heap
-            ld      bc,#0x0000          ; c' = freed count
-            exx
+            push    hl                  ; saved heap
+            push    de                  ; saved owner
+            xor     a
+            ld      h,a
+            ld      l,a
+            push    hl                  ; saved freed count (low byte returned)
             ld      b,d
             ld      c,e                 ; bc = owner
 
 mfo_restart$:
-            exx
-            push    hl
-            exx
-            pop     hl                  ; hl = heap
+            ld      hl,#4
+            add     hl,sp
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)
+            ex      de,hl               ; hl = heap
 
 mfo_scan$:
             ld      a,h
@@ -424,15 +466,22 @@ mfo_scan$:
             add     hl,de
             ex      de,hl               ; de = payload
             push    bc
-            exx
-            push    hl
-            exx
-            pop     hl                  ; hl = heap
+            push    de                  ; keep payload while we reload heap
+            ld      hl,#8
+            add     hl,sp
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)
+            ex      de,hl               ; hl = heap
+            pop     de                  ; de = payload
             call    __mem_free$
             pop     bc
-            exx
-            inc     c
-            exx
+            ld      hl,#0
+            add     hl,sp               ; hl = saved count
+            inc     (hl)
+            jr      nz,mfo_restart$
+            inc     hl
+            inc     (hl)
             jr      mfo_restart$
 
 mfo_next$:
@@ -444,8 +493,8 @@ mfo_next$:
             jr      mfo_scan$
 
 mfo_done$:
-            exx
-            ld      a,c
-            exx
-            call    _ir_enable
-            ret
+            pop     hl                  ; hl = saved count
+            ld      a,l
+            pop     de                  ; drop saved owner
+            pop     hl                  ; drop saved heap
+            jp      _ir_enable

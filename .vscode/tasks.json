@@ -74,10 +74,29 @@
       }
     },
     {
+      "label": "Build PartOS Disks",
+      "type": "shell",
+      "command": "python3",
+      "args": [
+        "${workspaceFolder}/tools/mkdosdisk.py",
+        "${workspaceFolder}/disks"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}"
+      },
+      "problemMatcher": [],
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": false
+      }
+    },
+    {
       "label": "Build Emulator + PartOS",
       "dependsOn": [
         "CMake Build RelWithDebInfo",
-        "Build PartOS ROM"
+        "Build PartOS ROM",
+        "Build PartOS Disks"
       ],
       "dependsOrder": "sequence",
       "problemMatcher": []

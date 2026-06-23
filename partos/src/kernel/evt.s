@@ -29,8 +29,8 @@
             .globl  _evt_destroy
             .globl  _evt_set
             .globl  __evt_first
-            .globl  _so_create
-            .globl  _so_destroy
+            .globl  __so_create
+            .globl  __so_destroy
             .globl  _list_find
             .globl  _list_match_eq
 
@@ -47,10 +47,10 @@
             ;; clears it to the non-signaled state.
             ;; ----------------------------------------------------------------
 _evt_create::
-            push    hl                  ; stack owner for so_create
+            push    hl                  ; stack owner for __so_create
             ld      de,#EVENT_SIZE
             ld      hl,#__evt_first
-            call    _so_create          ; de = event or 0; owner left on stack
+            call    __so_create         ; de = event or 0; owner left on stack
             pop     hl                  ; discard owner arg
             ld      a,d
             or      e
@@ -66,7 +66,7 @@ _evt_create::
 _evt_destroy::
             ex      de,hl               ; de = event
             ld      hl,#__evt_first
-            jp      _so_destroy
+            jp      __so_destroy
 
             ;; ----------------------------------------------------------------
             ;; <de> <= _evt_set(<hl> event, <stack> newstate)
@@ -106,8 +106,5 @@ es_ret$:
             inc     sp                  ; drop 1-byte newstate arg
             jp      (hl)
 
-            .area   _INITIALIZED
-
-            ;; head of the event list
-__evt_first::
-            .dw     0x0000
+            ;; the event list head now lives in page0.s (parked in the dead
+            ;; pre-nmi pad); imported via the .globl at the top of this module.

@@ -33,6 +33,7 @@
             .globl  _thread_suspend
             .globl  _thread_exit
             .globl  _thread_wait4events
+            .globl  __thread_cleanup_terminated
             .globl  __thread_select_next
             .globl  __thread_robin
 
@@ -42,17 +43,16 @@
             .globl  _thread_first_waiting
             .globl  _thread_first_terminated
 
-            .globl  _so_create
-            .globl  _so_destroy
+            .globl  __so_create
+            .globl  __so_destroy
             .globl  _list_insert
             .globl  _list_remove
             .globl  _mem_allocate
-            .globl  _mem_free_owner
+            .globl  __mem_free_owner
             .globl  __owner_cleanup_run
-            .globl  _process_reap
             .globl  _ir_disable
             .globl  _ir_enable
-            .globl  __tmr_chain
+            .globl  __tick_dispatch
             .globl  __usr_heap
             .globl  __sys_heap
             .globl  ir_refcnt
@@ -64,8 +64,13 @@
             .equ    THREAD_NUM_EVENTS,  18
             .equ    THREAD_STATE,       19
             .equ    THREAD_JOINED,      20
-            .equ    THREAD_PROCESS,     22
-            .equ    THREAD_SIZE,        24
+            ;; thread_data: an OS-opaque pointer the kernel stores but never
+            ;; dereferences (typically the owning process). bank: which RAM bank
+            ;; the thread's stack/image live in (the kernel records it; the
+            ;; context switch uses it to map the right bank).
+            .equ    THREAD_DATA,        22
+            .equ    THREAD_BANK,        24
+            .equ    THREAD_SIZE,        25
             ;; context: af,bc,de,hl,ix,iy,af',bc',de',hl' (20) + ret (2) = 22
             .equ    CONTEXT_SIZE,       22
 
@@ -82,13 +87,18 @@
             .area   _CODE
 
             ;; ----------------------------------------------------------------
-            ;; <de> <= _thread_create(<hl> entry, <de> stack_size, <stack> proc)
+            ;; <de> <= _thread_create(<hl> entry, <de> stack_size,
+            ;;                         <stack+2> bank, <stack+4> thread_data)
             ;; ----------------------------------------------------------------
             ;; allocates a thread sysobj on the suspended list plus a private
             ;; stack, primes the stack so the first context restore drops into
             ;; the bootstrap code (call entry; on return ld hl,t; jp thread_exit)
             ;; and returns the new thread (or 0). runs in a critical section, so
             ;; the inputs are stashed in static scratch instead of juggling sp.
+            ;;
+            ;; the two stacked args are caller-cleaned (push thread_data, then
+            ;; bank). `bank` is the RAM bank the thread runs in; `thread_data` is
+            ;; an OS-opaque pointer the kernel only stores (typically the process).
             ;; ----------------------------------------------------------------
 _thread_create::
             call    _ir_disable
@@ -96,33 +106,35 @@ _thread_create::
             ld      (tc_stksz$),de
             ld      hl,#2
             add     hl,sp
+            ld      a,(hl)              ; stacked arg: bank (low byte)
+            ld      (tc_bank$),a
+            ld      hl,#4
+            add     hl,sp
             ld      e,(hl)
             inc     hl
             ld      d,(hl)
-            ld      (tc_process$),de    ; stacked arg: parent process
+            ld      (tc_data$),de       ; stacked arg: thread_data (opaque)
 
-            ;; t = so_create(&suspended, THREAD_SIZE, NONE)
+            ;; t = __so_create(&suspended, THREAD_SIZE, NONE)
             ld      de,#0x0000
             push    de                  ; owner = NONE
             ld      de,#THREAD_SIZE
             ld      hl,#_thread_first_suspended
-            call    _so_create
+            call    __so_create
             pop     bc                  ; drop owner
             ld      a,d
             or      e
             jp      z,tc_fail0$
             ld      (tc_t$),de
 
-            ;; stack = mem_allocate(owner ? user_heap : sys_heap, stack_size, owner=t)
+            ;; stack = mem_allocate(user_heap, stack_size, owner=t)
+            ;; a thread's stack is its saved-register block -- a USER object, so
+            ;; it always comes from the large user heap, never the tiny system
+            ;; heap (where it would collide with the thread struct and other
+            ;; system objects, clobbering ->sp when the stack grows).
             push    de                  ; owner = t
             ld      de,(tc_stksz$)
-            ld      hl,(tc_process$)
-            ld      a,h
-            or      l
-            ld      hl,#__sys_heap
-            jr      z,tc_heap_ready$
             ld      hl,#__usr_heap
-tc_heap_ready$:
             call    _mem_allocate
             pop     bc                  ; drop owner
             ld      a,d
@@ -143,14 +155,17 @@ tc_heap_ready$:
             inc     hl
             ld      (hl),a              ; state = SUSPENDED
 
-            ;; --- t->process = process ---
+            ;; --- t->thread_data = thread_data, t->bank = bank ---
             ld      hl,(tc_t$)
-            ld      de,#THREAD_PROCESS
+            ld      de,#THREAD_DATA
             add     hl,de
-            ld      de,(tc_process$)
+            ld      de,(tc_data$)
             ld      (hl),e
             inc     hl
-            ld      (hl),d
+            ld      (hl),d              ; -> THREAD_DATA+1; next is THREAD_BANK
+            inc     hl
+            ld      a,(tc_bank$)
+            ld      (hl),a              ; t->bank
 
             ;; --- t->sp = stack + stack_size - CONTEXT_SIZE ---
             ld      de,(tc_stack$)
@@ -213,18 +228,20 @@ tc_heap_ready$:
             ld      de,(tc_t$)          ; return value
             call    _ir_enable
             pop     hl                  ; ret addr
-            pop     bc                  ; drop stacked process arg
+            pop     bc                  ; drop stacked bank
+            pop     bc                  ; drop stacked thread_data
             jp      (hl)
 
 tc_fail1$:
             ld      de,(tc_t$)
             ld      hl,#_thread_first_suspended
-            call    _so_destroy
+            call    __so_destroy
 tc_fail0$:
             ld      de,#0x0000
             call    _ir_enable
             pop     hl                  ; ret addr
-            pop     bc                  ; drop stacked process arg
+            pop     bc                  ; drop stacked bank
+            pop     bc                  ; drop stacked thread_data
             jp      (hl)
 
             ;; ----------------------------------------------------------------
@@ -234,6 +251,7 @@ tc_fail0$:
             ;; does nothing if t was not on the src list.
             ;; ----------------------------------------------------------------
 thread_move$:
+            call    _ir_disable
             push    de                  ; &dst
             push    bc                  ; t
             push    af                  ; state
@@ -256,11 +274,14 @@ thread_move$:
             ld      (hl),a
             pop     hl                  ; hl = &dst
             pop     de                  ; de = t
-            jp      _list_insert        ; tail: list_insert(&dst, t)
+            call    _list_insert
+            call    _ir_enable
+            ret
 tmv_fail$:
             pop     af
             pop     bc
             pop     de
+            call    _ir_enable
             ret
 
             ;; ----------------------------------------------------------------
@@ -269,8 +290,8 @@ tmv_fail$:
 _thread_resume::
             ld      b,h
             ld      c,l
-            ld      hl,#_thread_first_suspended
             ld      de,#_thread_first_running
+            ld      hl,#_thread_first_suspended
             ld      a,#THREAD_STATE_RUNNING
             jp      thread_move$
 
@@ -300,6 +321,10 @@ _thread_exit::
             ld      de,#_thread_first_terminated
             ld      a,#THREAD_STATE_TERMINATED
             call    thread_move$
+            rst     0x18                ; hand control to the scheduler now so
+                                        ; a dying bootstrap/user thread does not
+                                        ; depend on a later hardware tick just
+                                        ; to let the next runnable thread start.
 tex_dead$:
             halt                        ; scheduler reaps us; never run again
             jr      tex_dead$
@@ -315,7 +340,7 @@ tex_dead$:
 _thread_wait4events::
             push    hl                  ; save events
             ld      hl,#4
-            add     hl,sp               ; -> num_events (sp+2 entry, +2 push)
+            add     hl,sp               ; -> num_events (sp+2 at entry, +2 push)
             ld      a,(hl)
             pop     de                  ; de = events
             ld      b,a                 ; b = num_events
@@ -349,7 +374,9 @@ tw_w$:
             ld      de,#_thread_first_waiting
             ld      a,#THREAD_STATE_WAITING
             call    thread_move$
-            halt                        ; yield; wakes when an event signals
+            rst     0x18                ; yield to the scheduler (tick-independent);
+                                        ; resumes here once an event signals
+
 tw_ret$:
             pop     hl                  ; ret addr
             inc     sp                  ; drop 1-byte num_events arg
@@ -400,6 +427,7 @@ tas_yes$:
             ;; reaps terminated threads (except the one currently running):
             ;; frees the thread's owned memory (its stack) and the thread sysobj.
             ;; ----------------------------------------------------------------
+__thread_cleanup_terminated::
 thread_cleanup_terminated$:
             ld      hl,(_thread_first_terminated)
 tct_loop$:
@@ -422,42 +450,26 @@ tct_loop$:
 tct_reap$:
             ;; give optional subsystems a chance to unlink objects that still
             ;; point at this owner before the heap walk frees owned blocks.
-            pop     hl
-            ld      (tct_saved_t$),hl
-            ld      de,#THREAD_PROCESS
-            add     hl,de
-            ld      e,(hl)
-            inc     hl
-            ld      d,(hl)
-            ld      (tct_process$),de   ; remember parent process before free
-            ld      hl,(tct_saved_t$)
-            push    hl                  ; keep t alive for the real reap steps
-            ex      de,hl               ; de = dead owner
+            pop     de                  ; de = t
+            push    de                  ; restore [t][next]
             call    __owner_cleanup_run
-            pop     hl
-            push    hl                  ; restore saved t for the next step
-tct_have_t$:
+            pop     de                  ; de = t
+            push    de                  ; restore [t][next]
             ;; free any thread-owned stack regardless of which heap supplied it
-            ex      de,hl               ; de = t
-            push    de
             ld      hl,#__sys_heap
-            call    _mem_free_owner
+            call    __mem_free_owner
             pop     de
             push    de
             ld      hl,#__usr_heap
-            call    _mem_free_owner
-            ;; so_destroy(&terminated, t) frees the thread sysobj
-            pop     bc
-            push    bc                  ; t (keep)
-            ld      e,c
-            ld      d,b
+            call    __mem_free_owner
+            ;; __so_destroy(&terminated, t) frees the thread sysobj
+            pop     de                  ; restore t, stack = [next]
             ld      hl,#_thread_first_terminated
-            call    _so_destroy
-            pop     bc                  ; drop t
-            ld      hl,(tct_process$)
-            ld      a,h
-            or      l
-            call    nz,_process_reap
+            call    __so_destroy
+            ;; the process layer lives in the payload, not the micro-kernel: a
+            ;; process registers teardown on its main thread's sysobj via
+            ;; set_cleanup, which __so_destroy above already runs. the kernel
+            ;; therefore no longer reaps processes itself (no upward call).
             pop     hl                  ; hl = next
             jr      tct_loop$
 tct_skip$:
@@ -588,10 +600,8 @@ trbn_no_current$:
             pop     hl                  ; balance the early af/hl pushes
             pop     af
 trbn_exec$:
-            call    __tmr_chain
+            call    __tick_dispatch       ; registered tick hook (soft timers)
             call    __thread_select_next  ; de = next | 0
-            ld      hl,#ir_refcnt
-            dec     (hl)                ; release bracket (no ei yet)
             ld      a,d
             or      e
             jr      nz,trbn_have_next$
@@ -626,21 +636,14 @@ trbn_have_next$:
             pop     hl
             pop     af
 trbn_done$:
-            ei
+            call    _ir_enable           ; release only the bracket we took here;
+                                        ; if an outer caller still holds interrupts
+                                        ; off, keep them off across this yield/tick.
             reti
 
-            .area   _INITIALIZED
-
-_thread_current::
-            .dw     0x0000
-_thread_first_suspended::
-            .dw     0x0000
-_thread_first_running::
-            .dw     0x0000
-_thread_first_waiting::
-            .dw     0x0000
-_thread_first_terminated::
-            .dw     0x0000
+            ;; the thread list heads now live in page0.s (parked in the dead
+            ;; pre-nmi pad to keep _INITIALIZED under the 2 KB line); imported via
+            ;; the .globl declarations at the top of this module.
 
             .area   _SYSVARS
 
@@ -649,8 +652,10 @@ tc_entry$:
             .ds     2
 tc_stksz$:
             .ds     2
-tc_process$:
+tc_data$:
             .ds     2
+tc_bank$:
+            .ds     1
 tc_t$:
             .ds     2
 tc_stack$:
@@ -658,6 +663,4 @@ tc_stack$:
 tc_end$:
             .ds     2
 tct_saved_t$:
-            .ds     2
-tct_process$:
             .ds     2

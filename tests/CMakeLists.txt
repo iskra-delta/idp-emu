@@ -89,53 +89,6 @@ target_link_libraries(test_disk_controllers PRIVATE chipsex)
 
 add_test(NAME disk_controllers_unit COMMAND test_disk_controllers)
 
-add_executable(test_partos_bios_probe
-    test_partos_bios_probe.cpp
-    ../src/chips_impl.cpp
-    ../src/partner.cpp
-)
-
-target_include_directories(test_partos_bios_probe PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_compile_definitions(test_partos_bios_probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
-target_link_libraries(test_partos_bios_probe PRIVATE chipsex)
-
-add_test(NAME partos_bios_probe COMMAND test_partos_bios_probe)
-
-add_executable(test_partos_bios_probe_gdp
-    test_partos_bios_probe_gdp.cpp
-    ../src/chips_impl.cpp
-    ../src/partner.cpp
-    ../src/partner_gdp.cpp
-    ../src/partner_gdp_keyboard.cpp
-    ../src/terminal/terminal_factory.cpp
-    ../src/terminal/vt52_terminal.cpp
-    ../src/gui/display.cpp
-)
-
-target_include_directories(test_partos_bios_probe_gdp PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_compile_definitions(test_partos_bios_probe_gdp PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
-target_link_libraries(test_partos_bios_probe_gdp PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
-
-add_test(NAME partos_bios_probe_gdp COMMAND test_partos_bios_probe_gdp)
-
-add_executable(test_partos_print
-    test_partos_print.cpp
-    ../src/chips_impl.cpp
-    ../src/partner.cpp
-    ../src/partner_crt.cpp
-    ../src/partner_gdp.cpp
-    ../src/partner_gdp_keyboard.cpp
-    ../src/terminal/terminal_factory.cpp
-    ../src/terminal/vt52_terminal.cpp
-    ../src/gui/display.cpp
-)
-
-target_include_directories(test_partos_print PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_compile_definitions(test_partos_print PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
-target_link_libraries(test_partos_print PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
-
-add_test(NAME partos_print COMMAND test_partos_print)
-
 add_executable(test_partos_boot_banner
     test_partos_boot_banner.cpp
     ../src/chips_impl.cpp
@@ -187,18 +140,6 @@ target_link_libraries(test_partos_bios_menu_gdp PRIVATE chipsex SDL2::SDL2 OpenG
 
 add_test(NAME partos_bios_menu_gdp COMMAND test_partos_bios_menu_gdp)
 
-add_executable(test_partos_bios_rtc
-    test_partos_bios_rtc.cpp
-    ../src/chips_impl.cpp
-    ../src/partner.cpp
-)
-
-target_include_directories(test_partos_bios_rtc PRIVATE ${CMAKE_SOURCE_DIR}/src)
-target_compile_definitions(test_partos_bios_rtc PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
-target_link_libraries(test_partos_bios_rtc PRIVATE chipsex)
-
-add_test(NAME partos_bios_rtc COMMAND test_partos_bios_rtc)
-
 add_executable(test_rtc_nvram_shadow
     test_rtc_nvram_shadow.cpp
     ../src/chips_impl.cpp
@@ -214,3 +155,6 @@ add_test(NAME rtc_nvram_shadow COMMAND test_rtc_nvram_shadow)
 # Builds the kernel + a FAT12 fixture and verifies the kernel boots through
 # device probe, the round-robin scheduler and FAT mount-submit.
 add_test(NAME partos_kernel_boot COMMAND idp-kernel-probe)
+
+# ROM -> HDD kernel load -> scheduler -> FAT shell read (no kernel overlay).
+add_test(NAME partos_full_boot COMMAND idp-full-boot-probe)

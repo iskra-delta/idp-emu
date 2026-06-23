@@ -256,11 +256,14 @@ void partner_gdp::tick()
         scn2674_tick(&avdc_, avdc_idle);
         const bool cur_vb  = (avdc_.irq_live & 0x10u) != 0u;
         avdc_vb_edge_ = cur_vb && !prev_vb;
-        // On each VB rising edge (I=0xFA = BIOS ready, ≥1 non-space AVDC write
-        // = past the cold-boot fill phase), hold Z80_INT high for 64 ticks so
-        // the Z80 reliably catches the interrupt within one instruction cycle.
-        if (avdc_vb_edge_ && cpu.i == 0xFA && avdc_char_nonspace_wr_cnt_ > 0) {
-            avdint_hold_ticks_ = 64;
+        // On each VB rising edge hold Z80_INT for 64 ticks. BIOS stage uses
+        // I=0xFA and waits for ≥1 non-space AVDC write (past cold-boot fill).
+        // After handoff the kernel IM2 page is I=0xFD and still needs VBL ticks
+        // for the round-robin scheduler and async FAT worker.
+        if (avdc_vb_edge_) {
+            if (cpu.i == 0xFD ||
+                (cpu.i == 0xFA && avdc_char_nonspace_wr_cnt_ > 0))
+                avdint_hold_ticks_ = 64;
         }
         if (avdint_hold_ticks_ > 0) avdint_hold_ticks_--;
     }

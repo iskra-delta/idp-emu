@@ -5,6 +5,7 @@
             ;; 2026-06-13   tstih
             .module drv
 
+            .include "../partos.inc"
             .include "dev.inc"
             .include "drv.inc"
 
@@ -34,6 +35,8 @@
             .globl  drv_setbufs_ix
             .globl  _evt_set
             .globl  _thread_current
+            .globl  _thread_first_waiting
+            .globl  __thread_robin
             .globl  _mem_allocate
             .globl  _mem_free
             .globl  _ir_disable
@@ -41,7 +44,10 @@
             .globl  __sys_heap
             .globl  ir_refcnt
 
+            .equ    THREAD_WAIT, 16
             .equ    THREAD_PROCESS, 22
+            .equ    EVENT_STATE, 4
+            .equ    SIGNALED, 1
 
             .area   _CODE
 
@@ -57,6 +63,18 @@
             ;; ----------------------------------------------------------------
 drv_isr_enter::
             di
+            xor     a
+            ld      (drv_need_resched$),a
+            inc     a
+            ld      (drv_in_isr$),a
+            ;; switch off the interrupted thread's (user-heap) stack onto the
+            ;; dedicated system ISR stack BEFORE saving anything. the thread's
+            ;; stack only holds the hardware interrupt frame; all ISR working
+            ;; state lives on the system stack so a deep ISR can never overflow
+            ;; into and corrupt the thread it interrupted. `ld (nn),sp` and
+            ;; `ld sp,nn` touch no registers, so the thread's regs are intact.
+            ld      (drv_thread_sp$),sp
+            ld      sp,#DRV_ISR_STACK_TOP
             push    af
             push    bc
             push    de
@@ -73,11 +91,15 @@ drv_isr_enter::
             exx
             ld      hl,#ir_refcnt
             inc     (hl)
-            ld      hl,#20
-            add     hl,sp
+            ;; recover this call's return address (the ISR body) from the top of
+            ;; the interrupted thread's stack, and bump the saved thread SP past
+            ;; it so drv_isr_exit's reti pops the hardware-pushed interrupt PC.
+            ld      hl,(drv_thread_sp$)
             ld      e,(hl)
             inc     hl
             ld      d,(hl)
+            inc     hl
+            ld      (drv_thread_sp$),hl
             ex      de,hl
             jp      (hl)
 
@@ -98,10 +120,30 @@ drv_isr_exit::
             pop     de
             pop     bc
             pop     af
-            inc     sp
-            inc     sp
+            ;; back onto the interrupted thread's stack (now pointing at the
+            ;; hardware interrupt frame), then return into the thread.
+            ld      sp,(drv_thread_sp$)
+            xor     a
+            ld      (drv_in_isr$),a
+            ld      a,(drv_need_resched$)
+            or      a
+            jr      z,drv_isr_reti$
+            ld      (drv_need_resched$),a ; preserve non-zero until the jump
+            xor     a
+            ld      (drv_need_resched$),a
+            jp      __thread_robin
+drv_isr_reti$:
             ei
             reti
+
+            .area   _SYSVARS
+drv_thread_sp$:
+            .ds     2
+drv_in_isr$:
+            .ds     1
+drv_need_resched$:
+            .ds     1
+            .area   _CODE
 
             ;; ----------------------------------------------------------------
             ;; drv_signal_done(<ix> *event)
@@ -117,9 +159,73 @@ drv_signal_done::
             ret     z                   ; no event -> nothing to signal
             ld      a,#EV_SIGNALED
             push    af
-            inc     sp
+            inc     sp                  ; leave A (signaled) as the 1-byte arg
             call    _evt_set            ; must CALL: evt_set reads its 1-byte arg
+            ld      a,(drv_in_isr$)
+            or      a
+            jr      z,drv_signal_done_ret$
+            call    drv_waiting_has_signaled$
+            or      a
+            jr      z,drv_signal_done_ret$
+            ld      a,#1
+            ld      (drv_need_resched$),a
+drv_signal_done_ret$:
             ret                         ; above the return addr; a tail jp misaligns
+
+            ;; ----------------------------------------------------------------
+            ;; <a> <= drv_waiting_has_signaled$()
+            ;; ----------------------------------------------------------------
+            ;; returns 1 when any thread on the waiting list currently has a
+            ;; signaled event, otherwise 0. this lets driver ISRs avoid a blind
+            ;; round-robin reschedule when the interrupted thread can simply
+            ;; continue and consume its now-signaled completion event itself.
+            ;; ----------------------------------------------------------------
+drv_waiting_has_signaled$:
+            ld      hl,(_thread_first_waiting)
+dwhs_thread$:
+            ld      a,h
+            or      l
+            jr      z,dwhs_no$
+            push    hl                  ; save current waiting thread
+            ld      de,#THREAD_WAIT
+            add     hl,de
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)              ; de = wait array
+            inc     hl
+            ld      b,(hl)              ; b = num_events
+            ld      a,b
+            or      a
+            jr      z,dwhs_next$
+dwhs_evt$:
+            ld      a,(de)
+            ld      l,a
+            inc     de
+            ld      a,(de)
+            ld      h,a
+            inc     de                  ; hl = event, de = next array slot
+            push    de
+            ld      de,#EVENT_STATE
+            add     hl,de
+            ld      a,(hl)
+            pop     de
+            cp      #SIGNALED
+            jr      z,dwhs_yes$
+            djnz    dwhs_evt$
+dwhs_next$:
+            pop     hl
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)
+            ex      de,hl
+            jr      dwhs_thread$
+dwhs_yes$:
+            pop     hl
+            ld      a,#1
+            ret
+dwhs_no$:
+            xor     a
+            ret
 
             ;; ----------------------------------------------------------------
             ;; drv_zero_ok_bc_ix()
@@ -441,6 +547,7 @@ dswi_store$:
             ;; shared dev->flags helpers for the stream-state prefix.
             ;; ----------------------------------------------------------------
 drv_update_busy_ix::
+            push    de
             ld      l,DRV_ST_DEV(ix)
             ld      h,DRV_ST_DEV+1(ix)
             ld      de,#DEV_FLAGS
@@ -455,12 +562,15 @@ drv_update_busy_ix::
             or      a
             jr      nz,dubi_set$
             res     1,(hl)
+            pop     de
             ret
 dubi_set$:
             set     1,(hl)
+            pop     de
             ret
 
 drv_update_lock_ix::
+            push    de
             ld      l,DRV_ST_DEV(ix)
             ld      h,DRV_ST_DEV+1(ix)
             ld      de,#DEV_FLAGS
@@ -469,17 +579,21 @@ drv_update_lock_ix::
             or      DRV_ST_LOCK+1(ix)
             jr      z,dul_clear$
             set     4,(hl)
+            pop     de
             ret
 dul_clear$:
             res     4,(hl)
+            pop     de
             ret
 
 drv_set_error_ix::
+            push    de
             ld      l,DRV_ST_DEV(ix)
             ld      h,DRV_ST_DEV+1(ix)
             ld      de,#DEV_FLAGS
             add     hl,de
             set     2,(hl)
+            pop     de
             ret
 
 drv_zero_span_hl_b$:
@@ -559,7 +673,9 @@ drv_purge_owner_ix::
             xor     a
             ld      DRV_ST_LOCK(ix),a
             ld      DRV_ST_LOCK+1(ix),a
+            push    de
             call    drv_update_lock_ix
+            pop     de
 dpoi_read$:
             pop     de
             push    de

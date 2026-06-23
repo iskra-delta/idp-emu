@@ -1,27 +1,25 @@
 // probe_kernel.cpp
 //
-// Functional smoke test for the PartOS *kernel* (not just the ROM). The kernel
-// image is larger than the ROM's 8 KB OS-load window, so it cannot boot the
-// normal way yet. Instead we drive it directly:
+// Direct split-image boot probe for PartOS.
 //
-//   1. reset the emulator (this seeds the emulated RTC/NVRAM),
-//   2. overlay the linked kernel.bin straight into RAM at its link base
-//      (0x10000 - filesize == _CODE base == __sys_kernel),
-//   3. run a 5-byte RAM stub `out (0x80),a ; jp __sys_page0_install` to disable
-//      the ROM overlay and hand off through the real page-0 installer (B = model,
-//      HL = continuation), which seeds __sys_nvram_cache from the NVRAM ports
-//      and installs page 0 into both banks,
-//   4. let the scheduler run (CTC VBL ticks drive the bootstrap thread).
+// This bypasses the ROM loader completely and verifies the next stage of the
+// boot contract in isolation:
 //
-// No ROM image is required, so this is independent of the ROM build. This is
-// the staging ground for the 15 KB squeeze regression net; first milestone:
-// does the direct-loaded kernel run init + device probe and settle, or derail?
+//   1. disable the ROM overlay,
+//   2. jump to the micro-kernel entry at 0x0000,
+//   3. let the kernel initialize and start the first payload thread,
+//   4. confirm that control reaches the fixed OS payload entry at 0xC000 and
+//      then the higher-level bootstrap thread.
 //
-// 2026-06-17   tstih
+// It is intentionally narrower than a full OS boot. The goal is to prove the
+// kernel -> OS handoff works with the split `kernel.sys` / `os.sys` images.
+//
+// 2026-06-22   tstih
 
 #include "partner.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -33,43 +31,57 @@
 
 namespace {
 
-constexpr uint16_t STUB_ADDR        = 0x2000; // RAM, above the ROM overlay window
-constexpr uint64_t RUN_TICK_LIMIT   = 12'000'000ULL;
-constexpr uint8_t  VBL_VECTOR       = 0x8E;   // CTC ch3 / VBL vector -> __thread_robin
-constexpr uint64_t VBL_PERIOD       = 60000;  // ~realistic 60 Hz VBL cadence
-uint8_t g_kernel_i                  = 0xFD;   // linked _IM2 page, filled from map
+constexpr uint16_t STUB_ADDR      = 0x2000;
+constexpr uint16_t KERNEL_ENTRY   = 0x0000;
+constexpr uint64_t RUN_TICK_LIMIT = 4'000'000ULL;
+constexpr uint16_t THREAD_SP_OFF = 4;
+constexpr uint16_t THREAD_STARTUP_OFF = 6;
+constexpr uint16_t THREAD_BANK_OFF = 24;
+constexpr uint16_t CONTEXT_SIZE = 22;
 
-// The base `partner` model emits no VBL interrupt, and the GDP model gates it
-// on I==0xFA (the BIOS IM2 page). The kernel sets I from the linked _IM2 page,
-// so this test model follows the map instead of hardcoding one value. It
-// injects the VBL vector
-// (0x8E) on a periodic short hold once the kernel's IM2 table is installed,
-// which is exactly what __sys_kernel waits on to dispatch the bootstrap thread.
-class kernel_probe_partner : public partner {
-public:
-    void tick() override {
-        if (get_cpu().i == g_kernel_i) {
-            if ((get_tick_count() % VBL_PERIOD) == 0) vbl_hold_ = 64;
-            if (vbl_hold_ > 0) --vbl_hold_;
+struct symbol_map {
+    std::map<std::string, std::vector<uint16_t>> syms;
+    explicit symbol_map(const std::string &path) {
+        std::ifstream f(path);
+        std::string line;
+        const std::regex re("([0-9A-Fa-f]{8})  ([_A-Za-z.][_A-Za-z0-9$.]*)");
+        while (std::getline(f, line)) {
+            for (auto it = std::sregex_iterator(line.begin(), line.end(), re);
+                 it != std::sregex_iterator(); ++it) {
+                const uint16_t a =
+                    (uint16_t)std::stoul((*it)[1].str(), nullptr, 16);
+                syms[(*it)[2].str()].push_back(a);
+            }
         }
-        partner::tick();
+        for (auto &kv : syms) {
+            std::sort(kv.second.begin(), kv.second.end());
+            kv.second.erase(std::unique(kv.second.begin(), kv.second.end()),
+                            kv.second.end());
+        }
     }
-    int get_external_im2_vector() const override {
-        return (get_cpu().i == g_kernel_i && vbl_hold_ > 0) ? VBL_VECTOR : -1;
+    uint16_t at(const std::string &name, size_t idx = 0) const {
+        auto it = syms.find(name);
+        if (it == syms.end())
+            it = syms.find(name.substr(0, 9));
+        if (it == syms.end() || idx >= it->second.size()) {
+            std::printf("FATAL: symbol '%s'[%zu] not in map\n",
+                        name.c_str(), idx);
+            std::exit(2);
+        }
+        return it->second[idx];
     }
-private:
-    int vbl_hold_ = 0;
 };
 
-static std::vector<uint8_t> read_file(const std::string &p)
+static std::vector<uint8_t> read_file(const std::string &path)
 {
-    std::ifstream f(p, std::ios::binary | std::ios::ate);
-    if (!f) return {};
-    auto n = (size_t)f.tellg();
-    std::vector<uint8_t> v(n);
+    std::ifstream f(path, std::ios::binary | std::ios::ate);
+    if (!f)
+        return {};
+    const auto n = (size_t)f.tellg();
+    std::vector<uint8_t> data(n);
     f.seekg(0);
-    f.read(reinterpret_cast<char *>(v.data()), (std::streamsize)n);
-    return v;
+    f.read(reinterpret_cast<char *>(data.data()), (std::streamsize)n);
+    return data;
 }
 
 static uint16_t read_area_addr(const std::string &path, const std::string &area)
@@ -82,183 +94,260 @@ static uint16_t read_area_addr(const std::string &path, const std::string &area)
         if (std::regex_search(line, m, re))
             return (uint16_t)std::stoul(m[1].str(), nullptr, 16);
     }
-    std::printf("FATAL: area %s not in map\n", area.c_str());
+    std::printf("FATAL: area %s not in %s\n", area.c_str(), path.c_str());
     std::exit(2);
 }
 
-// The sdldz80 map truncates symbol names to 9 chars and packs several per line.
-// Parse every "ADDR  truncname" token into truncname -> sorted addresses, so we
-// can resolve kernel symbols by their (9-char) name regardless of link shifts.
-struct symbol_map {
-    std::map<std::string, std::vector<uint16_t>> syms;
-    explicit symbol_map(const std::string &path) {
-        std::ifstream f(path);
-        std::string line;
-        const std::regex re("([0-9A-Fa-f]{8})  ([_A-Za-z.][_A-Za-z0-9$.]*)");
-        while (std::getline(f, line)) {
-            for (auto it = std::sregex_iterator(line.begin(), line.end(), re);
-                 it != std::sregex_iterator(); ++it) {
-                uint16_t a = (uint16_t)std::stoul((*it)[1].str(), nullptr, 16);
-                syms[(*it)[2].str()].push_back(a);
-            }
-        }
-        for (auto &kv : syms) { std::sort(kv.second.begin(), kv.second.end());
-            kv.second.erase(std::unique(kv.second.begin(), kv.second.end()), kv.second.end()); }
+static bool build_all(const std::string &root)
+{
+    if (std::system(("make -C " + root + "/partos -s sys").c_str()) != 0) {
+        std::puts("FAIL: split PartOS build failed");
+        return false;
     }
-    // name is truncated to 9 chars to match the map; idx selects among duplicates.
-    uint16_t at(const std::string &name, size_t idx = 0) const {
-        auto it = syms.find(name.substr(0, 9));
-        if (it == syms.end() || idx >= it->second.size()) {
-            std::printf("FATAL: symbol '%s'[%zu] not in map\n", name.c_str(), idx);
-            std::exit(2);
-        }
-        return it->second[idx];
-    }
-};
+    return true;
+}
 
 } // namespace
 
 int main(int argc, char **argv)
 {
-    std::string kernel = (argc > 1) ? argv[1] : "partos/bin/kernel.bin";
-    std::string disk   = (argc > 2) ? argv[2] : "";
-
-    // CTest mode: with no args and a known source root, build the kernel and a
-    // FAT12 fixture disk carrying a dummy /SHELL.XL, so the test is hermetic.
+    std::string root = ".";
 #ifdef IDP_SOURCE_ROOT
-    if (argc <= 1) {
-        const std::string root = IDP_SOURCE_ROOT;
-        if (std::system(("make -C " + root + "/partos -s kernel").c_str()) != 0) {
-            std::puts("FAIL: kernel build failed"); return 1;
-        }
-        disk = "/tmp/partos-kernel-boot-fixture.img";
-        if (std::system(("python3 " + root + "/tools/mkdosdisk.py --shelldisk " + disk).c_str()) != 0) {
-            std::puts("FAIL: fixture build failed"); return 1;
-        }
-        kernel = root + "/partos/bin/kernel.bin";
-    }
+    root = IDP_SOURCE_ROOT;
 #endif
+    if (argc > 1)
+        root = argv[1];
 
-    const auto kimg = read_file(kernel);
-    if (kimg.empty()) { std::printf("FAIL: cannot read kernel %s\n", kernel.c_str()); return 1; }
-    const uint16_t base = (uint16_t)(0x10000u - kimg.size());
-    std::printf("kernel.bin = %zu bytes, link base = 0x%04X (= __sys_kernel)\n",
-                kimg.size(), base);
+    if (std::getenv("IDP_SKIP_BUILD") == nullptr && !build_all(root))
+        return 1;
 
-    // resolve kernel symbols from the linker map (robust across link shifts).
-    std::string mappath = kernel;
-    auto pos = mappath.find("bin/kernel.bin");
-    if (pos != std::string::npos) mappath.replace(pos, 14, "build/kernel.map");
-    const uint16_t page0_install = (uint16_t)(read_area_addr(mappath, "_PAGE0") + 0x006B);
-    g_kernel_i = (uint8_t)(read_area_addr(mappath, "_IM2") >> 8);
-    symbol_map M(mappath);
+    const std::string kernel_path = root + "/partos/bin/kernel.sys";
+    const std::string os_path = root + "/partos/bin/os.sys";
+    const std::string kernel_map_path = root + "/partos/build/kernel.map";
+    const std::string os_map_path = root + "/partos/build/os.map";
 
-    kernel_probe_partner emu;
-    if (!disk.empty()) emu.load_disk(0, disk);
+    const auto kernel_img = read_file(kernel_path);
+    const auto os_img = read_file(os_path);
+    if (kernel_img.empty()) {
+        std::printf("FAIL: cannot read %s\n", kernel_path.c_str());
+        return 1;
+    }
+    if (os_img.empty()) {
+        std::printf("FAIL: cannot read %s\n", os_path.c_str());
+        return 1;
+    }
+
+    const uint16_t kernel_base = read_area_addr(kernel_map_path, "_CODE");
+    const uint16_t os_base = read_area_addr(os_map_path, "_CODE");
+    symbol_map K(kernel_map_path);
+    symbol_map O(os_map_path);
+
+    const uint16_t sys_kernel = K.at("__sys_kernel");
+    const uint16_t os_entry = O.at("__os_entry");
+    const uint16_t os_drv_register_all = O.at("__drv_register_all");
+    const uint16_t os_dev_init = O.at("__dev_init");
+    const uint16_t os_dev_init_all = O.at("__dev_init_all");
+    const uint16_t os_dev_probe_all = O.at("__dev_probe_all");
+    const uint16_t os_syscall_init = O.at("_syscall_init");
+    const uint16_t ir_enable = K.at("_ir_enable");
+    const uint16_t os_bootstrap = O.at("_kernel_bootstrap");
+    const uint16_t thread_current = K.at("_thread_current");
+    const uint16_t thread_suspended = K.at("_thread_first_suspended");
+    const uint16_t thread_running = K.at("_thread_first_running");
+    const uint16_t thread_waiting = K.at("_thread_first_waiting");
+    const uint16_t thread_terminated = K.at("_thread_first_terminated");
+
+    if (kernel_base != 0x0000) {
+        std::printf("FAIL: kernel _CODE base is %04X, expected 0000\n", kernel_base);
+        return 1;
+    }
+    if (os_base != 0xC000) {
+        std::printf("FAIL: os _CODE base is %04X, expected C000\n", os_base);
+        return 1;
+    }
+    if (os_entry != 0xC000) {
+        std::printf("FAIL: __os_entry is %04X, expected C000\n", os_entry);
+        return 1;
+    }
+
+    partner emu(root + "/partos/partos_shadow_nvram.bin");
     emu.reset();
+    emu.clean_kernel_io_handoff();
 
-    // overlay the kernel image into RAM at its link base.
-    emu.write_debug_memory(base, kimg);
+    static const std::array<uint8_t, 8> k_nvram = {
+        0x00, 0x40, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x02,
+    };
+    emu.seed_cmos_nvram(k_nvram.data(), k_nvram.size());
 
-    // stub: disable ROM overlay, then jump to the page-0 installer.
+    emu.write_debug_memory(os_base, os_img);
+
     const std::vector<uint8_t> stub = {
-        0xD3, 0x80,                                   // out (0x80),a  -> rom_enabled=false
-        0xC3, (uint8_t)(page0_install & 0xFF),        // jp __sys_page0_install
-        (uint8_t)(page0_install >> 8),
+        0xD3, 0x80,                         // out (0x80),a -> disable ROM
+        0x76,                               // halt        -> stop once RAM is visible
     };
     emu.write_debug_memory(STUB_ADDR, stub);
 
     auto st = emu.capture_debug_cpu_state();
-    st.af = 0x0000; st.bc = 0x0000;  // B = model 0 (CRT)
-    st.de = 0x0000; st.hl = base;    // HL = continuation = __sys_kernel
-    st.ix = st.iy = 0x0000;
-    st.sp = 0xFFFF; st.halted = false;
+    st.af = 0x0000;
+    st.bc = 0x0000;
+    st.de = 0x0000;
+    st.hl = 0x0000;
+    st.ix = 0x0000;
+    st.iy = 0x0000;
+    st.sp = 0xFFFF;
+    st.halted = false;
     emu.apply_debug_cpu_state(st);
     emu.debug_set_pc(STUB_ADDR);
-    const uint16_t SYS_NVRAM_CACHE  = M.at("__sys_nvram_cache");
-    const uint16_t PROCESS_LOAD_IMG = M.at("_process_load_image", 2); // 3rd _process_*
-    const uint16_t FAT_MOUNT        = M.at("_fat_mount", 1);          // [0]=_fat_mount_dev
-    const uint16_t FAT_OPEN         = M.at("_fat_open");
-    const uint16_t FAT_READ         = M.at("_fat_read");
-    const uint16_t DEV_FIRST        = M.at("_dev_first");
 
-    // phase 1: run the page-0 installer up to the kernel entry (== base), then
-    // patch NVRAM so fd0 = PARTNER (18 spt / 256 B, matching the emulated disk)
-    // and no hard disk (byte 2 = 0, skips slow SASI poll timeouts).
-    bool at_entry = false;
-    for (uint64_t i = 0; i < 2'000'000ULL; ++i) {
+    for (uint64_t guard = 0; guard < 1000; ++guard) {
         emu.tick();
-        if (emu.get_current_pc() == base) { at_entry = true; break; }
+        if (!emu.is_rom_enabled() && emu.capture_debug_cpu_state().halted)
+            break;
     }
-    if (!at_entry) { std::puts("FAIL: never reached kernel entry"); return 1; }
-    emu.write_debug_memory(SYS_NVRAM_CACHE + 1, {0x40}); // fd0 = type 1 (PARTNER)
-    emu.write_debug_memory(SYS_NVRAM_CACHE + 2, {0x00}); // no hard disks
-    std::puts("at kernel entry; NVRAM patched fd0=PARTNER, no HD");
+    if (emu.is_rom_enabled()) {
+        std::puts("FAIL: direct probe never disabled the ROM overlay");
+        return 1;
+    }
 
-    // phase 2: run the scheduler and record how far the boot path advances. Each
-    // milestone is a distinct PC the kernel can only reach if the previous stage
-    // worked, so the furthest milestone is a precise "boot depth" gauge. The dummy
-    // /SHELL.XL is never executed: process_load_image is a stop marker, not run.
-    const uint16_t KBOOT      = M.at("_kernel_bootstrap"); // scheduler dispatched a thread
-    const uint16_t FAT_WORKER = (uint16_t)(M.at("_fat_init") - 0x68); // fat_worker$ ran
-    const uint16_t FI         = M.at("_fat_init");         // FAT subsystem init
-    const uint16_t FAT_HANDLE_MOUNT = M.at("fat_handle_mount");
-    const uint16_t FAT_DEV_OPEN     = M.at("fat_dev_open");
-    const uint16_t FD_READ          = M.at("fd_read");
-    struct stage { const char *name; uint16_t pc; bool hit; };
-    stage stages[] = {
-        {"bootstrap_dispatched", KBOOT, false},
-        {"fat_mount_called",     FAT_MOUNT, false},
-        {"fat_init",             FI, false},
-        {"worker_ran",           FAT_WORKER, false},
-        {"mount_dispatched",     FAT_HANDLE_MOUNT, false},
-        {"device_opened",        FAT_DEV_OPEN, false},
-        {"block_read_issued",    FD_READ, false},
-        {"fat_open_called",      FAT_OPEN, false},
-        {"fat_read_called",      FAT_READ, false},
-        {"loader_reached",       PROCESS_LOAD_IMG, false},
-    };
-    // worker dispatch markers (relative to _fat_init per fat.s .lst):
-    const uint16_t W_DISPATCH = (uint16_t)(FI - 0x59); // fw_dispatch$ (got a request)
-    const uint16_t W_WAIT     = (uint16_t)(FI - 0x5E); // call fat_wait_one$ (queue empty)
-    const uint16_t W_MOUNT    = (uint16_t)(FI - 0x2A); // fw_mount$ (dispatch mount)
-    bool w_dispatch=false, w_wait=false, w_mount=false;
-    for (uint64_t i = 0; i < RUN_TICK_LIMIT; ++i) {
+    emu.write_debug_memory(kernel_base, kernel_img);
+    st = emu.capture_debug_cpu_state();
+    st.halted = false;
+    emu.apply_debug_cpu_state(st);
+    emu.debug_set_pc(KERNEL_ENTRY);
+
+    bool hit_page0 = false;
+    bool hit_kernel = false;
+    bool hit_os_entry = false;
+    bool hit_drv_register_all = false;
+    bool hit_dev_init = false;
+    bool hit_dev_init_all = false;
+    bool hit_dev_probe_all = false;
+    bool hit_syscall_init = false;
+    bool hit_ir_enable = false;
+    bool hit_bootstrap = false;
+    uint64_t tick_page0 = 0;
+    uint64_t tick_kernel = 0;
+    uint64_t tick_os_entry = 0;
+    uint64_t tick_drv_register_all = 0;
+    uint64_t tick_dev_init = 0;
+    uint64_t tick_dev_init_all = 0;
+    uint64_t tick_dev_probe_all = 0;
+    uint64_t tick_syscall_init = 0;
+    uint64_t tick_ir_enable = 0;
+    uint64_t tick_bootstrap = 0;
+
+    for (uint64_t guard = 0; guard < RUN_TICK_LIMIT; ++guard) {
         emu.tick();
         const uint16_t pc = emu.get_current_pc();
-        for (auto &s : stages) if (pc == s.pc) s.hit = true;
-        if (pc == W_DISPATCH) w_dispatch = true;
-        if (pc == W_WAIT)     w_wait = true;
-        if (pc == W_MOUNT)    w_mount = true;
-        if (pc == PROCESS_LOAD_IMG) break;
-    }
-    std::printf("worker: got_request=%d empty_wait=%d dispatch_mount=%d\n",
-                w_dispatch, w_wait, w_mount);
-
-    // device chain the kernel enumerated from NVRAM (exercises dev/drv/probe).
-    std::string devs;
-    {
-        auto hb = emu.read_debug_memory(DEV_FIRST, 2);
-        uint16_t dev = (uint16_t)hb[0] | ((uint16_t)hb[1] << 8);
-        for (int i = 0; i < 16 && dev; ++i) {
-            auto raw = emu.read_debug_memory(dev, 30);
-            std::string nm;
-            for (int j = 0; j < 8 && raw[2 + j]; ++j) nm.push_back((char)raw[2 + j]);
-            if (!devs.empty()) devs += ",";
-            devs += nm.empty() ? "?" : nm;
-            dev = (uint16_t)raw[0] | ((uint16_t)raw[1] << 8);
+        if (!hit_page0 && pc == KERNEL_ENTRY) {
+            hit_page0 = true;
+            tick_page0 = emu.get_tick_count();
+        }
+        if (!hit_kernel && pc == sys_kernel) {
+            hit_kernel = true;
+            tick_kernel = emu.get_tick_count();
+        }
+        if (!hit_os_entry && pc == os_entry) {
+            hit_os_entry = true;
+            tick_os_entry = emu.get_tick_count();
+        }
+        if (!hit_drv_register_all && pc == os_drv_register_all) {
+            hit_drv_register_all = true;
+            tick_drv_register_all = emu.get_tick_count();
+        }
+        if (!hit_dev_init && pc == os_dev_init) {
+            hit_dev_init = true;
+            tick_dev_init = emu.get_tick_count();
+        }
+        if (!hit_dev_init_all && pc == os_dev_init_all) {
+            hit_dev_init_all = true;
+            tick_dev_init_all = emu.get_tick_count();
+        }
+        if (!hit_dev_probe_all && pc == os_dev_probe_all) {
+            hit_dev_probe_all = true;
+            tick_dev_probe_all = emu.get_tick_count();
+        }
+        if (!hit_syscall_init && pc == os_syscall_init) {
+            hit_syscall_init = true;
+            tick_syscall_init = emu.get_tick_count();
+        }
+        if (!hit_ir_enable && pc == ir_enable) {
+            hit_ir_enable = true;
+            tick_ir_enable = emu.get_tick_count();
+        }
+        if (!hit_bootstrap && pc == os_bootstrap) {
+            hit_bootstrap = true;
+            tick_bootstrap = emu.get_tick_count();
+            break;
         }
     }
-    std::printf("devices=[%s]\n", devs.c_str());
-    int depth = 0;
-    for (auto &s : stages) { std::printf("  [%c] %s\n", s.hit ? 'x' : ' ', s.name);
-                             if (s.hit) ++depth; }
 
-    const bool fat_complete = stages[9].hit;     // loader_reached
-    const bool boot_floor   = stages[1].hit &&   // fat_mount_called
-                              devs.find("fd0") != std::string::npos;
-    if (fat_complete) { std::puts("PASS: full FAT mount+open+read path reached"); return 0; }
-    if (boot_floor)   { std::printf("PARTIAL: boot floor OK (depth %d/10); FAT completion pending\n", depth); return 0; }
-    std::puts("FAIL: regressed below boot floor (device probe / scheduler / mount submit)");
-    return 1;
+    std::printf("partos_kernel_boot milestones:\n");
+    std::printf("  [%c] page0 entry      @ 0x%04X tick=%llu\n",
+                hit_page0 ? 'x' : ' ', KERNEL_ENTRY,
+                (unsigned long long)tick_page0);
+    std::printf("  [%c] __sys_kernel     @ 0x%04X tick=%llu\n",
+                hit_kernel ? 'x' : ' ', sys_kernel,
+                (unsigned long long)tick_kernel);
+    std::printf("  [%c] __os_entry       @ 0x%04X tick=%llu\n",
+                hit_os_entry ? 'x' : ' ', os_entry,
+                (unsigned long long)tick_os_entry);
+    std::printf("  [%c] __drv_register_all @ 0x%04X tick=%llu\n",
+                hit_drv_register_all ? 'x' : ' ', os_drv_register_all,
+                (unsigned long long)tick_drv_register_all);
+    std::printf("  [%c] __dev_init       @ 0x%04X tick=%llu\n",
+                hit_dev_init ? 'x' : ' ', os_dev_init,
+                (unsigned long long)tick_dev_init);
+    std::printf("  [%c] __dev_init_all   @ 0x%04X tick=%llu\n",
+                hit_dev_init_all ? 'x' : ' ', os_dev_init_all,
+                (unsigned long long)tick_dev_init_all);
+    std::printf("  [%c] __dev_probe_all  @ 0x%04X tick=%llu\n",
+                hit_dev_probe_all ? 'x' : ' ', os_dev_probe_all,
+                (unsigned long long)tick_dev_probe_all);
+    std::printf("  [%c] _syscall_init    @ 0x%04X tick=%llu\n",
+                hit_syscall_init ? 'x' : ' ', os_syscall_init,
+                (unsigned long long)tick_syscall_init);
+    std::printf("  [%c] _ir_enable       @ 0x%04X tick=%llu\n",
+                hit_ir_enable ? 'x' : ' ', ir_enable,
+                (unsigned long long)tick_ir_enable);
+    std::printf("  [%c] _kernel_bootstrap@ 0x%04X tick=%llu\n",
+                hit_bootstrap ? 'x' : ' ', os_bootstrap,
+                (unsigned long long)tick_bootstrap);
+
+    if (!hit_page0 || !hit_kernel || !hit_os_entry || !hit_bootstrap) {
+        const auto cpu = emu.capture_debug_cpu_state();
+        auto rd16 = [&](uint16_t addr) -> uint16_t {
+            return (uint16_t)(emu.peek_mem(addr) |
+                              (emu.peek_mem((uint16_t)(addr + 1)) << 8));
+        };
+        const uint16_t current = rd16(thread_current);
+        const uint16_t suspended = rd16(thread_suspended);
+        const uint16_t running = rd16(thread_running);
+        const uint16_t waiting = rd16(thread_waiting);
+        const uint16_t terminated = rd16(thread_terminated);
+        std::printf("FAIL: direct split boot stopped at pc=%04X sp=%04X iff1=%d iff2=%d halted=%d tick=%llu\n",
+                    emu.get_current_pc(), cpu.sp,
+                    cpu.iff1 ? 1 : 0, cpu.iff2 ? 1 : 0, cpu.halted ? 1 : 0,
+                    (unsigned long long)emu.get_tick_count());
+        std::printf("  bank=%u current=%04X suspended=%04X running=%04X waiting=%04X terminated=%04X os_entry=%04X\n",
+                    (unsigned)emu.get_ram_bank(),
+                    current, suspended, running, waiting, terminated, os_entry);
+        const std::array<uint16_t, 4> heads = { running, suspended, waiting, terminated };
+        for (size_t i = 0; i < heads.size(); ++i) {
+            const uint16_t t = heads[i];
+            if (t == 0)
+                continue;
+            const uint16_t tsp = rd16((uint16_t)(t + THREAD_SP_OFF));
+            const uint16_t tret = rd16((uint16_t)(tsp + CONTEXT_SIZE - 2));
+            std::printf("  list[%zu]=%04X sp=%04X ret=%04X startup=%04X bank=%02X next=%04X\n",
+                        i, t, tsp, tret, (uint16_t)(t + THREAD_STARTUP_OFF),
+                        emu.peek_mem((uint16_t)(t + THREAD_BANK_OFF)),
+                        rd16(t));
+        }
+        return 1;
+    }
+
+    std::printf("PASS: direct split boot reached the OS payload bootstrap in %llu ticks\n",
+                (unsigned long long)emu.get_tick_count());
+    return 0;
 }

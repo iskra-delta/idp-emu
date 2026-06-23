@@ -119,6 +119,19 @@ sio_init::
             call    sio_init_dev2$
             ld      hl,#sio_dev3$
             call    sio_init_dev3$
+            ;; quiesce both physical SIO chips first so no ROM-era WR1/interrupt
+            ;; state leaks into the OS's first `ei`. the async tty driver later
+            ;; re-enables WR1 interrupts in sio_open() when a channel is actually
+            ;; opened for buffered I/O.
+            ld      c,#SIO0A_CTRL_PORT
+            ld      a,#SIO_WRCMD_RESET
+            out     (c),a
+            ld      c,#SIO0B_CTRL_PORT
+            out     (c),a
+            ld      c,#SIO1A_CTRL_PORT
+            out     (c),a
+            ld      c,#SIO1B_CTRL_PORT
+            out     (c),a
             ld      a,#SIO0_VEC
             ld      de,#_sio0_isr
             call    _ir_set
@@ -627,7 +640,11 @@ sio_dev3$:
             .ds     DEV_DATA_SIZE
             .dw     sio_dev_drv
 
-            .area   _INITIALIZED
+            ;; uninitialized driver scratch belongs in _SYSVARS (BSS); a .ds in
+            ;; _INITIALIZED reserves space the linker does not account for against
+            ;; the following area, so the per-channel clear can overrun the
+            ;; _INITIALIZED/_SYSVARS boundary into kernel state (e.g. ir_refcnt).
+            .area   _SYSVARS
 
 sio_state0$:
             .ds     SIO_ST_SIZE

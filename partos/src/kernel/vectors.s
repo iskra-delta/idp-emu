@@ -1,10 +1,14 @@
             ;; vectors.s
             ;;
-            ;; shared-memory kernel vector dispatch table.
-            ;; the copied low-page image loads handler addresses directly from
-            ;; this table with `ld hl,(#vector)` / `jp (hl)`. only the reset
-            ;; entry stub remains in shared memory because rst 0x00 must leave
-            ;; bytes 0x04..0x07 available for page-0 metadata.
+            ;; low-page vector management. the hardware rst/nmi slots live in the
+            ;; low page (page0.s) as direct `jp <handler>` instructions at fixed
+            ;; addresses, so there is no vector table: set_vector patches the jp
+            ;; operand in place and the "vector" passed in is the slot ADDRESS
+            ;; itself (0x08, 0x10, ... 0x38, nmi 0x66 -- all < 0x100, so a byte).
+            ;;
+            ;; the 50 Hz TICK hook is the one exception: it is not a rst, it is a
+            ;; soft hook the VBL ISR reaches by a software `call`, so it keeps a
+            ;; single indirect cell (__sys_vec_tick) dispatched by __tick_dispatch.
             ;;
             ;; 2026-06-14   tstih
             .module vectors
@@ -12,111 +16,85 @@
             .globl  _ir_disable
             .globl  _ir_enable
             .globl  _vector_set
-            .globl  __sys_entry
-            .globl  __sys_kernel
-            .globl  __sys_vec_entry
-            .globl  __sys_vec_rst08
-            .globl  __sys_vec_rst10
-            .globl  __sys_vec_rst18
-            .globl  __sys_vec_rst20
-            .globl  __sys_vec_rst28
-            .globl  __sys_vec_rst30
-            .globl  __sys_vec_rst38
-            .globl  __sys_vec_nmi
+            .globl  _vector_get
+            .globl  __tick_dispatch
+            .globl  __sys_vec_tick
+            .globl  __sys_rst_default
+            .globl  __sys_rst38_default
+            .globl  __sys_nmi_default
 
-            .equ    VECTOR_ENTRY,      0
-            .equ    VECTOR_RST08,      1
-            .equ    VECTOR_RST10,      2
-            .equ    VECTOR_RST18,      3
-            .equ    VECTOR_RST20,      4
-            .equ    VECTOR_RST28,      5
-            .equ    VECTOR_RST30,      6
-            .equ    VECTOR_RST38,      7
-            .equ    VECTOR_NMI,        8
-            .equ    VECTOR_COUNT,      9
+            ;; public vector ids == low-page slot addresses (see page0.s).
+            .equ    VECTOR_RST08,      0x08
+            .equ    VECTOR_RST10,      0x10
+            .equ    VECTOR_RST18,      0x18
+            .equ    VECTOR_RST20,      0x20
+            .equ    VECTOR_RST28,      0x28
+            .equ    VECTOR_RST30,      0x30
+            .equ    VECTOR_RST38,      0x38
+            .equ    VECTOR_NMI,        0x66
 
             .area   _CODE
 
-__sys_entry::
-            ld      hl,(#__sys_vec_entry)
-            jp      (hl)
-
-__sys_rst_default$:
+            ;; ----------------------------------------------------------------
+            ;; default vector targets (jp'd to from the low-page slots)
+            ;; ----------------------------------------------------------------
+__sys_rst_default::
             ret
 
-__sys_rst38_default$:
+__sys_rst38_default::
             reti
 
-__sys_nmi_default$:
+__sys_nmi_default::
             retn
 
             ;; ----------------------------------------------------------------
-            ;; <hl> <= __vector_ptr$(<a> vector index)
+            ;; __tick_dispatch() -- call the registered 50 hz tick hook
             ;; ----------------------------------------------------------------
-            ;; resolves one public vector index to its shared-memory table
-            ;; cell. returns 0 on an invalid index.
+            ;; the scheduler's vbl handler calls here once per tick (inside the
+            ;; ir bracket). it forwards to whatever handler is installed in the
+            ;; __sys_vec_tick cell and returns when that handler returns. the
+            ;; default is a no-op `ret`, so with no driver registered the tick
+            ;; costs one indirect jump. a soft-timer driver (e.g. the ctc driver)
+            ;; claims it by storing its chain routine into __sys_vec_tick.
             ;; ----------------------------------------------------------------
-__vector_ptr$:
-            cp      #VECTOR_COUNT
-            jr      nc,vp_invalid$
-            ld      l,a
-            ld      h,#0x00
-            add     hl,hl
-            ld      de,#__sys_vec_entry
-            add     hl,de
-            ret
-
-vp_invalid$:
-            ld      hl,#0x0000
-            ret
+__tick_dispatch::
+            ld      hl,(__sys_vec_tick)
+            jp      (hl)                ; tail-call hook; its ret resumes caller
 
             ;; ----------------------------------------------------------------
-            ;; <de> <= _vector_set(<a> vector, <de> handler)
+            ;; _vector_set(<a> slot, <de> handler)
             ;; ----------------------------------------------------------------
-            ;; stores a new handler into the shared-memory vector table and
-            ;; returns the previous handler, or 0 on an invalid vector index.
+            ;; <a> is the low-page slot address (0x08..0x38, 0x66); the slot holds
+            ;; a `jp` whose operand is patched here. no return value -- use
+            ;; _vector_get to read a slot's current handler.
             ;; ----------------------------------------------------------------
 _vector_set::
             ld      c,a
             call    _ir_disable
-            ld      a,c
-            call    __vector_ptr$
-            ld      a,h
-            or      l
-            jr      z,vs_invalid$
-            ld      c,(hl)
-            inc     hl
-            ld      b,(hl)              ; bc = previous handler
-            ld      (hl),d
-            dec     hl
-            ld      (hl),e
-            ld      e,c
-            ld      d,b
-            call    _ir_enable
-            ret
+            ld      l,c
+            ld      h,#0x00             ; hl = slot (jp opcode address)
+            inc     hl                  ; hl = slot+1 (operand low byte)
+            ld      (hl),e              ; new low
+            inc     hl                  ; hl = slot+2 (operand high byte)
+            ld      (hl),d              ; new high
+            jp      _ir_enable
 
-vs_invalid$:
-            ld      de,#0x0000
-            call    _ir_enable
-            ret
+            ;; ----------------------------------------------------------------
+            ;; <de> <= _vector_get(<a> slot)
+            ;; ----------------------------------------------------------------
+            ;; returns the handler currently stored in the slot's jp operand.
+            ;; ----------------------------------------------------------------
+_vector_get::
+            call    _ir_disable
+            ld      l,a
+            ld      h,#0x00
+            inc     hl                  ; slot+1
+            ld      e,(hl)
+            inc     hl                  ; slot+2
+            ld      d,(hl)              ; de = handler
+            jp      _ir_enable
 
-            .area   _INITIALIZED
+            .area   _CODE
 
-__sys_vec_entry::
-            .dw     __sys_kernel
-__sys_vec_rst08::
-            .dw     __sys_rst_default$
-__sys_vec_rst10::
-            .dw     __sys_rst_default$
-__sys_vec_rst18::
-            .dw     __sys_rst_default$
-__sys_vec_rst20::
-            .dw     __sys_rst_default$
-__sys_vec_rst28::
-            .dw     __sys_rst_default$
-__sys_vec_rst30::
-            .dw     __sys_rst_default$
-__sys_vec_rst38::
-            .dw     __sys_rst38_default$
-__sys_vec_nmi::
-            .dw     __sys_nmi_default$
+__sys_vec_tick::
+            .dw     __sys_rst_default       ; no-op until a tick driver registers

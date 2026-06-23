@@ -29,18 +29,24 @@
             .globl  fat_path_submit_check$
             .globl  fat_evt_reset$
             .globl  fat_complete_dirent$
+            .globl  fat_finish_dirent$
             .globl  fat_store_de$
             .globl  fat_load_de$
+            .globl  fat_dirent_de$
+            .globl  fat_dirent_byte$
             .globl  fat_decode_req_evfdev$
             .globl  fat_spc_shift$
             .globl  fat_prepare_dirent_busy$
             .globl  fat_req_base$
             .globl  fat_submit_path_req$
+            .globl  fat_submit_frame$
             .globl  fat_fill_root_dirent$
             .globl  fat_upper$
             .globl  fat_namechar_ok$
             .globl  fat_path_next$
             .globl  fat_skip_slashes$
+            .globl  fat_fs_de$
+            .globl  fat_fs_byte$
             .globl  fat_read_block$
             .globl  fat_read_volume_sector$
             .globl  fat_cluster_valid$
@@ -79,6 +85,10 @@
             .globl  fat_sector$
 
             .globl  fat_handle_lookup$
+            .globl  fat_walk_to_leaf$
+            .globl  fat_walk_to_parent$
+            .globl  fat_handle_readdir$
+            .globl  _fat_readdir
 
             .area   _CODE
 
@@ -204,15 +214,14 @@ fpn_invalid$:
             ;; ----------------------------------------------------------------
 fat_read_volume_sector$:
             push    de
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_LBA_BASE
-            add     hl,bc
-            call    fat_load_de$        ; de = lba_base
+            call    fat_fs_de$        ; de = lba_base
             pop     hl
             add     hl,de
             ex      de,hl               ; de = absolute device block
             ld      hl,(fat_work_dev$)
-            jp      fat_read_block$
+            call    fat_read_block$
+            ret
 
             ;; ----------------------------------------------------------------
             ;; fat_cluster_valid$(<de> cluster) -> <a> 0/1
@@ -229,10 +238,8 @@ fat_cluster_valid$:
             jr      c,fcv_no$
 fcv_limit$:
             push    de
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_TOTAL_CLUSTERS
-            add     hl,bc
-            call    fat_load_de$        ; de = total_clusters
+            call    fat_fs_de$        ; de = total_clusters
             ex      de,hl               ; hl = total_clusters
             inc     hl
             inc     hl                  ; hl = total_clusters + 2
@@ -267,10 +274,8 @@ fcts_calc$:
             dec     hl
             dec     hl                  ; zero-based cluster index
             push    hl
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_SECTORS_PER_CL
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             call    fat_spc_shift$
             jr      c,fcts_fail$
             ld      b,a
@@ -284,10 +289,8 @@ fcts_shift$:
             jr      fcts_shift$
 fcts_add_data$:
             push    hl
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_DATA_START
-            add     hl,bc
-            call    fat_load_de$        ; de = data_start
+            call    fat_fs_de$        ; de = data_start
             pop     hl
             add     hl,de
             ex      de,hl
@@ -303,10 +306,8 @@ fcts_fail$:
             ;; ----------------------------------------------------------------
 fat_fat_offset$:
             push    de
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_FAT_BITS
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             pop     de
             cp      #12
             jr      nz,ffo_16$
@@ -329,10 +330,8 @@ ffo_16$:
             ;; ----------------------------------------------------------------
 fat_is_eoc$:
             push    de
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_FAT_BITS
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             pop     de
             cp      #12
             jr      nz,fie_16$
@@ -370,10 +369,8 @@ fat_get_fat_entry$:
             ld      (fat_fat_offset_tmp$),de
 
             push    de
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_FAT_START
-            add     hl,bc
-            call    fat_load_de$        ; de = fat_start
+            call    fat_fs_de$        ; de = fat_start
             pop     hl                  ; hl = fat byte offset
             ld      a,l
             ld      (fat_offset_low$),a
@@ -402,10 +399,8 @@ fat_get_fat_entry$:
             jr      fgfe_decode$
 
 fgfe_cross$:
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_FAT_START
-            add     hl,bc
-            call    fat_load_de$        ; de = fat_start
+            call    fat_fs_de$        ; de = fat_start
             ld      hl,(fat_fat_offset_tmp$)
             ld      a,h
             inc     a
@@ -421,10 +416,8 @@ fgfe_cross$:
             ld      (fat_pair$ + 1),a
 
 fgfe_decode$:
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_FAT_BITS
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             cp      #12
             jr      nz,fgfe_16$
 
@@ -548,6 +541,25 @@ ffde_size$:
             ret
 
             ;; ----------------------------------------------------------------
+            ;; fat_fill_name$()
+            ;; ----------------------------------------------------------------
+            ;; copies the raw 11-byte 8.3 name from the matched entry (pointer
+            ;; left in fat_entry_ptr$ by fat_fill_dirent_from_entry$) into the
+            ;; readdir result's name field. stays space-padded with no dot.
+            ;; ----------------------------------------------------------------
+fat_fill_name$:
+            ld      hl,(fat_entry_ptr$)
+            ld      de,(fat_lookup_dirent$)
+            push    hl
+            ld      hl,#FATDIRINFO_NAME
+            add     hl,de
+            ex      de,hl               ; de = &info->name
+            pop     hl                  ; hl = entry (raw 8.3 source)
+            ld      bc,#FAT_SHORT_NAME_LEN
+            ldir
+            ret
+
+            ;; ----------------------------------------------------------------
             ;; fat_claim_free$() -> <hl> rc
             ;; ----------------------------------------------------------------
             ;; used by create-mode directory walks after the first reusable slot
@@ -604,35 +616,69 @@ fss_loop$:
             jr      z,fss_deleted$
 
             push    hl
+            push    bc                  ; keep the 8-entry sector countdown
             ld      bc,#FAT_ENTRY_ATTR
             add     hl,bc
             ld      a,(hl)
+            pop     bc
             pop     hl
             cp      #FAT_ATTR_LFN
             jr      z,fss_next$
             and     #FAT_ATTR_VOLUME_ID
             jr      nz,fss_next$
 
+            ;; readdir mode does not name-match: it emits the index-th live
+            ;; entry. hl still points at the current 32-byte entry here.
+            ld      a,(fat_walk_mode$)
+            cp      #FAT_WALK_READDIR
+            jr      z,fss_readdir$
+
             push    hl
-            pop     de
-            push    de
+            pop     de                  ; de = current 32-byte dir entry
+            push    de                  ; keep the entry pointer alive across
+                                        ; fat_name_match$: the matcher walks hl
+                                        ; through fat_name$, so without this
+                                        ; restore the next-entry advance starts
+                                        ; from the short-name scratch buffer
+                                        ; instead of the on-disk directory slot.
+            push    bc                  ; fat_name_match$ uses b internally;
+                                        ; keep the sector-entry countdown intact
             ld      hl,#fat_name$
             call    fat_name_match$
-            pop     de
+            pop     bc
+            pop     hl                  ; hl = current dir entry again
             jr      nz,fss_next$
 
             ld      a,(fat_walk_mode$)
             or      a
             jr      nz,fss_found$
+            push    hl
+            pop     de
             call    fat_fill_dirent_from_entry$
 fss_found$:
             ld      a,#FAT_SCAN_FOUND
             ret
 
+fss_readdir$:
+            ld      de,(fat_readdir_index$)
+            ld      a,d
+            or      e
+            jr      nz,fss_rd_skip$
+            push    hl
+            pop     de                  ; de = entry pointer
+            call    fat_fill_dirent_from_entry$
+            call    fat_fill_name$
+            ld      a,#FAT_SCAN_FOUND
+            ret
+fss_rd_skip$:
+            dec     de
+            ld      (fat_readdir_index$),de
+            jr      fss_next$
+
 fss_deleted$:
             ld      a,(fat_walk_mode$)
-            or      a
-            jr      z,fss_next$
+            cp      #FAT_WALK_CREATE
+            jr      nz,fss_next$
             call    fat_note_free$
 
 fss_next$:
@@ -646,8 +692,8 @@ fss_next$:
             ret
 fss_end$:
             ld      a,(fat_walk_mode$)
-            or      a
-            jr      z,fss_end_plain$
+            cp      #FAT_WALK_CREATE
+            jr      nz,fss_end_plain$
             call    fat_note_free$
 fss_end_plain$:
             ld      a,#FAT_SCAN_END
@@ -658,24 +704,23 @@ fss_end_plain$:
             ;; ----------------------------------------------------------------
 fat_scan_root$:
             call    fat_scan_prepare$
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_ROOT_START
-            add     hl,bc
-            call    fat_load_de$
+            call    fat_fs_de$
             ld      (fat_lookup_sector$),de
 
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_ROOT_DIR_SECTORS
-            add     hl,bc
-            call    fat_load_de$
+            call    fat_fs_de$
             ld      (fat_scan_remaining$),de
 
 fsr_loop$:
             ld      de,(fat_scan_remaining$)
             ld      a,d
             or      e
-            jr      z,fat_scan_miss$
+            jr      nz,fsr_have_sectors$
+            call    fat_scan_miss$
+            ret
 
+fsr_have_sectors$:
             ld      de,(fat_lookup_sector$)
             call    fat_read_volume_sector$
             ld      a,h
@@ -684,10 +729,17 @@ fsr_loop$:
 
             call    fat_scan_sector$
             cp      #FAT_SCAN_FOUND
-            jr      z,fat_scan_found$
-            cp      #FAT_SCAN_END
-            jr      z,fat_scan_miss$
+            jr      nz,fsr_not_found$
+            call    fat_scan_found$
+            ret
 
+fsr_not_found$:
+            cp      #FAT_SCAN_END
+            jr      nz,fsr_next_entry$
+            call    fat_scan_miss$
+            ret
+
+fsr_next_entry$:
             ld      hl,(fat_lookup_sector$)
             inc     hl
             ld      (fat_lookup_sector$),hl
@@ -710,17 +762,17 @@ fat_scan_prepare$:
 
 fat_scan_found$:
             ld      a,(fat_walk_mode$)
-            or      a
+            cp      #FAT_WALK_CREATE
             ld      hl,#FAT_OK
-            ret     z
+            ret     nz                  ; lookup + readdir: a hit is success
             ld      hl,#FAT_EEXIST
             ret
 
 fat_scan_miss$:
             ld      a,(fat_walk_mode$)
-            or      a
+            cp      #FAT_WALK_CREATE
             ld      hl,#FAT_ENOENT
-            ret     z
+            ret     nz                  ; lookup + readdir: end of dir => ENOENT
             jp      fat_claim_free$
 
             ;; ----------------------------------------------------------------
@@ -734,8 +786,12 @@ fat_scan_active_dir$:
             ld      hl,(fat_lookup_cluster$)
             ld      a,h
             or      l
-            jr      nz,fat_scan_subdir$
-            jr      fat_scan_root$
+            jr      nz,fsad_subdir$
+            call    fat_scan_root$
+            ret
+fsad_subdir$:
+            call    fat_scan_subdir$
+            ret
 
             ;; ----------------------------------------------------------------
             ;; fat_scan_subdir$() -> <hl> rc
@@ -744,10 +800,8 @@ fat_scan_active_dir$:
             ;; ----------------------------------------------------------------
 fat_scan_subdir$:
             call    fat_scan_prepare$
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_TOTAL_CLUSTERS
-            add     hl,bc
-            call    fat_load_de$
+            call    fat_fs_de$
             ld      (fat_scan_remaining$),de
 
 fssd_cluster$:
@@ -780,10 +834,17 @@ fssd_sector$:
 
             call    fat_scan_sector$
             cp      #FAT_SCAN_FOUND
-            jr      z,fat_scan_found$
-            cp      #FAT_SCAN_END
-            jr      z,fat_scan_miss$
+            jr      nz,fssd_not_found$
+            call    fat_scan_found$
+            ret
 
+fssd_not_found$:
+            cp      #FAT_SCAN_END
+            jr      nz,fssd_next_entry$
+            call    fat_scan_miss$
+            ret
+
+fssd_next_entry$:
             ld      hl,(fat_lookup_sector$)
             inc     hl
             ld      (fat_lookup_sector$),hl
@@ -798,7 +859,11 @@ fssd_sector$:
             call    fat_is_eoc$
             pop     de
             or      a
-            jr      nz,fat_scan_miss$
+            jr      z,fssd_advance_cluster$
+            call    fat_scan_miss$
+            ret
+
+fssd_advance_cluster$:
             ld      (fat_lookup_cluster$),de
             jr      fssd_cluster$
 
@@ -842,10 +907,8 @@ fat_prepare_path_req$:
             or      e
             jr      z,fpp_ebadf$
 
-            ld      hl,(fat_work_fs$)
             ld      bc,#FATFS_MOUNTED
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_fs_byte$
             or      a
             jr      z,fpp_ebadf$
 
@@ -878,52 +941,28 @@ fat_handle_lookup$:
             ld      a,h
             or      l
             jr      nz,fhl_finish_hl$
+            ld      de,(fat_lookup_path$)
             ld      a,(de)
             or      a
-            jr      nz,fhl_loop$
+            jr      nz,fhl_walk$
 
             ld      hl,(fat_lookup_dirent$)
             call    fat_fill_root_dirent$
             ld      de,#FAT_OK
             jr      fhl_finish$
 
-fhl_loop$:
-            call    fat_path_next$
+fhl_walk$:
+            call    fat_walk_to_leaf$
             ld      a,h
             or      l
             jr      nz,fhl_finish_hl$
-
-            call    fat_scan_active_dir$
-            ld      a,h
-            or      l
-            jr      nz,fhl_finish_hl$
-
-            ld      a,(fat_lookup_more$)
-            or      a
-            jr      z,fhl_success$
-
-            ld      hl,(fat_lookup_dirent$)
-            ld      bc,#FATDIRENT_ATTR
-            add     hl,bc
-            ld      a,(hl)
-            and     #FAT_ATTR_DIRECTORY
-            jr      z,fhl_notfound$
-
-            ld      hl,(fat_lookup_dirent$)
-            ld      bc,#FATDIRENT_FIRST_CLUSTER
-            add     hl,bc
-            call    fat_load_de$
-            ld      (fat_lookup_cluster$),de
-            jr      fhl_loop$
 
 fhl_success$:
             ld      a,(fat_req_flags$)
             and     #FATREQ_FLAG_FILE_ONLY
             jr      z,fhl_lookup_ok$
-            ld      hl,(fat_lookup_dirent$)
             ld      bc,#FATDIRENT_ATTR
-            add     hl,bc
-            ld      a,(hl)
+            call    fat_dirent_byte$
             and     #(FAT_ATTR_DIRECTORY | FAT_ATTR_VOLUME_ID)
             jr      z,fhl_lookup_ok$
             ld      hl,#FAT_EBADF
@@ -931,15 +970,85 @@ fhl_success$:
 fhl_lookup_ok$:
             ld      de,#FAT_OK
             jr      fhl_finish$
-fhl_notfound$:
-            ld      hl,#FAT_ENOENT
-            jr      fhl_finish_hl$
 fhl_finish_hl$:
             ex      de,hl
 fhl_finish$:
+            jp      fat_finish_dirent$
+
+            ;; ----------------------------------------------------------------
+            ;; fat_walk_to_leaf$() -> <hl> rc (0 = final component reached)
+            ;; ----------------------------------------------------------------
+            ;; shared component-by-component descent for lookup and the
+            ;; unlink/rmdir resolvers: parse each path component, scan the
+            ;; current directory, follow subdirectories, and stop at the final
+            ;; component. caller must have prepared the request and ensured the
+            ;; path is non-empty.
+            ;; ----------------------------------------------------------------
+fat_walk_to_leaf$:
+fwl_loop$:
+            call    fat_path_next$
+            ld      a,h
+            or      l
+            ret     nz
+            call    fat_scan_active_dir$
+            ld      a,h
+            or      l
+            ret     nz
+            ld      a,(fat_lookup_more$)
+            or      a
+            ret     z
+            ld      bc,#FATDIRENT_ATTR
+            call    fat_dirent_byte$
+            and     #FAT_ATTR_DIRECTORY
+            jr      z,fwl_enoent$
             ld      hl,(fat_lookup_dirent$)
-            ld      bc,(fat_work_event$)
-            jp      fat_complete_dirent$
+            call    fat_load_de$
+            ld      (fat_lookup_cluster$),de
+            jr      fwl_loop$
+fwl_enoent$:
+            ld      hl,#FAT_ENOENT
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; fat_walk_to_parent$() -> <hl> rc (0 = final component's parent)
+            ;; ----------------------------------------------------------------
+            ;; like fat_walk_to_leaf$ but STOPS before the final component so
+            ;; create/mkdir can act on the leaf name left in fat_name$. sets
+            ;; lookup walk mode and rejects the empty (root) path. caller must
+            ;; have prepared the request.
+            ;; ----------------------------------------------------------------
+fat_walk_to_parent$:
+            xor     a
+            ld      (fat_walk_mode$),a
+            ld      de,(fat_lookup_path$)
+            ld      a,(de)
+            or      a
+            jr      nz,fwp_loop$
+            ld      hl,#FAT_EINVAL
+            ret
+fwp_loop$:
+            call    fat_path_next$
+            ld      a,h
+            or      l
+            ret     nz
+            ld      a,(fat_lookup_more$)
+            or      a
+            ret     z
+            call    fat_scan_active_dir$
+            ld      a,h
+            or      l
+            ret     nz
+            ld      bc,#FATDIRENT_ATTR
+            call    fat_dirent_byte$
+            and     #FAT_ATTR_DIRECTORY
+            jr      z,fwp_ebadf$
+            ld      hl,(fat_lookup_dirent$)
+            call    fat_load_de$
+            ld      (fat_lookup_cluster$),de
+            jr      fwp_loop$
+fwp_ebadf$:
+            ld      hl,#FAT_EBADF
+            ret
 
             ;; ----------------------------------------------------------------
             ;; <de> <= _fat_lookup(<hl> fs, <de> path, <stack> dirent, event)
@@ -951,21 +1060,105 @@ fhl_finish$:
 _fat_lookup::
             call    fat_path_submit_check$
 
+            ld      (fat_submit_frame$),hl
+            ld      (fat_submit_frame$ + 2),de
+
             push    de                  ; keep path while we mark the result busy
             push    hl                  ; keep fs while we mark the result busy
-            ld      hl,#6
+            ld      hl,#8
             add     hl,sp
             ld      a,(hl)
             inc     hl
             ld      h,(hl)
-            ld      l,a                 ; hl = stacked dirent pointer
+            ld      l,a                 ; hl = stacked dirent pointer (sp+8)
             call    fat_prepare_dirent_busy$
             pop     hl                  ; restore fs
             pop     de                  ; restore path
 
-            push    de                  ; save path
-            push    hl                  ; save fs
             ld      de,#0x0200          ; d = LOOKUP op, e = flags 0
+            jp      fat_submit_path_req$
+
+            ;; ----------------------------------------------------------------
+            ;; fat_handle_readdir$(<de> req)
+            ;; ----------------------------------------------------------------
+            ;; worker-side directory enumeration. this first cut lists the
+            ;; fixed root directory; info->index (FATDIRINFO_INDEX) selects the
+            ;; live entry and fat_scan_sector$ emits it in FAT_WALK_READDIR mode.
+            ;; ----------------------------------------------------------------
+fat_handle_readdir$:
+            ld      a,#FAT_WALK_READDIR
+            ld      (fat_walk_mode$),a
+            call    fat_prepare_path_req$
+            ld      a,h
+            or      l
+            jr      nz,fhrd_finish_hl$
+
+            ld      hl,(fat_lookup_dirent$)
+            ld      bc,#FATDIRINFO_INDEX
+            add     hl,bc
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)
+            ld      (fat_readdir_index$),de
+
+            ;; "/" enumerates the fixed root directly. any non-empty path must
+            ;; first resolve to a directory so readdir walks that directory
+            ;; instead of always falling back to the root scanner.
+            ld      de,(fat_lookup_path$)
+            ld      a,(de)
+            or      a
+            jr      z,fhrd_scan$
+
+            call    fat_walk_to_leaf$
+            ld      a,h
+            or      l
+            jr      nz,fhrd_finish_hl$
+
+            ld      bc,#FATDIRENT_ATTR
+            call    fat_dirent_byte$
+            and     #(FAT_ATTR_DIRECTORY | FAT_ATTR_VOLUME_ID)
+            cp      #FAT_ATTR_DIRECTORY
+            jr      nz,fhrd_badf$
+
+            ld      hl,(fat_lookup_dirent$)
+            call    fat_load_de$
+            ld      (fat_lookup_cluster$),de
+
+fhrd_scan$:
+            call    fat_scan_active_dir$
+            jr      fhrd_finish_hl$
+
+fhrd_badf$:
+            ld      hl,#FAT_EBADF
+fhrd_finish_hl$:
+            ex      de,hl               ; de = rc
+            jp      fat_finish_dirent$
+
+            ;; ----------------------------------------------------------------
+            ;; <de> <= _fat_readdir(<hl> fs, <de> path, <stack> info, event)
+            ;; ----------------------------------------------------------------
+            ;; queues one directory-enumeration request. mirrors _fat_lookup;
+            ;; info->index selects the entry and the result lands in info.
+            ;; ----------------------------------------------------------------
+_fat_readdir::
+            call    fat_path_submit_check$
+
+            ld      (fat_submit_frame$),hl
+            ld      (fat_submit_frame$ + 2),de
+
+            push    de                  ; keep path while we mark the result busy
+            push    hl                  ; keep fs while we mark the result busy
+            ld      hl,#8
+            add     hl,sp
+            ld      a,(hl)
+            inc     hl
+            ld      h,(hl)
+            ld      l,a                 ; hl = stacked info pointer (sp+8)
+            call    fat_prepare_dirent_busy$
+            pop     hl                  ; restore fs
+            pop     de                  ; restore path
+
+            ld      de,#0x0600          ; d = READDIR op, e = flags 0
             jp      fat_submit_path_req$
 
             .area   _SYSVARS
@@ -979,3 +1172,5 @@ fat_free_sector$:
             .ds     2
 fat_free_off$:
             .ds     1
+fat_readdir_index$:
+            .ds     2

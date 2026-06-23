@@ -20,8 +20,6 @@
             .equ    BOOT_NODEV_GDP_X,    33
             .equ    BOOT_SETUP_KEY,      0xfe
             .equ    BOOT_SETUP_SECONDS,  3
-            .equ    OS_LOAD_BASE,        0xe000 ; top 8 KB of shared ram
-            .equ    OS_RESERVED_SECTORS, 32     ; 8 KB OS image after boot record
             .globl  model_detect
             .globl  model
             .globl  bios_main
@@ -41,10 +39,7 @@
             .globl  hd_init_chars
             .globl  boot_fd_path
             .globl  boot_hd_path
-
-            ;; __sys_page0_install lives in the kernel's fixed page-0 block.
-            ;; the ROM jumps straight to that entry after loading the image.
-            .equ    SYS_PAGE0_INSTALL,   KERNEL_PAGE0_INSTALL
+            .globl  boot_dev$
 
             .area   _BOOT
 
@@ -142,12 +137,13 @@ boot_hd_path::
             jr      c,bt_nodev$
 
 bt_go$:
-            ;; hand off to the kernel: HL = load base, B = model byte. the
-            ;; page-0 installer copies low page into both banks and jumps to HL.
-            ld      hl,#OS_LOAD_BASE
-            ld      a,(model)
-            ld      b,a
-            jp      SYS_PAGE0_INSTALL
+            ;; hand off to the micro-kernel entry at page 0. the loader cached
+            ;; the boot metadata in the kernel's dead page-0 bytes immediately
+            ;; after the 2 KB micro-kernel window was loaded, before the 16 KB
+            ;; OS payload overwrote the ROM's shared sysvars at 0xde00..0xdeff.
+            ;; the kernel then mirrors the low page into both banks, brings the
+            ;; scheduler online and starts the OS payload thread at 0xc000.
+            jp      UKERNEL_LOAD_BASE
 
 bt_nodev$:
             ld      hl,#msg_nodev$
@@ -171,48 +167,54 @@ bt_halt$:
 boot_device$:
             ld      (boot_dev$),a
 
-            ;; read the boot record (sector 0) at 0xdf00. a 512-byte record
-            ;; spills into 0xe000.., but the os image below reloads that and we
-            ;; check the signature first, so it is harmless.
-            ld      hl,#OS_LOAD_BASE - 0x100
+            ;; read the boot record (sector 0) into the transient buffer (low
+            ;; ram, vacated by the bootstrap) and verify the signature before
+            ;; loading anything. a 512-byte record stays below the rom code.
+            ld      hl,#BOOT_RECORD_BUF
             xor     a
             call    boot_read$
             jr      nz,bd_fail$
 
-            ;; signature (0x55 0xaa) sits at record_base + sector_size - 2,
-            ;; i.e. (0xde + ssh):0xfe.
+            ;; signature (0x55 0xaa) sits at buf + sector_size - 2, i.e.
+            ;; ((BOOT_RECORD_BUF>>8) - 1 + ssh):0xfe.
             ld      a,(fd_n$)
-            add     a,#0xde
+            add     a,#((BOOT_RECORD_BUF >> 8) - 1)
             ld      h,a
             ld      l,#0xfe
-            ld      a,(hl)
-            cp      #0x55
-            jr      nz,bd_fail$
-            inc     hl
-            ld      a,(hl)
-            cp      #0xaa
-            jr      nz,bd_fail$
+            ld      a,(hl)              ; 0x55 of the 0x55aa signature; the os
+            cp      #0x55               ; re-reads + checksums the record later,
+            jr      nz,bd_fail$         ; so this is only a quick first-gate
 
-            ;; stream the 8 KB os image (sectors 1..) into OS_LOAD_BASE, one
-            ;; sector at a time, until the destination wraps past 0xffff. that
-            ;; is 32 sectors of 256 B or 16 of 512 B; all fit cylinder 0.
-            ld      hl,#OS_LOAD_BASE
-            ld      c,#1                ; lba 1
+            ;; reserved layout after the boot record (BPB.reserved_sectors must
+            ;; match, verified at image build time):
+            ;;   lba 1..8   -> 0x0000  micro-kernel (2 KB, mirrored later)
+            ;;   lba 9..72  -> 0xc000  shared services + os data (16 KB)
+            ;; one loop streams both, hopping the destination up to 0xc000 once
+            ;; the 2 KB micro-kernel window is filled. the model hint must be
+            ;; written into page 0 before the high OS load begins because the
+            ;; ROM's shared sysvars live inside 0xc000..0xffff and are therefore
+            ;; overwritten by os.sys.
+            ld      hl,#UKERNEL_LOAD_BASE
+            ld      c,#1                ; lba
+            ld      b,#(UKERNEL_SECTORS + SERVICES_SECTORS)
 bd_loop$:
-            push    bc
+            push    bc                  ; boot_read$ clobbers bc/de
             push    hl
             ld      a,c
             call    boot_read$
             pop     hl
             pop     bc
             jr      nz,bd_fail$
-            ld      a,(fd_n$)
-            add     a,h                 ; advance dst by one sector (ssh*256)
-            ld      h,a
-            jr      z,bd_done$          ; dst reached 0x10000 -> image loaded
+            ld      de,#0x0100
+            add     hl,de
             inc     c
-            jr      bd_loop$
-bd_done$:
+            ld      a,c
+            cp      #(1 + UKERNEL_SECTORS)  ; finished the micro-kernel window?
+            jr      nz,bd_skip$
+            call    boot_cache_model$
+            ld      hl,#SERVICES_LOAD_BASE  ; hop to the shared services region
+bd_skip$:
+            djnz    bd_loop$
             or      a                   ; carry clear = booted
             ret
 bd_fail$:
@@ -253,14 +255,23 @@ boot_read$:
             jp      z,fd_read_lba
             jp      hd_read_lba
 
+            ;; cache the model hint in the kernel's page-0 dead byte while the
+            ;; ROM's own shared sysvars are still intact.
+boot_cache_model$:
+            ld      a,(model)
+            or      #0x80
+            ld      (#KERNEL_BOOT_MODEL_ADDR),a
+            ret
+
 boot_banner$:
             .db     'P','A','R','T','O','S',0
 msg_booting$:
-            .db     'B','O','O','T','I','N','G',0
+            .db     'B','O','O','T','.','.','.',0
 msg_nodev$:
-            .db     'N','O',' ','B','O','O','T',' ','D','E','V','I','C','E',0
+            .db     'N','O',' ','B','O','O','T',0
 
-            .area   _SYSVARS
-
+            ;; the high os load overwrites the rom's _SYSVARS window at
+            ;; 0xc000..0xffff, so the live boot-device selector must sit in the
+            ;; decompressed stage-1 image instead.
 boot_dev$:
             .db     0x00

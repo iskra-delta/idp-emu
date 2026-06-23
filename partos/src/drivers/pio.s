@@ -488,7 +488,8 @@ pio_dev1$:
             .ds     DEV_DATA_SIZE
             .dw     pio_dev_drv
 
-            .area   _INITIALIZED
+            ;; uninitialized scratch -> _SYSVARS (BSS), not _INITIALIZED.
+            .area   _SYSVARS
 
 pio_state0$:
             .ds     PIO_ST_SIZE

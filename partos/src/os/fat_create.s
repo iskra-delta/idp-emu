@@ -19,10 +19,14 @@
             .globl  fat_handle_create$
 
             .globl  fat_load_de$
+            .globl  fat_dirent_de$
+            .globl  fat_dirent_byte$
             .globl  fat_store_de$
             .globl  fat_complete_dirent$
+            .globl  fat_finish_dirent$
             .globl  fat_prepare_dirent_busy$
             .globl  fat_path_next$
+            .globl  fat_walk_to_parent$
             .globl  fat_read_volume_sector$
             .globl  fat_write_volume_sector$
             .globl  fat_fill_dirent_from_entry$
@@ -64,44 +68,10 @@ fat_handle_create$:
             ld      a,h
             or      l
             jp      nz,fhc_fail_hl$
-            xor     a
-            ld      (fat_walk_mode$),a
-            ld      a,(de)
-            or      a
-            jr      nz,fhc_walk$
-            ld      hl,#FAT_EINVAL
-            jp      fhc_fail_hl$
-
-fhc_walk$:
-fhc_loop$:
-            call    fat_path_next$
+            call    fat_walk_to_parent$
             ld      a,h
             or      l
             jp      nz,fhc_fail_hl$
-
-            ld      a,(fat_lookup_more$)
-            or      a
-            jr      z,fhc_last$
-
-            call    fat_scan_active_dir$
-            ld      a,h
-            or      l
-            jp      nz,fhc_fail_hl$
-
-            ld      hl,(fat_lookup_dirent$)
-            ld      bc,#FATDIRENT_ATTR
-            add     hl,bc
-            ld      a,(hl)
-            and     #FAT_ATTR_DIRECTORY
-            jp      z,fhc_ebadf$
-
-            ld      hl,(fat_lookup_dirent$)
-            ld      bc,#FATDIRENT_FIRST_CLUSTER
-            add     hl,bc
-            call    fat_load_de$
-            ld      (fat_lookup_cluster$),de
-            jr      fhc_loop$
-
 fhc_last$:
             ld      a,#FAT_WALK_CREATE
             ld      (fat_walk_mode$),a
@@ -183,16 +153,10 @@ fhc_zero_entry$:
             ld      de,#FAT_OK
             jr      fhc_finish$
 
-fhc_ebadf$:
-            ld      hl,#FAT_EBADF
-            jr      fhc_fail_hl$
-
 fhc_fail_hl$:
             ex      de,hl
             ld      hl,(fat_lookup_dirent$)
             call    fat_prepare_dirent_busy$
 
 fhc_finish$:
-            ld      hl,(fat_lookup_dirent$)
-            ld      bc,(fat_work_event$)
-            jp      fat_complete_dirent$
+            jp      fat_finish_dirent$

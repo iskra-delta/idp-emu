@@ -19,11 +19,12 @@
 #include <stdint.h>
 
 /*
- * Initialize interrupt routines: clear the disable nesting count and point
- * the I register at the kernel IM2 vector page. IM2 is not selected and
- * interrupts are not enabled here.
+ * Internal interrupt bootstrap helper.
+ *
+ * Clear the disable nesting count and point the I register at the kernel IM2
+ * vector page. IM2 is not selected and interrupts are not enabled here.
  */
-void ir_init(void);
+void __ir_init(void);
 
 /*
  * Disable interrupts with nesting (reference-counted di).

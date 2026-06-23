@@ -29,14 +29,13 @@ typedef struct sysobj_s {
 } sysobj_t;
 
 /*
- * Allocate one system object from the kernel heap and link it into the
- * supplied intrusive list.
+ * Internal system-object helpers layered on top of the kernel heap.
  */
-void *so_create(void **first, uint16_t size, void *owner);
+void *__so_create(void **first, uint16_t size, void *owner);
 
 /*
  * Unlink one system object from the supplied intrusive list and free it.
  */
-void *so_destroy(void **first, void *so);
+void *__so_destroy(void **first, void *so);
 
 #endif /* SYSOBJ_H */

@@ -1,194 +1,232 @@
             ;; page0.s
             ;;
-            ;; yos kernel page 0 template. this low page is meant to be
-            ;; installed into both bank 0 and bank 1 after the bootstrap has
-            ;; loaded and entered yos in shared memory. the layout follows the
-            ;; yos crt0rom style: fixed 8-byte rst slots, inline return paths,
-            ;; and the remaining low-page info block before nmi at 0x66.
+            ;; PartOS micro-kernel low page. in the split build the micro-kernel
+            ;; is linked at 0x0000, so this is no longer a template copied into
+            ;; page 0 -- it IS the first thing in kernel _CODE and therefore sits
+            ;; at the rst/nmi entry addresses directly.
             ;;
-            ;; 2026-06-14   tstih
+            ;; each hardware rst/nmi slot holds a DIRECT `jp <handler>`. because
+            ;; the slot sits at a fixed address (0x08, 0x10, ... 0x38, nmi 0x66),
+            ;; set_vector(slot, handler) simply patches the 2-byte operand of that
+            ;; jp in place -- so there is NO separate vector table: the slot IS the
+            ;; table. the "vector number" passed to set_vector is literally the
+            ;; slot address (all < 0x100, fits a byte). default targets:
+            ;;   rst 0x08  -> __kernel_api  (returns hl = &_kernel_table)
+            ;;   rst 0x10..0x30, all -> __sys_rst_default  (ret)
+            ;;   rst 0x38 (im 1) -> __sys_rst38_default (reti)
+            ;;   nmi 0x66        -> __sys_nmi_default  (retn)
+            ;; rst 0x00 is the cold entry: `di ; jp __sys_kernel` (no vectoring).
+            ;;
+            ;; consequence: the low page is now SELF-MODIFIED by set_vector (it is
+            ;; not read-only after boot), and once banking lands set_vector must
+            ;; patch the operand in BOTH bank mirrors. set_vector is cold, so this
+            ;; is cheap. the soft 50 Hz TICK hook is NOT here -- it is reached by a
+            ;; software call from the VBL ISR, not a rst, so it stays an indirect
+            ;; cell (see __tick_dispatch / __sys_vec_tick in vectors.s).
+            ;;
+            ;; this module MUST be linked FIRST in _CODE so __sys_page0 lands at
+            ;; 0x0000 and the rst slots fall on their fixed 8-byte boundaries.
+            ;;
+            ;; 2026-06-21   tstih
             .module page0
+
+            .include "../partos.inc"        ; BANK_*_PORT for the bank copies
 
             .globl  __sys_page0
             .globl  __sys_page0_end
-            .globl  __sys_page0_install
-            .globl  __sys_page0_free
-            .globl  __sys_entry
-            .globl  __sys_vec_rst08
-            .globl  __sys_vec_rst10
-            .globl  __sys_vec_rst18
-            .globl  __sys_vec_rst20
-            .globl  __sys_vec_rst28
-            .globl  __sys_vec_rst30
-            .globl  __sys_vec_rst38
-            .globl  __sys_vec_nmi
-            .globl  __sys_version
-            .globl  __sys_model
-            .globl  __sys_flags
-            .globl  __sys_meta1
-            .globl  __sys_info
-            .globl  __sys_info_end
-            .globl  __sys_nvram_cache
-            .globl  __sys_info_reserved
-
-            .equ    BANK0_PORT,        0x88 ; hardware bank 1, logical bank 0
-            .equ    BANK1_PORT,        0x90 ; hardware bank 2, logical bank 1
-            .equ    NVRAM_PORT_BASE,   0xa8
-            .equ    NVRAM_SIZE,        8
-            .equ    PAGE0_INSTALL_OFF, 0x006b
-            .equ    PAGE0_SIZE,        0x0100
+            .globl  __sys_kernel
+            .globl  __kernel_api
+            .globl  __thread_robin
+            .globl  __sys_rst_default
+            .globl  __sys_rst38_default
+            .globl  __sys_nmi_default
+            ;; the one bank block-copy routine -- it lives in the dead bytes
+            ;; after the rst38 jump + the rst38->nmi pad, so it costs no extra
+            ;; space, and being a plain imm-port loop with no self-modification it
+            ;; runs unchanged from this read-only mirrored low page (or relocated
+            ;; to exec space at boot).
+            .globl  __bank_copy
+            .globl  __bank_copy_size
+            .globl  __boot_version_hint
+            .globl  __boot_model_hint
+            .globl  __boot_flags_hint
+            .globl  __boot_meta1_hint
+            ;; scheduler list heads parked in the dead pre-nmi pad (see below).
+            .globl  _thread_current
+            .globl  _thread_first_suspended
+            .globl  _thread_first_running
+            .globl  _thread_first_waiting
+            .globl  _thread_first_terminated
+            .globl  __evt_first
 
             ;; ----------------------------------------------------------------
-            ;; page-0 template image
+            ;; micro-kernel low page (linked at 0x0000)
             ;; ----------------------------------------------------------------
-            ;; this area is copied by kernel bootstrap into bank 0 and bank 1
-            ;; page 0. it is not executed in place, so it stays relocatable.
-            ;; rst 0 keeps the compact jp-to-entry form because bytes 0x04..0x07
-            ;; are reserved for version/model/flags/meta. the remaining vectors
-            ;; load their real targets from the shared-memory vector table.
-            ;; ----------------------------------------------------------------
-            .area   _PAGE0
+            .area   _CODE
 __sys_page0::
 
             ;; ----------------------------------------------------------------
-            ;; rst 0x00
+            ;; rst 0x00 -- reset / cold entry
             ;; ----------------------------------------------------------------
-            ;; bytes 0x0002-0x0003 are the operand of this jp instruction, so
-            ;; they already carry the current yos entry address.
+            ;; bytes 0x0002-0x0003 are the operand of this jp, so 0x0004..0x0007
+            ;; stay free for the kernel identity bytes below.
             ;; ----------------------------------------------------------------
             di
-            jp      __sys_entry
+            jp      __sys_kernel
 
-__sys_version::
-            .db     0                   ; high nibble = major, low nibble = minor
-__sys_model::
-            .db     0                   ; bit 0 = has graphics (gdp)
-                                        ; bits 1-3 = floppy count
-                                        ; bits 4-5 = hard-drive count
-                                        ; bits 6-7 = reserved
-__sys_flags::
-            .db     0                   ; bit 0 = current bank (0/1)
-__sys_meta1::
+            ;; 0x04-0x07: ROM-written boot hints. rst 0x00 is di+jp (4 bytes),
+            ;; so these four bytes are unreachable as code and only exist to
+            ;; push rst 0x08 onto its boundary. the ROM fills them after it has
+            ;; loaded the split images:
+            ;;   +0 version hint
+            ;;   +1 model hint
+            ;;   +2 flags hint
+            ;;   +3 meta1 hint (currently boot-device id)
+__boot_version_hint::
+            .db     0
+__boot_model_hint::
+            .db     0
+__boot_flags_hint::
+            .db     0
+__boot_meta1_hint::
             .db     0
 
-            ;; rst 0x08
-            ld      hl,(#__sys_vec_rst08)
-            jp      (hl)
-            .db     0,0,0,0
+            ;; ----------------------------------------------------------------
+            ;; rst 0x08 -- kernel ABI discovery
+            ;; ----------------------------------------------------------------
+            ;; default target __kernel_api, which returns hl = &_kernel_table.
+            ;; ----------------------------------------------------------------
+            jp      __kernel_api
+            .db     0, 0, 0, 0, 0
 
+            ;; ----------------------------------------------------------------
             ;; rst 0x10
-            ld      hl,(#__sys_vec_rst10)
-            jp      (hl)
-            .db     0,0,0,0
+            ;; ----------------------------------------------------------------
+            ;; unassigned; default target __sys_rst_default (ret).
+            ;; ----------------------------------------------------------------
+            jp      __sys_rst_default
+            .db     0, 0, 0, 0, 0
 
-            ;; rst 0x18
-            ld      hl,(#__sys_vec_rst18)
-            jp      (hl)
-            .db     0,0,0,0
+            ;; ----------------------------------------------------------------
+            ;; rst 0x18 -- scheduler tick / yield -> context switch
+            ;; ----------------------------------------------------------------
+            ;; the kernel never fires this itself: a thread issues `rst 0x18` to
+            ;; yield, and the OS routes a timer interrupt here to preempt. no
+            ;; source wired -> cooperative (single-tasking); a timer wired ->
+            ;; preemptive.
+            ;; ----------------------------------------------------------------
+            jp      __thread_robin
+            .db     0, 0, 0, 0, 0
 
+            ;; ----------------------------------------------------------------
             ;; rst 0x20
-            ld      hl,(#__sys_vec_rst20)
-            jp      (hl)
-            .db     0,0,0,0
+            ;; ----------------------------------------------------------------
+            ;; unassigned; default target __sys_rst_default (ret).
+            ;; ----------------------------------------------------------------
+            jp      __sys_rst_default
+            .db     0, 0, 0, 0, 0
 
+            ;; ----------------------------------------------------------------
             ;; rst 0x28
-            ld      hl,(#__sys_vec_rst28)
-            jp      (hl)
-            .db     0,0,0,0
+            ;; ----------------------------------------------------------------
+            ;; unassigned; default target __sys_rst_default (ret).
+            ;; ----------------------------------------------------------------
+            jp      __sys_rst_default
+            .db     0, 0, 0, 0, 0
 
+            ;; ----------------------------------------------------------------
             ;; rst 0x30
-            ld      hl,(#__sys_vec_rst30)
-            jp      (hl)
-            .db     0,0,0,0
-
-            ;; rst 0x38 - im 1 interrupt entry
-            ld      hl,(#__sys_vec_rst38)
-            jp      (hl)
-            .db     0,0,0,0
+            ;; ----------------------------------------------------------------
+            ;; unassigned; default target __sys_rst_default (ret).
+            ;; ----------------------------------------------------------------
+            jp      __sys_rst_default
+            .db     0, 0, 0, 0, 0
 
             ;; ----------------------------------------------------------------
-            ;; 38-byte low-page info block.
+            ;; rst 0x38 -- im 1 interrupt entry
             ;; ----------------------------------------------------------------
-            ;; keep bank-local cache here. callers that need identical content
-            ;; across both banks must mirror writes into both page-0 copies.
+            ;; default target __sys_rst38_default (reti).
             ;; ----------------------------------------------------------------
-__sys_info::
-__sys_nvram_cache::
-            .db     0,0,0,0,0,0,0,0
-__sys_info_reserved::
-            .db     0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0
-            .db     0,0,0,0,0,0,0,0,0,0,0,0,0,0
-__sys_info_end::
+            jp      __sys_rst38_default
 
-            ;; nmi interrupt 0x66
-            ld      hl,(#__sys_vec_nmi)
-            jp      (hl)
-            .db     0
-__sys_page0_end::
-
-            ;; the copied low-page template ends before 0x006b. keep the real
-            ;; installer body inside the reserved 256-byte page block so it
-            ;; does not also consume shared _CODE space.
-            .ds     PAGE0_INSTALL_OFF - (__sys_page0_end-__sys_page0)
-__sys_page0_install::
-            ld      (page0_ret$),hl
-            ld      (#__sys_version),a
-            ld      a,b
-            ld      (#__sys_model),a
-            ld      a,c
-            and     #0xfe              ; per-bank bit is supplied during copy
-            ld      (#__sys_flags),a
-            ld      a,d
-            ld      (#__sys_meta1),a
-            ld      hl,#__sys_nvram_cache
-            ld      b,#NVRAM_SIZE
-            ld      c,#NVRAM_PORT_BASE
-page0_nvram_copy$:
-            in      a,(c)
-            ld      (hl),a
+            ;; ----------------------------------------------------------------
+            ;; __bank_copy(<hl> src, <de> dst, <bc> count, <a> dir)
+            ;; ----------------------------------------------------------------
+            ;; the bytes after the rst38 jump are unreachable by rst (the cpu only
+            ;; generates rst 0x00..0x38), so the ONE bank block-copy lives here,
+            ;; flowing into the old rst38->nmi pad -- it costs no space.
+            ;;
+            ;; generic byte copy from <src> in the CURRENT bank to <dst> in the
+            ;; OTHER bank (src/dst independent); each byte rides in A across the
+            ;; flip (bank select is value-independent). direction picks the order
+            ;; of the two bank ports: dir == 0 -> current A -> B, dir != 0 -> B -> A.
+            ;; fixed-port immediates (no self-modification), so it runs unchanged
+            ;; from this read-only mirrored low page, or relocated to exec space
+            ;; for the boot mirror (while bank B's low page does not exist yet).
+            ;;
+            ;; INTERRUPTS MUST BE OFF (an isr mid-flip would run in the dst bank).
+            ;; destroys: a, bc, de, hl, flags
+            ;; ----------------------------------------------------------------
+__bank_copy::
+            or      a
+            jr      nz,bc_b2a$
+bc_a2b$:
+            ld      a,(hl)              ; read src (current = A)
+            out     (BANK_B_PORT),a     ; -> B
+            ld      (de),a              ; write dst in B
+            out     (BANK_A_PORT),a     ; restore A
             inc     hl
-            inc     c
-            djnz    page0_nvram_copy$
+            inc     de
+            dec     bc
+            ld      a,b
+            or      c
+            jr      nz,bc_a2b$
+            ret
+bc_b2a$:
+            ld      a,(hl)              ; read src (current = B)
+            out     (BANK_A_PORT),a     ; -> A
+            ld      (de),a              ; write dst in A
+            out     (BANK_B_PORT),a     ; restore B
+            inc     hl
+            inc     de
+            dec     bc
+            ld      a,b
+            or      c
+            jr      nz,bc_b2a$
+            ret
+__bank_copy_end::
+            __bank_copy_size == __bank_copy_end - __bank_copy
 
-            ;; install page 0 into logical bank 0
-            xor     a
-            out     (BANK0_PORT),a
-            ld      hl,#0x0000
-            ld      de,#0x0001
-            ld      bc,#0x00ff
-            ld      (hl),a
-            ldir
-            ld      a,(#__sys_flags)
-            and     #0xfe
-            ld      hl,#__sys_page0
-            ld      de,#0x0000
-            ld      bc,#(__sys_page0_end-__sys_page0)
-            ldir
-            ld      (#(__sys_flags-__sys_page0)),a
+            ;; ----------------------------------------------------------------
+            ;; scheduler list heads -- parked in the dead pre-nmi pad
+            ;; ----------------------------------------------------------------
+            ;; the 6 list heads are exactly 12 bytes (6 words) and fill the gap
+            ;; from here to the nmi entry at 0x66. they are .dw 0 (loaded zero,
+            ;; no runtime init), and live here purely to keep _INITIALIZED under
+            ;; the 2 KB mirror line by reusing space we already pay for.
+            ;; NOTE: in the mirrored low page these are PER-BANK copies -- correct
+            ;; for single-bank, but cross-bank scheduling must relocate them to a
+            ;; single shared-RAM copy when banking goes live.
+            ;; ----------------------------------------------------------------
+_thread_current::
+            .dw     0x0000
+_thread_first_suspended::
+            .dw     0x0000
+_thread_first_running::
+            .dw     0x0000
+_thread_first_waiting::
+            .dw     0x0000
+_thread_first_terminated::
+            .dw     0x0000
+__evt_first::
+            .dw     0x0000
+            ;; guard: the 6 words fill 0x5a..0x65 exactly; pad any slack to nmi.
+            .ds     0x66 - (. - __sys_page0)
 
-            ;; install page 0 into logical bank 1
-            xor     a
-            out     (BANK1_PORT),a
-            ld      hl,#0x0000
-            ld      de,#0x0001
-            ld      bc,#0x00ff
-            ld      (hl),a
-            ldir
-            ld      a,(#__sys_flags)
-            or      #0x01
-            ld      hl,#__sys_page0
-            ld      de,#0x0000
-            ld      bc,#(__sys_page0_end-__sys_page0)
-            ldir
-            ld      (#(__sys_flags-__sys_page0)),a
-
-            ;; return to logical bank 0 and continue without stack use
-            xor     a
-            out     (BANK0_PORT),a
-            ld      hl,(page0_ret$)
-            jp      (hl)
-
-page0_ret$:
-            .db     0,0
-__sys_page0_free::
-            .ds     PAGE0_SIZE - (__sys_page0_free-__sys_page0)
+            ;; ----------------------------------------------------------------
+            ;; nmi -- 0x66
+            ;; ----------------------------------------------------------------
+            ;; default target __sys_nmi_default (retn).
+            ;; ----------------------------------------------------------------
+            jp      __sys_nmi_default
+__sys_page0_end::

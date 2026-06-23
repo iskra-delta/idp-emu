@@ -90,6 +90,7 @@ public:
     std::string get_disk_path(int drive) const;
     virtual void reset();
     virtual void tick();
+    void clean_kernel_io_handoff();
 
     // State accessors for GUI panels (read-only)
     const z80_t& get_cpu() const { return cpu; }
@@ -102,18 +103,49 @@ public:
     const s1410_t& get_hdc() const { return hdc; }
     const idpartner_sasi_t& get_sasi() const { return sasi_; }
     const mm58167a_t& get_rtc() const { return rtc; }
+    // Seed MM58167 NVRAM ports (0xA8..0xAF) before page0_install copies them.
+    void seed_cmos_nvram(const uint8_t *data, size_t len);
     uint8_t get_fdc_motor() const { return fdc_motor; }
     uint8_t get_fdc_int_vector() const { return fdc_int_vector; }
     uint8_t get_fdc_int_state() const { return fdc_int_state; }
     uint64_t get_pins() const { return pins; }
     uint32_t get_dma_fdc_reads() const { return dma_fdc_reads_; }
     uint32_t get_dma_mem_writes() const { return dma_mem_writes_; }
+    uint32_t get_sasi_data_reads() const { return sasi_data_reads_; }
+    uint32_t get_sasi_data_writes() const { return sasi_data_writes_; }
+    uint32_t get_dma_commit_reads() const { return dma_commit_reads_; }
+    uint32_t get_dma_commit_eligible() const { return dma_commit_eligible_; }
+    uint32_t get_sasi_data_phase_reads() const { return sasi_data_phase_reads_; }
+    uint32_t get_dma_enabled_ticks() const { return dma_enabled_ticks_; }
+    uint32_t get_dma_port_writes() const { return dma_port_writes_; }
+    uint32_t get_hd_dma_region_ticks() const { return hd_dma_region_ticks_; }
+    uint32_t get_hd_read_real_calls() const { return hd_read_real_calls_; }
+    uint32_t get_fd_read_real_calls() const { return fd_read_real_calls_; }
     bool get_dma_ready_input() const { return dma_ready_input_; }
     uint8_t peek_mem(uint16_t addr) const {
         if (rom_enabled && addr < 0x2000) return rom[addr & (rom_size - 1)];
         return peek_ram(addr);
     }
     uint64_t get_tick_count() const { return tick_count; }
+    bool get_iff1() const { return cpu.iff1; }
+    // debug memory-write trap: set dbg_wtrap_addr to watch; first write records
+    // the writing instruction's PC and the value. 0xFFFF disables it.
+    uint16_t dbg_wtrap_addr = 0xFFFF;
+    uint16_t dbg_wtrap_hi = 0;        // if >dbg_wtrap_addr, trap the [addr,hi] range
+    bool     dbg_wtrap_hit = false;
+    uint16_t dbg_wtrap_pc = 0;
+    uint8_t  dbg_wtrap_val = 0;
+    uint16_t dbg_wtrap_ix = 0, dbg_wtrap_hl = 0, dbg_wtrap_de = 0, dbg_wtrap_sp = 0;
+    std::array<uint8_t, 8> dbg_im2_ack_vectors{};
+    std::array<uint16_t, 8> dbg_im2_ack_pcs{};
+    uint32_t dbg_im2_ack_count = 0;
+    std::array<uint8_t, 16> dbg_irref_values{};
+    std::array<uint16_t, 16> dbg_irref_pcs{};
+    std::array<uint16_t, 16> dbg_irref_sps{};
+    std::array<uint16_t, 16> dbg_irref_stack0{};
+    std::array<uint16_t, 16> dbg_irref_stack1{};
+    std::array<uint64_t, 16> dbg_irref_ticks{};
+    uint32_t dbg_irref_count = 0;
     bool is_rom_enabled() const { return rom_enabled; }
     uint8_t get_ram_bank() const { return ram_bank; }
     // Instruction boundary test. Uses the CPU's own latched pin copy
@@ -188,11 +220,24 @@ protected:
     uint8_t fdc_int_state = 0;
     bool fdc_reset_irq_armed_ = false;
     bool prompt_fdc_cleanup_done_ = false;
+    bool kernel_handoff_cleaned_ = false;
     bool fdc_motor_running = false;
     bool dma_busreq_latched = false;
     bool dma_ready_input_ = false;
     uint32_t dma_fdc_reads_ = 0;
     uint32_t dma_mem_writes_ = 0;
+    uint32_t sasi_data_reads_ = 0;
+    uint32_t sasi_data_writes_ = 0;
+    uint32_t dma_commit_reads_ = 0;
+    uint32_t dma_commit_eligible_ = 0;
+    uint32_t sasi_data_phase_reads_ = 0;
+    uint32_t dma_enabled_ticks_ = 0;
+    uint32_t dma_port_writes_ = 0;
+    uint64_t last_dma_port_wr_tick_ = 0;
+    uint32_t hd_dma_region_ticks_ = 0;
+    uint32_t hd_read_real_calls_ = 0;
+    uint32_t fd_read_real_calls_ = 0;
+    bool dma_bus_service_ = false;
     uint64_t last_cpu_bus_pins_ = 0;
     bool io_read_latched_ = false;
     uint16_t io_read_latched_addr_ = 0;
@@ -218,11 +263,17 @@ protected:
 
     void restore_drive_ready_flags();
     void service_cpu_bus(uint64_t &pins);
+    void service_cpu_dma_port_write(uint64_t bus_pins);
     void service_dma_read_bus(uint64_t &pins);
     void service_dma_write_bus(uint64_t &pins);
+    void service_dma_write_complete();
+    void commit_dma_io_to_mem_byte(uint8_t data);
+    void pump_sasi_dma_transfer();
+    uint8_t sasi_data_read_for_bus();
     void service_fdc_daisy(uint64_t &pins, bool cpu_ticked);
     int get_pending_daisy_vector() const;
     bool dma_owns_bus() const;
+    bool dma_transfer_pending() const;
     uint8_t peek_ram(uint16_t addr) const;
     void set_sio_port_lock(sio_port_id port, bool locked, const std::string &reason);
 

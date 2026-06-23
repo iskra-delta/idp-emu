@@ -1,49 +1,102 @@
             ;; partos.inc
             ;;
-            ;; partos memory map (see docs/PARTOS-VOLUME-1-ROM.md and
+            ;; partos memory + load map (see docs/PARTOS-VOLUME-1-ROM.md and
             ;; docs/PARTOS-VOLUME-2-KERNEL.md). these are addresses only; all
             ;; sizes are computed by the linker (area symbols) and the build
-            ;; (link map).
+            ;; (link map). entries are grouped: common, bios, kernel, os.
             ;;
             ;; 2026-06-11   tstih
 
-            ;; --- rom ----------------------------------------------------------
-            .equ    BOOT_BASE,      0x0000 ; bootstrap, runs from rom in place
-            .equ    STAGE1_BASE,    0x2000 ; decompressed stage-1 bios entry
+            ;; ================================================================
+            ;; common -- the shared image load map
+            ;; ================================================================
+            ;; the rom loader places two reserved disk regions into RAM, then
+            ;; hands off to the OS payload. fixed bases => both images link at
+            ;; constant addresses (no auto-derived load base, no layout drift).
+            ;;   kernel  2 KB  -> 0x0000  micro-kernel (mirrored into both banks)
+            ;;   OS     16 KB  -> 0xc000  shared payload (top reserved for kernel)
+            .equ    UKERNEL_LOAD_BASE,  0x0000 ; micro-kernel, mirrored both banks
+            .equ    UKERNEL_SECTORS,    8      ; 2 KB / 256
+            .equ    SERVICES_LOAD_BASE, 0xc000 ; shared OS payload (16 KB)
+            .equ    SERVICES_SECTORS,   64     ; 16 KB / 256
 
-            ;; --- runtime memory map ------------------------------------------
-            .equ    BIOS_BASE,      0xf600 ; bios runtime location (mem top)
-            ;; bios variables must stay BELOW the 8 KB OS load window
-            ;; (0xe000-0xffff) and the boot record staging at 0xdf00, or the
-            ;; boot loader would overwrite its own state while loading the OS.
-            .equ    SYSVARS_BASE,   0xde00 ; bios variables (256 bytes)
-            .equ    HEAP_BOTTOM,    0xfe00 ; legacy bios heap floor
-            .equ    HEAP_TOP,       0xffff ; highest heap byte (top of ram)
-            .equ    STACK_TOP,      BIOS_BASE ; bios/stage-1 stack grows below bios
-            ;; user processes share one common heap below the linked kernel
-            ;; image. reserve everything above page 0 and below 0xc000 so
-            ;; application images and their private stacks all come from this
-            ;; pool while still leaving the kernel heap isolated up top.
-            .equ    USER_HEAP_BASE,     0x0100
-            .equ    USER_HEAP_SIZE,     0xbf00
+            ;; OS bank-local scratch lives in the first 800 bytes above the
+            ;; mirrored kernel. it holds zero-initialized OS/private driver
+            ;; work state so the shared OS image can stay below the kernel
+            ;; reserve while keeping its loaded code+data contiguous.
+            .equ    OS_SYSVARS_BASE,    0x0800
+            .equ    OS_SYSVARS_SIZE,    0x0320 ; 800 bytes reserved in bank 1
+
+            ;; process arena: per-bank heap above the OS scratch window, running
+            ;; up to the shared region. thread stacks and process images come
+            ;; from here; both banks use this same window.
+            .equ    USER_HEAP_BASE,     0x0b20 ; 0x0800..0x0b1f reserved for OS
+            .equ    USER_HEAP_SIZE,     0xb4e0 ; 0x0b20..0xbfff
             .equ    USER_HEAP_TOP,      0xc000
 
-            ;; --- kernel runtime map ------------------------------------------
-            ;; keep the kernel runtime reserve to 1.5 KB total for now:
-            ;;   0xfa00..0xfd7f  kernel heap         (896 bytes)
-            ;;   0xfd80..0xfdff  kernel stack        (128 bytes)
-            ;;   0xfe00..0xffff  kernel im 2 table   (512 bytes)
-            ;; page-0 install code lives just below that reserve.
-            .equ    KERNEL_HEAP_BASE,   0xfa00
-            .equ    KERNEL_HEAP_SIZE,   0x0380
-            .equ    KERNEL_STACK_BASE,  0xfd80
-            .equ    KERNEL_STACK_SIZE,  0x0080
+            ;; ram bank-select ports: any i/o access in 0x88..0x8f maps bank A,
+            ;; 0x90..0x97 maps bank B (value-independent). the two differ by
+            ;; BANK_TOGGLE, so a copy routine derives the "restore" port from the
+            ;; destination port (see bank.s).
+            .equ    BANK_A_PORT,        0x88
+            .equ    BANK_B_PORT,        0x90
+            .equ    BANK_TOGGLE,        (BANK_A_PORT ^ BANK_B_PORT) ; 0x18
+
+            ;; ================================================================
+            ;; bios (rom)
+            ;; ================================================================
+            .equ    BOOT_BASE,      0x0000 ; bootstrap, runs from rom in place
+            .equ    STAGE1_BASE,    0x2000 ; decompressed stage-1 bios entry
+            .equ    BIOS_BASE,      0xf600 ; bios runtime location (mem top)
+            .equ    SYSVARS_BASE,   0xde00 ; bios variables (256 bytes)
+            .equ    BOOT_RECORD_BUF, 0x1800 ; transient boot-sector scratch
+
+            ;; ================================================================
+            ;; kernel -- fixed top-of-RAM runtime reserve
+            ;; ================================================================
+            ;; the top of common RAM holds the kernel's mutable runtime state. it
+            ;; is ALWAYS-MAPPED shared RAM, set up by the kernel at boot, and is
+            ;; NOT part of any loaded image. BOTH the kernel and the OS know this
+            ;; layout: the OS payload must stay below KERNEL_SYSVARS_BASE. the low
+            ;; micro-kernel page (0x0000) holds no mutable data, so it stays
+            ;; read-only / mirrored. sizes are provisional -- bump them here (and
+            ;; the OS automatically gets less room) if the kernel needs more.
+            ;;   0xfb50..0xfb7f  exec space (bank fns)     (48 bytes)
+            ;;   0xfb80..0xfbbf  sysvars (scratch)        (64 bytes)
+            ;;   0xfbc0..0xfd7f  system heap (kernel + OS) (448 bytes)
+            ;;   0xfd00..0xfd7f  isr stack                (128 bytes)
+            ;;   0xfd80..0xfdff  kernel stack             (128 bytes)
+            ;;   0xfe00..0xffff  im 2 table (page-aligned)(512 bytes)
+            .equ    KERNEL_SYSVARS_BASE, 0xfb80
+            ;; exec space: a few small kernel routines that MUST run from
+            ;; always-mapped shared RAM -- the bank block-copy and the bank-call
+            ;; trampoline. they cannot live in the mirrored low page because they
+            ;; are what builds the mirror (and they flip banks under their own
+            ;; PC). the kernel copies them here from its image at boot. this is
+            ;; the lowest reserve address, so it is the OS payload's ceiling.
+            .equ    KERNEL_EXEC_SIZE,   0x0030 ; 48 bytes; __bank_copy uses 31
+            .equ    KERNEL_EXEC_SPACE,  (KERNEL_SYSVARS_BASE - KERNEL_EXEC_SIZE)
+            .equ    KERNEL_HEAP_BASE,   0xfbc0
+            .equ    KERNEL_HEAP_SIZE,   0x01c0 ; 448 bytes; butts against the stack
+            ;; device ISRs switch to this dedicated stack so they never run on
+            ;; (and overflow) the interrupted thread's own stack. grows down.
+            .equ    DRV_ISR_STACK_TOP,  0xfd80
             .equ    KERNEL_STACK_TOP,   0xfe00
             ;; im 2 table must be page-aligned (the i register supplies its high
-            ;; byte). a device vector V selects the 2-byte handler pointer at
-            ;; base + V, so the full vector range spans 512 bytes / two pages.
-            .equ    KERNEL_IM2_BASE,    0xfe00 ; 512-byte IM 2 vector table
+            ;; byte). a device vector V selects the handler at base + V, so the
+            ;; full vector range spans 512 bytes / two pages.
+            .equ    KERNEL_IM2_BASE,    0xfe00
             .equ    KERNEL_IM2_SIZE,    0x0200
-            .equ    KERNEL_PAGE0_BASE,  0xf900 ; page-0 image + installer block
-            .equ    KERNEL_PAGE0_SIZE, 0x0100
-            .equ    KERNEL_PAGE0_INSTALL, 0xf96b
+
+            ;; ================================================================
+            ;; os -- payload entry points (all = SERVICES_LOAD_BASE)
+            ;; ================================================================
+            .equ    SERVICES_ENTRY,     SERVICES_LOAD_BASE ; rom hands off here
+            .equ    PAYLOAD_ENTRY,      SERVICES_LOAD_BASE ; kernel first-thread start
+
+            ;; kernel low-page boot-hint bytes (written by the ROM once the
+            ;; split images are in place, before control jumps to page 0).
+            .equ    KERNEL_BOOT_VERSION_ADDR, 0x0004
+            .equ    KERNEL_BOOT_MODEL_ADDR,   0x0005
+            .equ    KERNEL_BOOT_FLAGS_ADDR,   0x0006
+            .equ    KERNEL_BOOT_META1_ADDR,   0x0007

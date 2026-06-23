@@ -65,8 +65,8 @@ void *mem_allocate(void *heap, uint16_t size, void *owner);
 void *mem_free(void *heap, void *p);
 
 /*
- * Free all blocks owned by the supplied owner id.
+ * Internal ownership sweep used during kernel-managed teardown.
  */
-uint8_t mem_free_owner(void *heap, void *owner);
+uint8_t __mem_free_owner(void *heap, void *owner);
 
 #endif /* MEM_H */

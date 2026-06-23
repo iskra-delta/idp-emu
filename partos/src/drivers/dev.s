@@ -41,11 +41,11 @@
             .globl  hd_dev_drv
             .globl  hd_dev0
 
-            .globl  _dev_init
-            .globl  _dev_init_all
-            .globl  _dev_probe_all
-            .globl  _drv_register_all
-            .globl  _find_dev_drv
+            .globl  __dev_init
+            .globl  __dev_init_all
+            .globl  __dev_probe_all
+            .globl  __drv_register_all
+            .globl  __find_dev_drv
             .globl  _dev_first
             .globl  _drv_first
             .globl  __sys_model
@@ -72,24 +72,24 @@ dev_append_hl$:
             jp      _list_append
 
             ;; ----------------------------------------------------------------
-            ;; _dev_init()
+            ;; __dev_init()
             ;; ----------------------------------------------------------------
             ;; clears the global device list. call once before the driver
             ;; probe pass.
             ;; ----------------------------------------------------------------
-_dev_init::
+__dev_init::
             ld      hl,#0x0000
             ld      (_dev_first),hl
             ret
 
             ;; ----------------------------------------------------------------
-            ;; _dev_init_all()
+            ;; __dev_init_all()
             ;; ----------------------------------------------------------------
             ;; runs every driver's one-time, driver-level init (controller /
-            ;; chip setup) once at kernel start. call before _dev_probe_all.
+            ;; chip setup) once at kernel start. call before __dev_probe_all.
             ;; per-device setup is deferred to each device's open().
             ;; ----------------------------------------------------------------
-_dev_init_all::
+__dev_init_all::
             ld      hl,(_drv_first)
 dia_loop$:
             ld      a,h
@@ -112,23 +112,23 @@ dia_loop$:
             jr      dia_loop$
 
             ;; ----------------------------------------------------------------
-            ;; _drv_register_all()
+            ;; __drv_register_all()
             ;; ----------------------------------------------------------------
             ;; built-in drivers are linked statically through each drv_t.next
             ;; field, so the public registration hook can stay as a no-op while
             ;; _drv_first still exposes an enumerable driver chain to the OS.
             ;; ----------------------------------------------------------------
-_drv_register_all::
+__drv_register_all::
             ret
 
             ;; ----------------------------------------------------------------
-            ;; _dev_probe_all()
+            ;; __dev_probe_all()
             ;; ----------------------------------------------------------------
             ;; appends the boot-time configured device chains in fixed built-in
             ;; order. simple static devices are published directly here; only
             ;; the multi-unit NVRAM-driven families still need custom builders.
             ;; ----------------------------------------------------------------
-_dev_probe_all::
+__dev_probe_all::
             ld      hl,#ctc_dev
             call    dev_append_hl$
 
@@ -259,7 +259,7 @@ fdd_fail$:
             or      a
             ret
 
-_find_dev_drv::
+__find_dev_drv::
             call    __find_dev_drv$
             ex      de,hl
             ret

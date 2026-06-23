@@ -128,7 +128,19 @@ fd_open::
             push    hl
             call    drv_open_pos0
             pop     hl
+            ;; spin the drive path up (OUT 0x98). real partner + emulator both
+            ;; require the motor before the controller will service a seek, so
+            ;; the recalibrate below would otherwise never complete.
+            xor     a
+            out     (FD_PORT_MOTOR),a
+            ;; mask the fdc completion interrupt across the recalibrate: the
+            ;; recal waits via a polled SENSE-INTERRUPT loop, and the installed
+            ;; _fd_isr would otherwise race it and consume the seek-complete
+            ;; status. ir_disable preserves hl; ir_enable preserves af, so the
+            ;; recal's carry result survives.
+            call    _ir_disable
             call    fd_recal_dev$
+            call    _ir_enable
             jp      c,drv_err
             ld      hl,#DRV_OK
             ret
@@ -156,6 +168,12 @@ fd_write::
             ld      a,#1                ; dir = 1 (write)
 
 fd_xfer_start$:                         ; a=dir, hl=dev, de=buf, bc=count, ix=event
+            ;; motor may have timed out since fd_open(); spin it up again
+            ;; before arming another dma transfer.
+            push    af
+            xor     a
+            out     (FD_PORT_MOTOR),a
+            pop     af
             ld      (fd_io_dir$),a
             ld      (fd_io_dev$),hl
             ld      (fd_io_buf$),de
@@ -266,11 +284,10 @@ fdds_wr0$:
             out     (FD_PORT_DMA),a     ; buffer low
             ld      a,h
             out     (FD_PORT_DMA),a     ; buffer high
-            ld      a,#0xff
-            out     (FD_PORT_DMA),a     ; length low (sector_size - 1)
+            xor     a
+            out     (FD_PORT_DMA),a     ; length low = 0
             ld      a,(fd_io_ssh$)
-            dec     a
-            out     (FD_PORT_DMA),a     ; length high (ssh - 1: 256->0, 512->1)
+            out     (FD_PORT_DMA),a     ; length high = ssh (1->256 B, 2->512 B)
             ld      hl,#fd_dma_cfg$
             ld      b,#9
             ld      c,#FD_PORT_DMA
@@ -488,12 +505,16 @@ fdf_res$:
             ret
 
 fd_write_data$:
-            ld      e,a
-            call    fd_wait_cmd_ready$
-            ret     c
-            ld      a,e
-            out     (FD_PORT_DATA),a
+            push    af                  ; save the command byte: fd_wait_phase$
+            call    fd_wait_cmd_ready$  ; clobbers a/bc/e (it reuses e for the
+            jr      c,fdwd_to$          ; phase mask), so the stack is the only
+            pop     af                  ; register-safe place to hold it across
+            out     (FD_PORT_DATA),a    ; the ready wait.
             or      a
+            ret
+fdwd_to$:
+            pop     af
+            scf
             ret
 
 fd_read_data$:

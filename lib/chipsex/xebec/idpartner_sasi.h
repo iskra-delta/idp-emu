@@ -70,6 +70,24 @@ static inline bool _idpartner_sasi_req(const idpartner_sasi_t *adp) {
     }
 }
 
+/* DRQ only gates the Z80 DMA data phase. The Partner firmware consumes the
+   post-transfer response bytes through PIO in the HD ISR; asserting DRQ during
+   RESPONSE (or command/config phases) lets DMA swallow those bytes and leaves
+   the ISR polling forever for REQ+IO+CD. */
+static inline bool _idpartner_sasi_drq_ready(const idpartner_sasi_t *adp) {
+    if (!adp->target || !adp->target->present) {
+        return false;
+    }
+    switch (adp->target->phase) {
+        case S1410_PHASE_READ_DATA:
+            return adp->target->data_idx < adp->target->data_len;
+        case S1410_PHASE_WRITE_DATA:
+            return adp->target->data_idx < adp->target->data_len;
+        default:
+            return false;
+    }
+}
+
 static inline bool _idpartner_sasi_io(const idpartner_sasi_t *adp) {
     if (!adp->target) {
         return false;
@@ -100,7 +118,7 @@ static inline bool _idpartner_sasi_bsy(const idpartner_sasi_t *adp) {
 }
 
 static inline void _idpartner_sasi_update_drq(idpartner_sasi_t *adp) {
-    adp->drq = adp->data_enable && adp->drq_enable && _idpartner_sasi_req(adp);
+    adp->drq = adp->data_enable && adp->drq_enable && _idpartner_sasi_drq_ready(adp);
 }
 
 void idpartner_sasi_init(idpartner_sasi_t *adp, s1410_t *target) {
@@ -155,7 +173,24 @@ void idpartner_sasi_ctrl_w(idpartner_sasi_t *adp, uint8_t data) {
     adp->data_enable = (data & 0x02) != 0;
     adp->drq_enable = (data & 0x20) != 0;
     adp->last_ctrl = data;
-    if (sel && !adp->sel_latched) {
+
+    /* hd_end_session$ drops every control bit; mirror that by releasing the
+       target bus and clearing adapter session state instead of leaving the
+       previous SASI phase latched for the next transfer. */
+    if (data == 0x00) {
+        if (adp->session_active) {
+            s1410_write_control(adp->target, 0x00);
+        }
+        adp->session_active = false;
+        adp->sel_latched = false;
+        adp->drq = false;
+        return;
+    }
+
+    /* Every hd_begin_session$ asserts SEL even if a prior session left
+       sel_latched set; re-drive the target select pulse so BSY is visible
+       to hd_wait_bsy$ on back-to-back kernel transfers. */
+    if (sel) {
         adp->session_active = true;
         s1410_write_control(adp->target, 0x01);
     }

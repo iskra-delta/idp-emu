@@ -37,7 +37,8 @@ typedef struct thread_s {
     uint8_t  num_events;                /* number of events in wait[] */
     uint8_t  state;                     /* THREAD_STATE_* */
     struct thread_s **joined;           /* joined threads (unused for now) */
-    void    *process;                   /* parent process, or NULL */
+    void    *process;                   /* parent process / opaque thread data */
+    uint8_t  bank;                      /* RAM bank the thread runs in */
 } thread_t;
 
 extern thread_t *thread_current;
@@ -50,7 +51,8 @@ extern thread_t *thread_first_terminated;
  * Create a thread (initially suspended) with its own stack; returns the thread
  * or NULL on failure.
  */
-thread_t *thread_create(void (*entry_point)(void), uint16_t stack_size, void *process);
+thread_t *thread_create(void (*entry_point)(void), uint16_t stack_size,
+                        uint8_t bank, void *process);
 
 /*
  * Move a thread suspended -> running.

@@ -1,13 +1,13 @@
             ;; service.s
             ;;
-            ;; a service is a named table of syscall function pointers. yos-style
+            ;; a service is a named table of syscall function pointers. PartOS
             ;; syscalls are reached by querying a service by name and indexing
-            ;; its table; the kernel exposes its own calls through the "yos"
+            ;; its table; the kernel exposes its own calls through the "partos"
             ;; service. hand-written replacement for yos service.c.
             ;;
             ;; lookups go through the shared list_find primitive with a small
             ;; string-compare match callback, so list traversal lives in one
-            ;; place; register/unregister go through so_create / so_destroy
+            ;; place; register/unregister go through __so_create / __so_destroy
             ;; (which use list_insert / list_remove internally).
             ;;
             ;; layout (service_t):
@@ -25,7 +25,7 @@
             ;;                     out de = freed service or 0
             ;;   _svc_query:       in  hl = name
             ;;                     out de = fntable or 0
-            ;;   _svc_query_rst10: rst 0x10 bridge, hl = name -> de = fntable
+            ;;   __svc_query_rst10: rst 0x10 bridge, hl = name -> de = fntable
             ;; ----------------------------------------------------------------
             ;; 2026-06-16   tstih
             .module service
@@ -33,10 +33,10 @@
             .globl  _svc_register
             .globl  _svc_unregister
             .globl  _svc_query
-            .globl  _svc_query_rst10
+            .globl  __svc_query_rst10
             .globl  __svc_first
-            .globl  _so_create
-            .globl  _so_destroy
+            .globl  __so_create
+            .globl  __so_destroy
             .globl  _list_find
 
             .equ    SVC_NAME,           4
@@ -82,10 +82,10 @@ _svc_register::
             push    de                  ; save fntable (for the end)
             push    hl                  ; save name pointer
             ld      de,#0x0000          ; owner = NONE
-            push    de                  ; stack owner for so_create
+            push    de                  ; stack owner for __so_create
             ld      de,#SVC_SIZE
             ld      hl,#__svc_first
-            call    _so_create          ; de = service or 0; owner left on stack
+            call    __so_create         ; de = service or 0; owner left on stack
             pop     bc                  ; discard owner arg
             pop     hl                  ; hl = name pointer
             ld      a,d
@@ -129,7 +129,7 @@ svr_fail$:
 _svc_unregister::
             ex      de,hl               ; de = service
             ld      hl,#__svc_first
-            jp      _so_destroy
+            jp      __so_destroy
 
             ;; ----------------------------------------------------------------
             ;; <de> <= _svc_query(<hl> name)
@@ -164,11 +164,11 @@ _svc_query::
             ret
 
             ;; ----------------------------------------------------------------
-            ;; _svc_query_rst10()
+            ;; __svc_query_rst10()
             ;; ----------------------------------------------------------------
             ;; rst 0x10 syscall bridge: hl = service name -> de = function table.
             ;; ----------------------------------------------------------------
-_svc_query_rst10::
+__svc_query_rst10::
             jp      _svc_query
 
             .area   _INITIALIZED

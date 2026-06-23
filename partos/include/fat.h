@@ -56,6 +56,7 @@
 #define FAT_ENAMETOOLONG       -11
 #define FAT_ECORRUPT           -12
 #define FAT_EFBIG              -13
+#define FAT_ENOTEMPTY          -14
 
 /*
  * Mounted-volume descriptor filled by the FAT worker.
@@ -106,6 +107,28 @@ typedef struct fat_dirent_s {
 } fat_dirent_t;
 
 /*
+ * Directory enumeration result returned by fat_readdir().
+ *
+ * The first 12 bytes match fat_dirent_t exactly so the worker can reuse the
+ * same entry-fill path. Set `index` to the 0-based entry number before each
+ * call and bump it by one to walk the directory; fat_readdir() returns
+ * FAT_ENOENT once `index` is past the last entry. `name` is the raw 8.3 field
+ * (11 bytes, space padded, no embedded dot, not NUL terminated).
+ *
+ * Layout must match src/os/fat.inc.
+ */
+typedef struct fat_dirinfo_s {
+    uint16_t         first_cluster;     /* same layout as fat_dirent_t */
+    uint32_t         size;              /* same layout as fat_dirent_t */
+    uint16_t         dir_sector;        /* same layout as fat_dirent_t */
+    uint8_t          dir_offset;        /* same layout as fat_dirent_t */
+    uint8_t          attr;              /* FAT_ATTR_* (test FAT_ATTR_DIRECTORY) */
+    volatile int16_t status;            /* async completion status */
+    uint16_t         index;             /* in: 0-based entry to fetch */
+    char             name[11];          /* out: raw 8.3 short name */
+} fat_dirinfo_t;
+
+/*
  * Open-file handle used by block-oriented file I/O.
  *
  * The first fields intentionally mirror fat_dirent_t exactly so the lookup
@@ -129,10 +152,12 @@ typedef struct fat_file_s {
 } fat_file_t;
 
 /*
+ * Internal FAT bootstrap helper.
+ *
  * Prepare the shared FAT worker and its internal events. Safe to call more
  * than once; later calls return FAT_OK once initialization succeeded.
  */
-int16_t fat_init(void);
+int16_t __fat_init(void);
 
 /*
  * Queue one asynchronous mount request by direct device pointer or by device
@@ -150,6 +175,15 @@ int16_t fat_mount(fat_fs_t *fs, const char *dev_name, event_t *event);
 int16_t fat_lookup(fat_fs_t *fs, const char *path, fat_dirent_t *entry, event_t *event);
 
 /*
+ * Enumerate one entry of the (currently fixed-root) directory named by `path`.
+ * Set `info->index` to the 0-based entry number; the entry's metadata and raw
+ * 8.3 name land in `info` and completion is signaled by `event`. Returns
+ * FAT_ENOENT once `index` is past the last entry. This first cut lists the
+ * root directory; pass "/" as the path.
+ */
+int16_t fat_readdir(fat_fs_t *fs, const char *path, fat_dirinfo_t *info, event_t *event);
+
+/*
  * Resolve or create one path straight into an open-file handle, then transfer
  * file data in 256-byte blocks.
  *
@@ -161,5 +195,16 @@ int16_t fat_open(fat_fs_t *fs, const char *path, fat_file_t *file, event_t *even
 int16_t fat_create(fat_fs_t *fs, const char *path, fat_file_t *file, event_t *event);
 int16_t fat_read(fat_file_t *file, void *buf, uint16_t bytes, event_t *event);
 int16_t fat_write(fat_file_t *file, const void *buf, uint16_t bytes, event_t *event);
+
+/*
+ * Mutating directory-tree operations. Each takes a fat_dirent_t result object
+ * purely so the caller can wait on `event` and read `result->status`; mkdir
+ * also fills `result` with the new directory's metadata. unlink removes one
+ * regular file, rmdir removes one empty directory (FAT_ENOTEMPTY otherwise),
+ * mkdir creates one directory seeded with "." and "..".
+ */
+int16_t fat_unlink(fat_fs_t *fs, const char *path, fat_dirent_t *result, event_t *event);
+int16_t fat_mkdir(fat_fs_t *fs, const char *path, fat_dirent_t *result, event_t *event);
+int16_t fat_rmdir(fat_fs_t *fs, const char *path, fat_dirent_t *result, event_t *event);
 
 #endif /* FAT_H */

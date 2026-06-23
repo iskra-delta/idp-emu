@@ -454,6 +454,14 @@ static void _i8272_exec_recalibrate(i8272_t *fdc) {
     This is how the CPU reads the result of RECALIBRATE/SEEK.
 */
 static void _i8272_exec_sense_int(i8272_t *fdc) {
+    /*
+        Reading the SENSE INTERRUPT STATUS result de-asserts INTRQ on the real
+        i8272 (the CPU has acknowledged the seek/recal completion). Clear both
+        int_pending and the INTRQ line here; leaving irq_request asserted would
+        re-fire the driver's completion ISR as soon as interrupts are unmasked
+        after a polled recalibrate.
+    */
+    fdc->irq_request = false;
     if (fdc->int_pending) {
         fdc->result[0] = fdc->st0;
         fdc->result[1] = fdc->drive[fdc->st0 & 0x03].track;

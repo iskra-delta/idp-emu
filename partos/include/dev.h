@@ -99,20 +99,20 @@ extern dev_drv_t *drv_first;
 extern dev_t     *dev_first;
 
 /*
- * Link every built-in driver descriptor into drv_first. Call once at start.
+ * Internal kernel bootstrap helpers for the built-in driver set.
  */
-void drv_register_all(void);
+void __drv_register_all(void);
 
 /*
  * Runs every driver's one-time, driver-level init (controller/chip setup)
  * once at kernel start. Call before the device probe pass.
  */
-void dev_init_all(void);
+void __dev_init_all(void);
 
 /*
  * Enumerate the configured devices into dev_first (NVRAM/model driven).
  */
-void dev_probe_all(void);
+void __dev_probe_all(void);
 
 /*
  * Finds a device by name in the single global device list (built from
@@ -121,6 +121,6 @@ void dev_probe_all(void);
  * matched dev_t itself is returned as well (in de), ready to be passed
  * to the driver's open().
  */
-dev_drv_t *find_dev_drv(const char *name);
+dev_drv_t *__find_dev_drv(const char *name);
 
 #endif /* DEV_H */
