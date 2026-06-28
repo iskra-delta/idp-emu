@@ -25,8 +25,9 @@ Authoritative documentation: **`partos/docs/PARTOS-VOLUME-2-KERNEL.md`**.
 - **scheduler** — `thread.s` + `__thread_robin`, the context switch behind the
   `rst 0x18` "tick" vector. The kernel arms **no clock**: no tick → cooperative,
   an OS timer routed at `rst 0x18` → preemptive.
-- **memory** — `mem.s` owner-tracked heap; `sysobj.s` objects with per-object
-  cleanup; `list.s` intrusive lists; `evt.s` events; `lock.s` spin locks.
+- **memory** — `mem.s` owner-tracked heap; `sysobj.s` tracked objects with
+  per-object cleanup; `list.s` intrusive lists; `evt.s` events; `lock.s` spin
+  locks.
 - **interrupts** — `ir.s` reference-count bracket; `vectors.s` low-page vectors.
 - **banking** — one `__bank_copy(src,dst,cnt,dir)` (parked in the rst38→nmi gap)
   + `init` brings the kernel up in *both* banks (mirror the low page, seed bank

@@ -15,19 +15,23 @@
             .module syscall
 
             .globl  _syscall_init
+            .globl  _svc_init
             .globl  _partos_get_sys_info
             .globl  _syscall_service
             .globl  _syscall_table
             .globl  _partos_clear_screen
             .globl  _partos_set_xy
             .globl  _partos_write_console
+            .globl  _partos_set_text_attr
             .globl  _partos_peek_keyboard
             .globl  _partos_read_keyboard
             .globl  _partos_get_boot_fs
             .globl  _partos_get_command_line
+            .globl  _partos_get_current_dir
             .globl  _partos_run_command
 
             .globl  _svc_register
+            .globl  _svc_register_ownerless
             .globl  _svc_unregister
             .globl  _svc_query
 
@@ -114,6 +118,9 @@
 
             .area   _CODE
 
+            .equ    SVC_NAME,           4
+            .equ    SVC_FNTABLE,       20
+
             ;; ----------------------------------------------------------------
             ;; <de> <= _partos_get_sys_info()
             ;; ----------------------------------------------------------------
@@ -172,17 +179,45 @@ _partos_get_sys_info::
             ;; ----------------------------------------------------------------
 _syscall_init::
             call    _ir_disable
+            call    _svc_init
             ld      de,(_syscall_service)
             ld      a,d
             or      e
             jr      nz,sci_done$
             ld      hl,#syscall_name$
             ld      de,#_syscall_table
-            call    _svc_register
+            call    _svc_register_ownerless
+            ld      a,d
+            or      e
+            jr      z,sci_store$
+            push    de                  ; keep the service pointer for sci_store$
+            ex      de,hl
+            ld      bc,#SVC_FNTABLE
+            add     hl,bc
+            ld      (hl),#<_syscall_table
+            inc     hl
+            ld      (hl),#>_syscall_table
+            pop     de
+            push    de                  ; keep the service pointer for sci_store$
+            ex      de,hl
+            ld      bc,#SVC_NAME
+            add     hl,bc               ; hl = service + name
+            ex      de,hl               ; de = service + name
+            ld      hl,#syscall_name$
+            ld      bc,#7
+            ldir                        ; repair the public service name inline
+            pop     de
+sci_store$:
             ld      (_syscall_service),de
 sci_done$:
             call    _ir_enable
             ret
+
+            ;; keep the public service name in _CODE so immediate `#label`
+            ;; loads resolve to the live absolute address instead of an
+            ;; _INITIALIZED-area offset.
+syscall_name$:
+            .db     'p','a','r','t','o','s',0
 
             .area   _INITIALIZED
 
@@ -255,10 +290,9 @@ _syscall_table::
             .dw     _fat_readdir        ; userland nice name: readdir (DIR/LS)
             .dw     _partos_get_boot_fs
             .dw     _partos_get_command_line
+            .dw     _partos_get_current_dir
             .dw     _fat_unlink
             .dw     _fat_mkdir
             .dw     _fat_rmdir
             .dw     _process_wait
-
-syscall_name$:
-            .db     'p','a','r','t','o','s',0
+            .dw     _partos_set_text_attr

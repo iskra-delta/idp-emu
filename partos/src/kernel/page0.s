@@ -198,29 +198,10 @@ __bank_copy_end::
             __bank_copy_size == __bank_copy_end - __bank_copy
 
             ;; ----------------------------------------------------------------
-            ;; scheduler list heads -- parked in the dead pre-nmi pad
-            ;; ----------------------------------------------------------------
-            ;; the 6 list heads are exactly 12 bytes (6 words) and fill the gap
-            ;; from here to the nmi entry at 0x66. they are .dw 0 (loaded zero,
-            ;; no runtime init), and live here purely to keep _INITIALIZED under
-            ;; the 2 KB mirror line by reusing space we already pay for.
-            ;; NOTE: in the mirrored low page these are PER-BANK copies -- correct
-            ;; for single-bank, but cross-bank scheduling must relocate them to a
-            ;; single shared-RAM copy when banking goes live.
-            ;; ----------------------------------------------------------------
-_thread_current::
-            .dw     0x0000
-_thread_first_suspended::
-            .dw     0x0000
-_thread_first_running::
-            .dw     0x0000
-_thread_first_waiting::
-            .dw     0x0000
-_thread_first_terminated::
-            .dw     0x0000
-__evt_first::
-            .dw     0x0000
-            ;; guard: the 6 words fill 0x5a..0x65 exactly; pad any slack to nmi.
+            ;; the old per-bank scheduler list-head block used to live here.
+            ;; keep the bytes reserved so nmi still lands at 0x66, but the live
+            ;; heads now sit in shared kernel sysvars where both banks see the
+            ;; same scheduler/event state.
             .ds     0x66 - (. - __sys_page0)
 
             ;; ----------------------------------------------------------------

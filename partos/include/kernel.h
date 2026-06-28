@@ -198,7 +198,7 @@ typedef struct kernel_s {
     void      (*exit_thread)(void);
     void      (*wait_events)(event_t **events, uint8_t count);
 
-    /* system objects (heap-backed, owner-tracked) */
+    /* tracked objects (shared-heap, owner-tracked convenience wrappers) */
     void *(*create_object)(void **first, uint16_t size, void *owner);
     void *(*destroy_object)(void **first, void *object);
     void  (*set_cleanup)(void *obj, void (*cleanup)(void *obj));  /* NULL = mem only */

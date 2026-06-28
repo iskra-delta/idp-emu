@@ -33,6 +33,8 @@
             .globl  _ir_enable
             .globl  ir_refcnt
             .globl  _hd_isr
+            .globl  hd_dma_setup$
+            .globl  hd_dma_abort$
             .globl  __sys_nvram_cache
 
             .area   _CODE

@@ -13,7 +13,7 @@
 #include "list.h"
 
 /*
- * System-owned allocator heap supplied by the kernel.
+ * Shared system-object heap supplied by the kernel.
  */
 extern void *_sys_heap;
 
@@ -29,7 +29,10 @@ typedef struct sysobj_s {
 } sysobj_t;
 
 /*
- * Internal system-object helpers layered on top of the kernel heap.
+ * Internal tracked-object helpers layered on top of the heap allocator.
+ *
+ * The public C surface only exposes the shared-heap wrappers. Heap-selectable
+ * variants exist for the assembly runtime but keep a native/internal ABI.
  */
 void *__so_create(void **first, uint16_t size, void *owner);
 

@@ -13,6 +13,8 @@
 # segment offsets and sizes are read back from the linker maps.
 
 AS      := sdasz80
+CC      := sdcc
+CCFLAGS := -mz80 --disable-warning 323
 LD      := sdldz80
 OBJCOPY := objcopy
 ZX0     := ../tools/zx0/bin/zx0
@@ -22,6 +24,8 @@ XLD     ?= /home/tstih/data/retro-vault/xyz/bin/x/bin/xld
 BUILD := build
 BIN   := bin
 ROM   := $(BIN)/partos.rom
+ASM_DEPS := $(shell find src -name '*.inc' | sort)
+C_DEPS   := $(shell find include src/apps -name '*.h' | sort)
 
 # physical rom size (hardware: 2 KB EPROM)
 ROM_SIZE := 2048
@@ -84,6 +88,7 @@ OSYS_RELS     := $(patsubst src/%.s,$(BUILD)/%.rel,$(OSYS_SRC))
 OS_SYS        := $(BIN)/os.sys
 KIMPORTS_S    := $(BUILD)/kernel_imports.s
 KIMPORTS_REL  := $(BUILD)/kernel_imports.rel
+PARTOS_LAYOUT_HEADER := $(BUILD)/partos_layout.hpp
 
 # userland `.COM` images now wrap relocatable `.XL` files produced by `xld`.
 # we still keep the flat shell payload map around because the emulator probes
@@ -99,8 +104,8 @@ SHELL_COM         := $(BIN)/shell.com
 SHELL_STACK       := 2048
 
 # second userland payload: ls.com
-LS_PAYLOAD_SRC := src/apps/ls/ls.s
-LS_PAYLOAD_REL := $(patsubst src/%.s,$(BUILD)/%.rel,$(LS_PAYLOAD_SRC))
+LS_PAYLOAD_SRC := src/apps/ls/ls.c
+LS_PAYLOAD_REL := $(patsubst src/%.c,$(BUILD)/%.rel,$(LS_PAYLOAD_SRC))
 LS_PAYLOAD_IHX := $(BUILD)/ls_payload.ihx
 LS_PAYLOAD_MAP := $(BUILD)/ls_payload.map
 LS_PAYLOAD_BIN := $(BUILD)/ls_payload.bin
@@ -109,8 +114,8 @@ LS_COM         := $(BIN)/ls.com
 LS_STACK       := 1024
 
 # third userland payload: ps.com
-PS_PAYLOAD_SRC := src/apps/ps/ps.s
-PS_PAYLOAD_REL := $(patsubst src/%.s,$(BUILD)/%.rel,$(PS_PAYLOAD_SRC))
+PS_PAYLOAD_SRC := src/apps/ps/ps.c
+PS_PAYLOAD_REL := $(patsubst src/%.c,$(BUILD)/%.rel,$(PS_PAYLOAD_SRC))
 PS_PAYLOAD_IHX := $(BUILD)/ps_payload.ihx
 PS_PAYLOAD_MAP := $(BUILD)/ps_payload.map
 PS_PAYLOAD_BIN := $(BUILD)/ps_payload.bin
@@ -119,91 +124,94 @@ PS_COM         := $(BIN)/ps.com
 PS_STACK       := 1024
 
 # shared support module for the newer syscall-only tools
-APP_SUPPORT_SRC := src/apps/lib/partos.s
-APP_SUPPORT_REL := $(patsubst src/%.s,$(BUILD)/%.rel,$(APP_SUPPORT_SRC))
+APP_SUPPORT_ASM_SRC := src/apps/lib/call_hl.s src/apps/lib/call_iy.s src/apps/lib/crt0.s src/apps/lib/partos.s src/apps/lib/partos_abi.s
+APP_SUPPORT_ASM_RELS := $(patsubst src/%.s,$(BUILD)/%.rel,$(APP_SUPPORT_ASM_SRC))
+APP_SUPPORT_C_SRC := src/apps/lib/runtime.c src/apps/lib/partos_c.c
+APP_SUPPORT_C_REL := $(patsubst src/%.c,$(BUILD)/%.rel,$(APP_SUPPORT_C_SRC))
+APP_SUPPORT_RELS := $(APP_SUPPORT_ASM_RELS) $(APP_SUPPORT_C_REL)
 
 # additional syscall-only tools
-MEM_APP_SRC    := src/apps/mem/mem.s
-MEM_APP_REL    := $(patsubst src/%.s,$(BUILD)/%.rel,$(MEM_APP_SRC))
+MEM_APP_SRC    := src/apps/mem/mem.c
+MEM_APP_REL    := $(patsubst src/%.c,$(BUILD)/%.rel,$(MEM_APP_SRC))
 MEM_APP_XL     := $(BUILD)/mem.xl
 MEM_APP_COM    := $(BIN)/mem.com
 MEM_APP_STACK  := 1024
 
-CAT_APP_SRC    := src/apps/cat/cat.s
-CAT_APP_REL    := $(patsubst src/%.s,$(BUILD)/%.rel,$(CAT_APP_SRC))
+CAT_APP_SRC    := src/apps/cat/cat.c
+CAT_APP_REL    := $(patsubst src/%.c,$(BUILD)/%.rel,$(CAT_APP_SRC))
 CAT_APP_XL     := $(BUILD)/cat.xl
 CAT_APP_COM    := $(BIN)/cat.com
 CAT_APP_STACK  := 1024
 
-MKDIR_APP_SRC   := src/apps/mkdir/mkdir.s
-MKDIR_APP_REL   := $(patsubst src/%.s,$(BUILD)/%.rel,$(MKDIR_APP_SRC))
+CD_APP_SRC     := src/apps/cd/cd.c
+CD_APP_REL     := $(patsubst src/%.c,$(BUILD)/%.rel,$(CD_APP_SRC))
+CD_APP_XL      := $(BUILD)/cd.xl
+CD_APP_COM     := $(BIN)/cd.com
+CD_APP_STACK   := 1024
+
+MKDIR_APP_SRC   := src/apps/mkdir/mkdir.c
+MKDIR_APP_REL   := $(patsubst src/%.c,$(BUILD)/%.rel,$(MKDIR_APP_SRC))
 MKDIR_APP_XL    := $(BUILD)/mkdir.xl
 MKDIR_APP_COM   := $(BIN)/mkdir.com
 MKDIR_APP_STACK := 1024
 
-RMDIR_APP_SRC   := src/apps/rmdir/rmdir.s
-RMDIR_APP_REL   := $(patsubst src/%.s,$(BUILD)/%.rel,$(RMDIR_APP_SRC))
+RMDIR_APP_SRC   := src/apps/rmdir/rmdir.c
+RMDIR_APP_REL   := $(patsubst src/%.c,$(BUILD)/%.rel,$(RMDIR_APP_SRC))
 RMDIR_APP_XL    := $(BUILD)/rmdir.xl
 RMDIR_APP_COM   := $(BIN)/rmdir.com
 RMDIR_APP_STACK := 1024
 
-DEL_APP_SRC    := src/apps/del/del.s
-DEL_APP_REL    := $(patsubst src/%.s,$(BUILD)/%.rel,$(DEL_APP_SRC))
+DEL_APP_SRC    := src/apps/del/del.c
+DEL_APP_REL    := $(patsubst src/%.c,$(BUILD)/%.rel,$(DEL_APP_SRC))
 DEL_APP_XL     := $(BUILD)/del.xl
 DEL_APP_COM    := $(BIN)/del.com
 DEL_APP_STACK  := 1024
 
-CP_APP_SRC    := src/apps/cp/cp.s
-CP_APP_REL    := $(patsubst src/%.s,$(BUILD)/%.rel,$(CP_APP_SRC))
+CP_APP_SRC    := src/apps/cp/cp.c
+CP_APP_REL    := $(patsubst src/%.c,$(BUILD)/%.rel,$(CP_APP_SRC))
 CP_APP_XL     := $(BUILD)/cp.xl
 CP_APP_COM    := $(BIN)/cp.com
 CP_APP_STACK  := 1024
 
-MV_APP_SRC    := src/apps/mv/mv.s
-MV_APP_REL    := $(patsubst src/%.s,$(BUILD)/%.rel,$(MV_APP_SRC))
+MV_APP_SRC    := src/apps/mv/mv.c
+MV_APP_REL    := $(patsubst src/%.c,$(BUILD)/%.rel,$(MV_APP_SRC))
 MV_APP_XL     := $(BUILD)/mv.xl
 MV_APP_COM    := $(BIN)/mv.com
 MV_APP_STACK  := 1024
 
-CLEAR_APP_SRC    := src/apps/clear/clear.s
-CLEAR_APP_REL    := $(patsubst src/%.s,$(BUILD)/%.rel,$(CLEAR_APP_SRC))
+CLEAR_APP_SRC    := src/apps/clear/clear.c
+CLEAR_APP_REL    := $(patsubst src/%.c,$(BUILD)/%.rel,$(CLEAR_APP_SRC))
 CLEAR_APP_XL     := $(BUILD)/clear.xl
 CLEAR_APP_COM    := $(BIN)/clear.com
 CLEAR_APP_STACK  := 512
 
-ECHO_APP_SRC    := src/apps/echo/echo.s
-ECHO_APP_REL    := $(patsubst src/%.s,$(BUILD)/%.rel,$(ECHO_APP_SRC))
+ECHO_APP_SRC    := src/apps/echo/echo.c
+ECHO_APP_REL    := $(patsubst src/%.c,$(BUILD)/%.rel,$(ECHO_APP_SRC))
 ECHO_APP_XL     := $(BUILD)/echo.xl
 ECHO_APP_COM    := $(BIN)/echo.com
 ECHO_APP_STACK  := 512
 
-HELP_APP_SRC    := src/apps/help/help.s
-HELP_APP_REL    := $(patsubst src/%.s,$(BUILD)/%.rel,$(HELP_APP_SRC))
+HELP_APP_SRC    := src/apps/help/help.c
+HELP_APP_REL    := $(patsubst src/%.c,$(BUILD)/%.rel,$(HELP_APP_SRC))
 HELP_APP_XL     := $(BUILD)/help.xl
 HELP_APP_COM    := $(BIN)/help.com
 HELP_APP_STACK  := 512
 
-TOUCH_APP_SRC   := src/apps/touch/touch.s
-TOUCH_APP_REL   := $(patsubst src/%.s,$(BUILD)/%.rel,$(TOUCH_APP_SRC))
+TOUCH_APP_SRC   := src/apps/touch/touch.c
+TOUCH_APP_REL   := $(patsubst src/%.c,$(BUILD)/%.rel,$(TOUCH_APP_SRC))
 TOUCH_APP_XL    := $(BUILD)/touch.xl
 TOUCH_APP_COM   := $(BIN)/touch.com
 TOUCH_APP_STACK := 1024
 
-RM_APP_SRC    := src/apps/rm/rm.s
-RM_APP_REL    := $(patsubst src/%.s,$(BUILD)/%.rel,$(RM_APP_SRC))
-RM_APP_XL     := $(BUILD)/rm.xl
-RM_APP_COM    := $(BIN)/rm.com
-RM_APP_STACK  := 1024
-
-APP_TOOL_COMS := $(MEM_APP_COM) $(CAT_APP_COM) $(MKDIR_APP_COM) $(RMDIR_APP_COM) \
+APP_TOOL_COMS := $(MEM_APP_COM) $(CAT_APP_COM) $(CD_APP_COM) $(MKDIR_APP_COM) $(RMDIR_APP_COM) \
                  $(DEL_APP_COM) $(CP_APP_COM) $(MV_APP_COM) $(CLEAR_APP_COM) \
-                 $(ECHO_APP_COM) $(HELP_APP_COM) $(TOUCH_APP_COM) $(RM_APP_COM)
+                 $(ECHO_APP_COM) $(HELP_APP_COM) $(TOUCH_APP_COM)
 
 DISKS_DIR := ../disks
 
 .PHONY: all sys kernel os shell rom disks clean
 all: sys rom
-sys: $(KERNEL_SYS) $(OS_SYS) $(SHELL_COM) $(LS_COM) $(PS_COM) $(APP_TOOL_COMS)
+sys: $(KERNEL_SYS) $(OS_SYS) $(PARTOS_LAYOUT_HEADER) $(SHELL_COM) $(LS_COM) $(PS_COM) $(APP_TOOL_COMS)
 kernel: $(KERNEL_SYS)
 os: $(OS_SYS)
 shell: $(SHELL_COM) $(LS_COM) $(PS_COM) $(APP_TOOL_COMS)
@@ -212,9 +220,13 @@ disks: sys
 	python3 ../tools/mkdosdisk.py $(DISKS_DIR)
 
 # assemble from within the source directory so .include paths resolve.
-$(BUILD)/%.rel: src/%.s
+$(BUILD)/%.rel: src/%.s $(ASM_DEPS)
 	@mkdir -p $(dir $@)
 	cd $(dir $<) && $(AS) -o $(abspath $@) $(notdir $<)
+
+$(BUILD)/%.rel: src/%.c $(C_DEPS)
+	@mkdir -p $(dir $@)
+	cd $(dir $<) && $(CC) $(CCFLAGS) -c -o $(abspath $@) $(notdir $<)
 
 $(BUILD)/bootstrap.ihx: $(BOOTSTRAP_RELS)
 	$(LD) -n -m -i $(abspath $@) \
@@ -295,6 +307,10 @@ $(OS_SYS): $(OSYS_RELS) $(KIMPORTS_REL)
 	    echo "  WARNING: os.sys overruns the kernel runtime reserve ($(KERNEL_RESERVE_FLOOR)) by $$(( $$TOP - $$FLOOR )) bytes."; \
 	fi
 
+$(PARTOS_LAYOUT_HEADER): $(KERNEL_SYS) $(OS_SYS) ../tools/check_partos_layout.py
+	python3 ../tools/check_partos_layout.py --header $@
+	@echo "$@: generated from kernel/os maps"
+
 # --- shell payload / shell.com ---------------------------------------------
 $(SHELL_PAYLOAD_BIN): $(SHELL_PAYLOAD_REL)
 	$(LD) -n -m -w -i $(abspath $(SHELL_PAYLOAD_IHX)) \
@@ -326,10 +342,10 @@ $(SHELL_COM): $(SHELL_XL) $(SHELL_PAYLOAD_MAP) $(MAKECOM) Makefile
 	@echo "$@: $$(stat -c%s $@) bytes (stack=$(SHELL_STACK), padded COM)"
 
 # --- ls payload / ls.com ---------------------------------------------------
-$(LS_PAYLOAD_BIN): $(LS_PAYLOAD_REL)
+$(LS_PAYLOAD_BIN): $(APP_SUPPORT_RELS) $(LS_PAYLOAD_REL)
 	$(LD) -n -m -w -i $(abspath $(LS_PAYLOAD_IHX)) \
 	      -b _CODE=0x0000 \
-	      $(LS_PAYLOAD_REL)
+	      $(APP_SUPPORT_RELS) $(LS_PAYLOAD_REL)
 	@CODE_SZ=$$(printf '%d' 0x$$(awk '$$1=="_CODE"{print $$3; exit}' $(LS_PAYLOAD_MAP))); \
 	$(OBJCOPY) -I ihex -O binary $(LS_PAYLOAD_IHX) $@; \
 	truncate -s $$CODE_SZ $@; \
@@ -338,13 +354,13 @@ $(LS_PAYLOAD_BIN): $(LS_PAYLOAD_REL)
 $(LS_PAYLOAD_MAP): $(LS_PAYLOAD_BIN)
 	@:
 
-$(LS_XL): $(APP_SUPPORT_REL) $(LS_PAYLOAD_REL) Makefile
+$(LS_XL): $(APP_SUPPORT_RELS) $(LS_PAYLOAD_REL) Makefile
 	@mkdir -p $(BUILD)
 	$(XLD) --mode=sdcc -nostdlib --no-default-runtime \
 	      -Ttext=0x0000 \
-	      -e ls_entry \
+	      -e _app_crt0_entry \
 	      -o $@ \
-	      $(APP_SUPPORT_REL) $(LS_PAYLOAD_REL)
+	      $(APP_SUPPORT_RELS) $(LS_PAYLOAD_REL)
 	@echo "$@: $$(stat -c%s $@) bytes (relocatable XL via xld)"
 
 $(LS_COM): $(LS_XL) $(MAKECOM) Makefile
@@ -356,10 +372,10 @@ $(LS_COM): $(LS_XL) $(MAKECOM) Makefile
 	@echo "$@: $$(stat -c%s $@) bytes (stack=$(LS_STACK), padded COM)"
 
 # --- ps payload / ps.com ---------------------------------------------------
-$(PS_PAYLOAD_BIN): $(PS_PAYLOAD_REL)
+$(PS_PAYLOAD_BIN): $(APP_SUPPORT_RELS) $(PS_PAYLOAD_REL)
 	$(LD) -n -m -w -i $(abspath $(PS_PAYLOAD_IHX)) \
 	      -b _CODE=0x0000 \
-	      $(PS_PAYLOAD_REL)
+	      $(APP_SUPPORT_RELS) $(PS_PAYLOAD_REL)
 	@CODE_SZ=$$(printf '%d' 0x$$(awk '$$1=="_CODE"{print $$3; exit}' $(PS_PAYLOAD_MAP))); \
 	$(OBJCOPY) -I ihex -O binary $(PS_PAYLOAD_IHX) $@; \
 	truncate -s $$CODE_SZ $@; \
@@ -368,13 +384,13 @@ $(PS_PAYLOAD_BIN): $(PS_PAYLOAD_REL)
 $(PS_PAYLOAD_MAP): $(PS_PAYLOAD_BIN)
 	@:
 
-$(PS_XL): $(PS_PAYLOAD_REL) Makefile
+$(PS_XL): $(APP_SUPPORT_RELS) $(PS_PAYLOAD_REL) Makefile
 	@mkdir -p $(BUILD)
 	$(XLD) --mode=sdcc -nostdlib --no-default-runtime \
 	      -Ttext=0x0000 \
-	      -e ps_entry \
+	      -e _app_crt0_entry \
 	      -o $@ \
-	      $(PS_PAYLOAD_REL)
+	      $(APP_SUPPORT_RELS) $(PS_PAYLOAD_REL)
 	@echo "$@: $$(stat -c%s $@) bytes (relocatable XL via xld)"
 
 $(PS_COM): $(PS_XL) $(MAKECOM) Makefile
@@ -386,13 +402,13 @@ $(PS_COM): $(PS_XL) $(MAKECOM) Makefile
 	@echo "$@: $$(stat -c%s $@) bytes (stack=$(PS_STACK), padded COM)"
 
 define APP_TOOL_template
-$($(1)_XL): $(APP_SUPPORT_REL) $$($(1)_REL) Makefile
+$($(1)_XL): $(APP_SUPPORT_RELS) $$($(1)_REL) Makefile
 	@mkdir -p $(BUILD)
 	$(XLD) --mode=sdcc -nostdlib --no-default-runtime \
 	      -Ttext=0x0000 \
-	      -e $(2)_entry \
+	      -e _app_crt0_entry \
 	      -o $$@ \
-	      $(APP_SUPPORT_REL) $$($(1)_REL)
+	      $(APP_SUPPORT_RELS) $$($(1)_REL)
 	@echo "$$@: $$(stat -c%s $$@) bytes (relocatable XL via xld)"
 
 $($(1)_COM): $$($(1)_XL) $(MAKECOM) Makefile
@@ -406,6 +422,7 @@ endef
 
 $(eval $(call APP_TOOL_template,MEM_APP,mem))
 $(eval $(call APP_TOOL_template,CAT_APP,cat))
+$(eval $(call APP_TOOL_template,CD_APP,cd))
 $(eval $(call APP_TOOL_template,MKDIR_APP,mkdir))
 $(eval $(call APP_TOOL_template,RMDIR_APP,rmdir))
 $(eval $(call APP_TOOL_template,DEL_APP,del))
@@ -415,7 +432,6 @@ $(eval $(call APP_TOOL_template,CLEAR_APP,clear))
 $(eval $(call APP_TOOL_template,ECHO_APP,echo))
 $(eval $(call APP_TOOL_template,HELP_APP,help))
 $(eval $(call APP_TOOL_template,TOUCH_APP,touch))
-$(eval $(call APP_TOOL_template,RM_APP,rm))
 
 $(ZX0):
 	$(MAKE) -C ../tools/zx0 -s

@@ -38,6 +38,7 @@
             .module list
 
             .globl  _list_match_eq
+            .globl  __list_find$
             .globl  _list_find
             .globl  _list_iterate
             .globl  _list_append
@@ -92,8 +93,8 @@ lf_loop$:
             push    de
             push    hl
             push    iy
-            push    bc                  ; copy arg to main de
-            pop     de
+            ld      d,b                 ; copy arg to main de without
+            ld      e,c                 ; clobbering bc across the callback
             call    list_call_iy$
             pop     iy
             pop     hl

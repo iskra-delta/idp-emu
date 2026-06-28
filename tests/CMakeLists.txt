@@ -45,6 +45,7 @@ add_executable(test_partner_crt_terminal
 target_include_directories(test_partner_crt_terminal PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(test_partner_crt_terminal PRIVATE GL_GLEXT_PROTOTYPES)
 target_link_libraries(test_partner_crt_terminal PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partner_crt_terminal)
 
 add_test(NAME partner_crt_terminal COMMAND test_partner_crt_terminal)
 
@@ -104,6 +105,7 @@ add_executable(test_partos_boot_banner
 target_include_directories(test_partos_boot_banner PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(test_partos_boot_banner PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
 target_link_libraries(test_partos_boot_banner PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_boot_banner)
 
 add_test(NAME partos_boot_banner COMMAND test_partos_boot_banner)
 
@@ -120,6 +122,7 @@ add_executable(test_partos_bios_menu_crt
 target_include_directories(test_partos_bios_menu_crt PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(test_partos_bios_menu_crt PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
 target_link_libraries(test_partos_bios_menu_crt PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_bios_menu_crt)
 
 add_test(NAME partos_bios_menu_crt COMMAND test_partos_bios_menu_crt)
 
@@ -137,6 +140,7 @@ add_executable(test_partos_bios_menu_gdp
 target_include_directories(test_partos_bios_menu_gdp PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(test_partos_bios_menu_gdp PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
 target_link_libraries(test_partos_bios_menu_gdp PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_bios_menu_gdp)
 
 add_test(NAME partos_bios_menu_gdp COMMAND test_partos_bios_menu_gdp)
 
@@ -148,6 +152,7 @@ add_executable(test_rtc_nvram_shadow
 
 target_include_directories(test_rtc_nvram_shadow PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_rtc_nvram_shadow PRIVATE chipsex)
+idp_require_partos_layout(test_rtc_nvram_shadow)
 
 add_test(NAME rtc_nvram_shadow COMMAND test_rtc_nvram_shadow)
 
@@ -158,3 +163,7 @@ add_test(NAME partos_kernel_boot COMMAND idp-kernel-probe)
 
 # ROM -> HDD kernel load -> scheduler -> FAT shell read (no kernel overlay).
 add_test(NAME partos_full_boot COMMAND idp-full-boot-probe)
+
+set_tests_properties(partos_kernel_boot partos_full_boot PROPERTIES
+    WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+)

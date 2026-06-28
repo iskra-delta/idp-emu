@@ -128,6 +128,23 @@ static bool build_all(const std::string &root)
     return true;
 }
 
+static std::string read_cstr_bounded(const partner_crt &emu, uint16_t addr,
+                                     size_t cap = 32)
+{
+    std::string out;
+
+    if (addr == 0)
+        return out;
+
+    const auto bytes = emu.read_debug_memory(addr, cap);
+    for (uint8_t b : bytes) {
+        if (b == 0)
+            break;
+        out.push_back((char)b);
+    }
+    return out;
+}
+
 } // namespace
 
 int main(int argc, char **argv)
@@ -174,11 +191,11 @@ int main(int argc, char **argv)
     const uint16_t boot_try_fd0 = O.at("__boot_try_fd0");
     const uint16_t boot_cleanup = O.at("__boot_cleanup");
     const uint16_t boot_exit = O.at("__boot_exit");
+    const uint16_t boot_event_addr = O.at("boot_event$");
     const uint16_t boot_fs_addr = O.at("boot_fs$");
+    const uint16_t boot_file_addr = O.at("boot_file$");
     const uint16_t fat_queue_event_addr = O.at("fat_queue_event$");
     const uint16_t fat_io_event_addr = O.at("fat_io_event$");
-    const uint16_t boot_event_addr = (uint16_t)(boot_fs_addr - 0x22);
-    const uint16_t boot_file_addr = (uint16_t)(boot_fs_addr + 30);
     const uint16_t fat_worker_thread_addr = (uint16_t)(fat_queue_event_addr + 4);
     const uint16_t fat_init_state_addr = (uint16_t)(fat_queue_event_addr + 6);
     const uint16_t fat_work_fs_addr = O.at("fat_work_fs$");
@@ -190,6 +207,7 @@ int main(int argc, char **argv)
     const uint16_t hd_io_dev_addr = (uint16_t)(hd_dev0_addr + 0x18);
     const uint16_t hd_io_evt_addr = (uint16_t)(hd_dev0_addr + 0x1A);
     const uint16_t hd_io_misc_addr = (uint16_t)(hd_dev0_addr + 0x1C);
+    const uint16_t syscall_service_addr = O.at("_syscall_service");
     const uint16_t thread_current_addr = K.at("_thread_current");
     const uint16_t thread_running_addr = K.at("_thread_first_running");
     const uint16_t thread_waiting_addr = K.at("_thread_first_waiting");
@@ -212,6 +230,9 @@ int main(int argc, char **argv)
     emu.load_rom(rom_path);
     emu.load_hdd(hdd_path);
     emu.reset();
+    auto rd16_live = [](const std::vector<uint8_t> &v) -> uint16_t {
+        return v.size() >= 2 ? (uint16_t)(v[0] | (uint16_t(v[1]) << 8)) : 0;
+    };
 
     uint64_t guard = 0;
     while (emu.is_rom_enabled() || emu.get_current_pc() != PC_STAGE1_READY) {
@@ -292,6 +313,21 @@ int main(int argc, char **argv)
     uint16_t rom_model_overwrite_hl = 0;
     uint16_t rom_model_overwrite_de = 0;
     uint16_t rom_model_overwrite_sp = 0;
+    bool boot_event_overwrite = false;
+    uint16_t boot_event_overwrite_pc = 0;
+    uint16_t boot_event_overwrite_addr = 0;
+    uint8_t boot_event_overwrite_val = 0;
+    uint16_t boot_event_overwrite_hl = 0;
+    uint16_t boot_event_overwrite_de = 0;
+    uint16_t boot_event_overwrite_sp = 0;
+    bool boot_event_trap_armed = false;
+    bool exec_copy_entry_seen = false;
+    uint16_t exec_copy_entry_pc = 0;
+    uint16_t exec_copy_entry_sp = 0;
+    uint16_t exec_copy_entry_hl = 0;
+    uint16_t exec_copy_entry_de = 0;
+    uint16_t exec_copy_entry_bc = 0;
+    std::vector<uint8_t> exec_copy_entry_stack;
     std::vector<page0_reentry> page0_reentries;
     std::deque<uint16_t> recent_pcs;
     std::deque<uint16_t> recent_shell_pcs;
@@ -300,6 +336,10 @@ int main(int argc, char **argv)
     std::vector<uint8_t> first_reentry_stack;
     bool captured_first_reentry = false;
     uint16_t shell_entry_abs = 0;
+    uint64_t tick_syscall_service_live = 0;
+    std::vector<uint8_t> syscall_service_raw_early;
+    uint64_t tick_svc_reg_service_live = 0;
+    std::vector<uint8_t> svc_reg_service_raw_early;
 
     emu.dbg_wtrap_addr = ADDR_MODEL;
     emu.dbg_wtrap_hi = ADDR_MODEL;
@@ -317,8 +357,45 @@ int main(int argc, char **argv)
             rom_model_overwrite_de = emu.dbg_wtrap_de;
             rom_model_overwrite_sp = emu.dbg_wtrap_sp;
             emu.dbg_wtrap_hit = false;
+        } else if (boot_event_trap_armed && !boot_event_overwrite && emu.dbg_wtrap_hit) {
+            boot_event_overwrite = true;
+            boot_event_overwrite_pc = emu.dbg_wtrap_pc;
+            boot_event_overwrite_addr = emu.dbg_wtrap_addr;
+            boot_event_overwrite_val = emu.dbg_wtrap_val;
+            boot_event_overwrite_hl = emu.dbg_wtrap_hl;
+            boot_event_overwrite_de = emu.dbg_wtrap_de;
+            boot_event_overwrite_sp = emu.dbg_wtrap_sp;
+            emu.dbg_wtrap_hit = false;
         }
         const uint16_t pc = emu.get_current_pc();
+        if (tick_syscall_service_live == 0) {
+            const uint16_t live_service =
+                rd16_live(emu.read_debug_memory(syscall_service_addr, 2));
+            if (live_service != 0) {
+                tick_syscall_service_live = emu.get_tick_count();
+                syscall_service_raw_early = emu.read_debug_memory(live_service, 22);
+            }
+        }
+        if (tick_svc_reg_service_live == 0) {
+            const uint16_t live_service =
+                rd16_live(emu.read_debug_memory(O.at("svc_reg_service$"), 2));
+            if (live_service != 0) {
+                tick_svc_reg_service_live = emu.get_tick_count();
+                svc_reg_service_raw_early = emu.read_debug_memory(live_service, 22);
+            }
+        }
+        if (hit_fat_mount &&
+            !exec_copy_entry_seen &&
+            pc >= 0xFC20 && pc < 0xFC40) {
+            const auto cpu = emu.capture_debug_cpu_state();
+            exec_copy_entry_seen = true;
+            exec_copy_entry_pc = pc;
+            exec_copy_entry_sp = cpu.sp;
+            exec_copy_entry_hl = cpu.hl;
+            exec_copy_entry_de = cpu.de;
+            exec_copy_entry_bc = cpu.bc;
+            exec_copy_entry_stack = emu.read_debug_memory(cpu.sp, 8);
+        }
         if (recent_pcs.empty() || recent_pcs.back() != pc) {
             if (recent_pcs.size() == 16)
                 recent_pcs.pop_front();
@@ -488,6 +565,10 @@ int main(int argc, char **argv)
         if (!hit_boot_after_evt_create && pc == boot_after_evt_create) {
             hit_boot_after_evt_create = true;
             tick_boot_after_evt_create = emu.get_tick_count();
+            emu.dbg_wtrap_addr = boot_event_addr;
+            emu.dbg_wtrap_hi = (uint16_t)(boot_event_addr + 1);
+            emu.dbg_wtrap_hit = false;
+            boot_event_trap_armed = true;
         }
         if (!hit_boot_try_sda && pc == boot_try_sda) {
             hit_boot_try_sda = true;
@@ -611,9 +692,11 @@ int main(int argc, char **argv)
         const auto im2_tick = emu.read_debug_memory(KERNEL_IM2_BASE + 0x8C, 2);
         const auto im2_vbl = emu.read_debug_memory(KERNEL_IM2_BASE + 0x8E, 2);
         const auto im2_hd = emu.read_debug_memory(KERNEL_IM2_BASE + 0x90, 2);
+        const auto rst10_slot = emu.read_debug_memory(0x0010, 8);
         const auto ir_refcnt = emu.read_debug_memory(K.at("ir_refcnt"), 1);
         const auto ir_armed = emu.read_debug_memory(K.at("ir_armed"), 1);
         const auto drv_first = emu.read_debug_memory(O.at("_drv_first"), 2);
+        const auto svc_first = emu.read_debug_memory(O.at("__svc_first"), 2);
         const auto cur_thread = emu.read_debug_memory(K.at("_thread_current"), 2);
         const auto run_head = emu.read_debug_memory(K.at("_thread_first_running"), 2);
         const auto wait_head = emu.read_debug_memory(K.at("_thread_first_waiting"), 2);
@@ -648,8 +731,8 @@ int main(int argc, char **argv)
         const auto sp_bytes = emu.read_debug_memory(cpu.sp, 8);
         const auto &ctc = emu.get_ctc();
         const auto &dma = emu.get_dma();
-        std::printf("FAIL: ROM split boot stopped at pc=%04X sp=%04X iff1=%d iff2=%d halted=%d tick=%llu\n",
-                    emu.get_current_pc(), cpu.sp,
+        std::printf("FAIL: ROM split boot stopped at pc=%04X sp=%04X bank=%u iff1=%d iff2=%d halted=%d tick=%llu\n",
+                    emu.get_current_pc(), cpu.sp, (unsigned)emu.get_ram_bank(),
                     cpu.iff1 ? 1 : 0, cpu.iff2 ? 1 : 0, cpu.halted ? 1 : 0,
                     (unsigned long long)emu.get_tick_count());
         std::printf("debug: page0 entries seen = %u\n", page0_hits);
@@ -750,14 +833,97 @@ int main(int argc, char **argv)
         std::printf("debug: _drv_first=%04X current=%04X running=%04X waiting=%04X terminated=%04X\n",
                     rd16(drv_first), cur_thread_addr, rd16(run_head),
                     rd16(wait_head), rd16(term_head));
+        std::printf("debug: rst10 slot @0010 =");
+        for (uint8_t v : rst10_slot)
+            std::printf(" %02X", v);
+        std::printf("\n");
+        std::printf("debug: service list head @%04X = %04X\n",
+                    O.at("__svc_first"), rd16(svc_first));
+        if (!syscall_service_raw_early.empty()) {
+            const uint16_t live_service =
+                rd16(emu.read_debug_memory(syscall_service_addr, 2));
+            std::printf("debug: syscall service first live tick=%llu ptr=%04X raw=",
+                        (unsigned long long)tick_syscall_service_live, live_service);
+            for (uint8_t v : syscall_service_raw_early)
+                std::printf(" %02X", v);
+            std::printf("\n");
+        }
+        if (!svc_reg_service_raw_early.empty()) {
+            const uint16_t live_service =
+                rd16(emu.read_debug_memory(O.at("svc_reg_service$"), 2));
+            std::printf("debug: svc_reg service first live tick=%llu ptr=%04X raw=",
+                        (unsigned long long)tick_svc_reg_service_live, live_service);
+            for (uint8_t v : svc_reg_service_raw_early)
+                std::printf(" %02X", v);
+            std::printf("\n");
+        }
+        {
+            const uint16_t svc_reg_name_ptr =
+                rd16(emu.read_debug_memory(O.at("svc_reg_name$"), 2));
+            const uint16_t svc_reg_fntable =
+                rd16(emu.read_debug_memory(O.at("svc_reg_fntable$"), 2));
+            const uint16_t svc_reg_owner =
+                rd16(emu.read_debug_memory(O.at("svc_reg_owner$"), 2));
+            const uint16_t svc_reg_service =
+                rd16(emu.read_debug_memory(O.at("svc_reg_service$"), 2));
+            const auto svc_reg_name_bytes =
+                svc_reg_name_ptr ? emu.read_debug_memory(svc_reg_name_ptr, 8)
+                                 : std::vector<uint8_t>{};
+
+            std::printf("debug: svc_reg name=%04X fntable=%04X owner=%04X service=%04X bytes=",
+                        svc_reg_name_ptr, svc_reg_fntable, svc_reg_owner, svc_reg_service);
+            for (uint8_t v : svc_reg_name_bytes)
+                std::printf(" %02X", v);
+            std::printf("\n");
+        }
+        {
+            uint16_t svc = rd16(svc_first);
+            for (int i = 0; i < 4 && svc != 0; ++i) {
+                const auto svc_raw = emu.read_debug_memory(svc, 22);
+                if (svc_raw.size() < 22)
+                    break;
+                const uint16_t next =
+                    uint16_t(svc_raw[0] | (uint16_t(svc_raw[1]) << 8));
+                const uint16_t owner =
+                    uint16_t(svc_raw[2] | (uint16_t(svc_raw[3]) << 8));
+                const uint16_t fntable =
+                    uint16_t(svc_raw[20] | (uint16_t(svc_raw[21]) << 8));
+                std::string name;
+                for (size_t n = 4; n < 20 && svc_raw[n] != 0; ++n)
+                    name.push_back((char)svc_raw[n]);
+                std::printf("debug: service[%d] @%04X next=%04X owner=%04X fntable=%04X name='%s'\n",
+                            i, svc, next, owner, fntable, name.c_str());
+                std::printf("debug: service[%d] raw =", i);
+                for (uint8_t v : svc_raw)
+                    std::printf(" %02X", v);
+                std::printf("\n");
+                svc = next;
+            }
+        }
         if (shell_entry_abs != 0) {
             const uint16_t shell_vars_addr = (uint16_t)(shell_entry_abs + 0x108);
             const auto shell_vars = emu.read_debug_memory(shell_vars_addr, 16);
+            const uint16_t shell_name_ptr_addr =
+                (uint16_t)(shell_entry_abs + S.at("__reloc_init_name$"));
+            const uint16_t shell_partos_ptr_addr =
+                (uint16_t)(shell_entry_abs + S.at("__reloc_init_store_partos$"));
+            const uint16_t shell_name_addr =
+                rd16(emu.read_debug_memory(shell_name_ptr_addr, 2));
+            const uint16_t shell_partos_cell =
+                rd16(emu.read_debug_memory(shell_partos_ptr_addr, 2));
+            const uint16_t shell_partos_value =
+                rd16(emu.read_debug_memory(shell_partos_cell, 2));
             std::printf("debug: shell entry=%04X vars@%04X =",
                         shell_entry_abs, shell_vars_addr);
             for (uint8_t v : shell_vars)
                 std::printf(" %02X", v);
             std::printf("\n");
+            std::printf("debug: shell init name ptr @%04X -> %04X '%s'\n",
+                        shell_name_ptr_addr, shell_name_addr,
+                        read_cstr_bounded(emu, shell_name_addr).c_str());
+            std::printf("debug: shell partos cell ptr @%04X -> %04X value=%04X\n",
+                        shell_partos_ptr_addr, shell_partos_cell,
+                        shell_partos_value);
         }
         if (cur_thread_bytes.size() >= 25) {
             const uint16_t t_next = uint16_t(cur_thread_bytes[0] | (uint16_t(cur_thread_bytes[1]) << 8));
@@ -898,6 +1064,22 @@ int main(int argc, char **argv)
                         rom_model_overwrite_sp);
         } else {
             std::printf("debug: no rom model overwrite trapped before kernel entry\n");
+        }
+        if (boot_event_overwrite) {
+            std::printf("debug: boot_event overwrite pc=%04X addr=%04X value=%02X hl=%04X de=%04X sp=%04X\n",
+                        boot_event_overwrite_pc, boot_event_overwrite_addr,
+                        boot_event_overwrite_val, boot_event_overwrite_hl,
+                        boot_event_overwrite_de, boot_event_overwrite_sp);
+        } else if (boot_event_trap_armed) {
+            std::printf("debug: no boot_event overwrite trapped after bootstrap event creation\n");
+        }
+        if (exec_copy_entry_seen) {
+            std::printf("debug: exec copy entry pc=%04X sp=%04X hl=%04X de=%04X bc=%04X stack=",
+                        exec_copy_entry_pc, exec_copy_entry_sp,
+                        exec_copy_entry_hl, exec_copy_entry_de, exec_copy_entry_bc);
+            for (uint8_t v : exec_copy_entry_stack)
+                std::printf(" %02X", v);
+            std::printf("\n");
         }
         if (!page0_reentries.empty()) {
             std::printf("debug: page0 re-entry trail\n");

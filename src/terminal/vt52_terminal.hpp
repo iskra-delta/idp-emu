@@ -27,6 +27,7 @@ private:
         skip_1_param
     };
 
+    static constexpr uint8_t attr_underline = 0x02;
     static constexpr uint8_t attr_highlight = 0x10;
     static constexpr uint8_t attr_inverse = 0x20;
 

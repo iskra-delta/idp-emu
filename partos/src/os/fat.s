@@ -22,13 +22,15 @@
             ;;   - fill one fat_fs_t with enough metadata for later file work
             ;;
             ;; important design notes:
-            ;;   - requests are allocated from the kernel heap and start with a
-            ;;     next/owner pair so future process teardown can unlink every
-            ;;     pending FAT request belonging to a dead owner.
-            ;;   - the queue nodes themselves are system-owned heap blocks.
-            ;;     req->owner tracks the logical caller owner, while block
-            ;;     lifetime is controlled explicitly by the FAT worker/reaper
-            ;;     path so an in-flight request never disappears under it.
+            ;;   - requests start with a next/owner pair so future process
+            ;;     teardown can unlink every pending FAT request belonging to a
+            ;;     dead owner.
+            ;;   - the queue nodes themselves live in the shared user heap
+            ;;     under owner NONE. req->owner tracks the logical caller
+            ;;     owner, while block lifetime is controlled explicitly by the
+            ;;     FAT worker/reaper path so an in-flight request never
+            ;;     disappears under it and the tiny sys-heap is not exhausted
+            ;;     by repeated directory scans.
             ;;   - the worker is the ONLY code path that touches the shared FAT
             ;;     sector buffer, so a single 256-byte staging block is enough.
             ;;   - all worker scratch lives in _SYSVARS, which keeps stack
@@ -97,6 +99,11 @@
 
             .globl  fat_queue_event$
             .globl  fat_io_event$
+            .globl  fi_busy$
+            .globl  fi_nomem$
+            .globl  fi_fail_queue_evt$
+            .globl  fi_fail_both_evts$
+            .globl  fi_after_guard_alloc$
             .globl  fat_worker_loop$
             .globl  fat_work_fs$
             .globl  fat_work_dev$
@@ -376,16 +383,16 @@ fat_decode_req_evfdev$:
             ;; ----------------------------------------------------------------
             ;; fat_alloc_req$() -> <ix> req
             ;; ----------------------------------------------------------------
-            ;; allocates one system-owned FAT request block from the kernel
+            ;; allocates one ownerless FAT request block from the shared user
             ;; heap. returns ix=0 on failure, matching the old open-coded path.
             ;; Z is also set on failure so callers can branch immediately after
             ;; restoring any saved registers without re-testing ix manually.
             ;; ----------------------------------------------------------------
 fat_alloc_req$:
             ld      de,#0x0000
-            push    de                  ; system-owned request block
+            push    de                  ; owner NONE: freed explicitly later
             ld      de,#FATREQ_SIZE
-            ld      hl,#__sys_heap
+            ld      hl,#__usr_heap
             call    _mem_allocate
             pop     bc                  ; discard NONE owner
             push    de
@@ -1060,7 +1067,7 @@ fpo_unlink_tail$:
             ld      (fat_req_tail$),hl
 
 fpo_free$:
-            ld      hl,#__sys_heap
+            ld      hl,#__usr_heap
             ld      de,(fat_purge_req$)
             call    _mem_free
             ld      hl,(fat_purge_next$)
@@ -1165,7 +1172,7 @@ fw_rmdir$:
 fw_after$:
             pop     de
 fw_free$:
-            ld      hl,#__sys_heap
+            ld      hl,#__usr_heap
             call    _mem_free
             jr      fw_loop$
 
@@ -1212,17 +1219,7 @@ _fat_init::
             or      e
             jr      z,fi_fail_queue_evt$
 
-            ;; sacrificial user-heap block between bootstrap and worker stacks.
-            ld      hl,#__usr_heap
-            ld      de,#FAT_USER_STACK_GUARD
-            ld      bc,#0x0000
-            push    bc
-            call    _mem_allocate
-            pop     bc
-            ld      a,d
-            or      e
-            jr      z,fi_nomem$
-
+fi_after_guard_alloc$:
             ld      hl,#fat_worker$
             ld      de,#FAT_WORKER_STACK + 2048
             ld      bc,#0x0000

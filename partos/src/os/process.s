@@ -29,6 +29,9 @@
             .globl  _process_load_image
             .globl  _process_load_com
             .globl  _process_wait
+            .globl  _process_wait_target_debug
+            .globl  _process_wait_hl_debug
+            .globl  _process_wait_de_debug
             .globl  __process_reap
             .globl  _process_exit
             .globl  __process_relocate
@@ -47,6 +50,7 @@
             .globl  _thread_first_waiting
             .globl  _thread_first_terminated
             .globl  __thread_cleanup_terminated
+            .globl  __thread_robin
 
             .globl  __so_create
             .globl  __so_destroy
@@ -172,8 +176,9 @@ process_start$:
             xor     a
             ld      (hl),a
 
-            ;; zero p->pname[] and p->cmdline up front so NULL / short names are
-            ;; cheap and the struct stays deterministic for debugging.
+            ;; zero p->pname[] plus the shell-owned launch metadata pointers up
+            ;; front so NULL / short names are cheap and the struct stays
+            ;; deterministic for debugging.
             inc     hl                  ; hl = p->pname
             push    hl
             ld      b,#MAX_PNAME_LEN
@@ -184,6 +189,10 @@ psz_name$:
             ld      (hl),a              ; p->cmdline lo = 0
             inc     hl
             ld      (hl),a              ; p->cmdline hi = 0
+            inc     hl
+            ld      (hl),a              ; p->environment lo = 0
+            inc     hl
+            ld      (hl),a              ; p->environment hi = 0
             pop     hl                  ; hl = p->pname
 
             ;; bounded name copy (max 7 chars + trailing NUL)
@@ -932,21 +941,36 @@ plc_done$:
             ;; reaped out of the global process list.
             ;; ----------------------------------------------------------------
 _process_wait::
+            ld      (_process_wait_hl_debug),hl
+            ld      (_process_wait_de_debug),de
+            ld      (pwait_target$),de  ; keep the DE candidate while we vet HL
+            call    _ir_disable
+            ld      d,h
+            ld      e,l
+            call    process_is_live$
+            or      a
+            jr      nz,pwait_have_target$
+            ld      de,(pwait_target$)
+            call    process_is_live$
+            or      a
+            jr      z,pwait_keep_hl$
+            ex      de,hl              ; prefer a live DE target when HL is stale
+pwait_keep_hl$:
+pwait_have_target$:
+            call    _ir_enable
+            ld      (pwait_target$),hl
             ld      a,h
             or      l
             jr      z,pwait_done$
-            ld      (pwait_target$),hl
 pwait_loop$:
             call    _ir_disable
+            call    __thread_cleanup_terminated
             ld      de,(pwait_target$)
             call    process_is_live$
             or      a
             jr      z,pwait_gone$
             call    _ir_enable
-            rst     0x18
-            call    _ir_disable
-            call    __thread_cleanup_terminated
-            call    _ir_enable
+            call    __thread_robin
             jr      pwait_loop$
 pwait_gone$:
             call    _ir_enable
@@ -1074,5 +1098,10 @@ plc_inner$:
             .ds     2
 plc_inner_size$:
             .ds     2
+_process_wait_target_debug::
 pwait_target$:
+            .ds     2
+_process_wait_hl_debug::
+            .ds     2
+_process_wait_de_debug::
             .ds     2

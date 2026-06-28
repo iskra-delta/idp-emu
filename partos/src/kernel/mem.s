@@ -31,6 +31,7 @@
             .globl  _mem_allocate
             .globl  _mem_free
             .globl  __mem_free_owner
+            .globl  __mem_allocate$
             .globl  _ir_disable
             .globl  _ir_enable
 

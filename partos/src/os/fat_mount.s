@@ -309,8 +309,11 @@ ffb_cls_done$:
             ld      de,(fat_tmp_clusters$)
             call    fat_store_de$
 
-            ;; alloc_hint starts at cluster 2 for the future allocator.
-            ld      de,#FAT_CLUSTER_FIRST
+            ;; seed alloc_hint deeper into the data area so the first create on
+            ;; a packed system disk does not linearly reread every early file's
+            ;; FAT entry before it reaches free space. invalid hints still fall
+            ;; back to cluster 2 in fat_find_free_cluster$.
+            ld      de,#0x0080
             call    fat_store_de$
             ld      a,(fat_spc_raw$)
             ld      (hl),a
@@ -570,14 +573,20 @@ fat_mount_common$:
             push    de
             push    hl
             call    _fat_init
-            ld      a,d                 ; test _fat_init's result NOW: the pops
-            or      e                   ; below restore de to the dev pointer,
-            pop     hl                  ; and pop does not affect flags, so the
-            pop     de                  ; z result survives to the jr below.
+            ld      a,d
+            or      e
+            push    de                  ; preserve _fat_init rc across pops
+            pop     bc                  ; bc = _fat_init rc
+            pop     hl
+            pop     de
+            jr      z,fmc_inited_restore_evt$
+            push    bc
+            pop     de                  ; restore the real _fat_init rc in de
             pop     bc
-            jr      z,fmc_inited$
             jp      fat_complete_fs$
 
+fmc_inited_restore_evt$:
+            pop     bc
 fmc_inited$:
             push    de
             call    fat_prepare_fs_busy$

@@ -29,7 +29,7 @@ constexpr uint16_t KERNEL_ENTRY      = 0x0000;
 constexpr uint16_t ADDR_MODEL        = 0xDE0E;
 constexpr uint16_t ADDR_NVRAM_CACHE  = 0xDE0F;
 constexpr uint64_t BOOT_TICK_LIMIT   = 50'000'000ULL;
-constexpr uint64_t SHELL_TICK_LIMIT  = 40'000'000ULL;
+constexpr uint64_t SHELL_TICK_LIMIT  = 120'000'000ULL;
 constexpr uint64_t SHELL_SETTLE_TICKS = 2'000'000ULL;
 constexpr size_t   RECENT_PC_LIMIT   = 256;
 constexpr uint16_t DEV_DATA_OFF      = 9;
@@ -70,6 +70,16 @@ struct symbol_map {
         }
         return it->second[idx];
     }
+
+    uint16_t get(const std::string &name,
+                 uint16_t fallback,
+                 size_t idx = 0) const
+    {
+        auto it = syms.find(name);
+        if (it == syms.end() || idx >= it->second.size())
+            return fallback;
+        return it->second[idx];
+    }
 };
 
 static uint16_t rd16(const std::vector<uint8_t> &v, size_t off = 0);
@@ -97,6 +107,16 @@ static uint16_t read_area_addr(const std::string &path, const std::string &area)
             return (uint16_t)std::stoul(m[1].str(), nullptr, 16);
     }
     throw std::runtime_error("area " + area + " not in " + path);
+}
+
+static uint64_t env_u64_or(const char *name, uint64_t fallback)
+{
+    const char *s = std::getenv(name);
+
+    if (s == nullptr || *s == '\0')
+        return fallback;
+    const unsigned long long parsed = std::strtoull(s, nullptr, 10);
+    return parsed == 0ULL ? fallback : (uint64_t)parsed;
 }
 
 static uint16_t find_owned_payload(const partner_crt &emu,
@@ -130,6 +150,41 @@ static std::string ascii_preview(const std::vector<uint8_t> &bytes)
         if (b == 0)
             break;
         out.push_back((b >= 32 && b < 127) ? char(b) : '.');
+    }
+    return out;
+}
+
+static std::string hex_preview(const std::vector<uint8_t> &bytes)
+{
+    static constexpr char kHex[] = "0123456789ABCDEF";
+    std::string out;
+    out.reserve(bytes.size() * 3);
+    for (size_t i = 0; i < bytes.size(); ++i) {
+        if (i != 0)
+            out.push_back(' ');
+        out.push_back(kHex[(bytes[i] >> 4) & 0x0F]);
+        out.push_back(kHex[bytes[i] & 0x0F]);
+    }
+    return out;
+}
+
+static std::string preview_name83(const std::vector<uint8_t> &bytes)
+{
+    std::string out;
+    out.reserve(bytes.size());
+    for (uint8_t b : bytes) {
+        out.push_back((b >= 32 && b <= 126) ? (char)b : '.');
+    }
+    return out;
+}
+
+static std::string cstr_preview(const std::vector<uint8_t> &bytes)
+{
+    std::string out;
+    for (uint8_t b : bytes) {
+        if (b == 0)
+            break;
+        out.push_back((b >= 32 && b <= 126) ? (char)b : '.');
     }
     return out;
 }
@@ -171,13 +226,13 @@ static void dump_shell_state(const char *label,
                              uint16_t usr_heap,
                              uint16_t owner)
 {
-    constexpr uint16_t SHELL_OFF_RUN_COMMAND = 0x008C;
-    constexpr uint16_t SHELL_OFF_CALL_OFFSET = 0x006B;
-    constexpr uint16_t SHELL_OFF_PARTOS = 0x00FD;
-    constexpr uint16_t SHELL_OFF_TMP_PTR = 0x00FF;
-    constexpr uint16_t SHELL_OFF_CMD_LEN = 0x0101;
-    constexpr uint16_t SHELL_OFF_CHAR = 0x0102;
-    constexpr uint16_t SHELL_OFF_CMD_BUF = 0x0103;
+    constexpr uint16_t SHELL_OFF_RUN_COMMAND = 0x01AC;
+    constexpr uint16_t SHELL_OFF_CALL_OFFSET = 0x00C3;
+    constexpr uint16_t SHELL_OFF_PARTOS = 0x026E;
+    constexpr uint16_t SHELL_OFF_TMP_PTR = 0x0272;
+    constexpr uint16_t SHELL_OFF_CMD_LEN = 0x0274;
+    constexpr uint16_t SHELL_OFF_CHAR = 0x0275;
+    constexpr uint16_t SHELL_OFF_CMD_BUF = 0x0276;
 
     const shell_layout lay = read_shell_layout(emu, usr_heap, owner);
     if (lay.com == 0) {
@@ -238,6 +293,43 @@ static void dump_shell_state(const char *label,
         cpu.de,
         cpu.bc,
         cpu.sp);
+}
+
+static void dump_boot_loader_state(const char *label,
+                                   const partner_crt &emu,
+                                   const symbol_map &O)
+{
+    const uint16_t event = O.get("boot_event$", 0);
+    const uint16_t loader_busy = O.get("boot_loader_busy$", 0);
+    if (event == 0 || loader_busy == 0) {
+        std::printf("%s boot-loader: symbols unavailable\n", label);
+        return;
+    }
+    const uint16_t cmdpath = (uint16_t)(event + 10);
+    const uint16_t cmdname = (uint16_t)(event + 26);
+    const uint16_t cmdlen = (uint16_t)(event + 39);
+    const uint16_t dbg_rc = (uint16_t)(event + 40);
+    const uint16_t dbg_stage = (uint16_t)(event + 42);
+    const uint16_t cmdline = (uint16_t)(event + 51);
+    const auto line = emu.read_debug_memory(cmdline, 32);
+    const auto name = emu.read_debug_memory(cmdname, 16);
+    const auto path = emu.read_debug_memory(cmdpath, 16);
+    const auto len = emu.read_debug_memory(cmdlen, 1);
+    const auto evt = emu.read_debug_memory(event, 2);
+    const auto busy = emu.read_debug_memory(loader_busy, 1);
+    const auto rc = emu.read_debug_memory(dbg_rc, 2);
+    const auto stage = emu.read_debug_memory(dbg_stage, 1);
+    std::printf(
+        "%s boot-loader: len=%u busy=%u evt=%04X rc=%04X stage=%02X cmdline='%s' name='%s' path='%s'\n",
+        label,
+        len.empty() ? 0U : (unsigned)len[0],
+        busy.empty() ? 0U : (unsigned)busy[0],
+        evt.size() < 2 ? 0U : (unsigned)rd16(evt, 0),
+        rc.size() < 2 ? 0U : (unsigned)rd16(rc, 0),
+        stage.empty() ? 0U : (unsigned)stage[0],
+        cstr_preview(line).c_str(),
+        cstr_preview(name).c_str(),
+        cstr_preview(path).c_str());
 }
 
 static uint16_t rd16(const std::vector<uint8_t> &v, size_t off)
@@ -519,21 +611,30 @@ static void dump_runtime(const char *label,
     const auto bdstg = emu.read_debug_memory(O.at("_boot_debug_stage"), 1);
     const auto bdrc = emu.read_debug_memory(O.at("_boot_debug_rc"), 2);
     const uint16_t boot_fs_addr = O.at("boot_fs$");
-    const uint16_t boot_event_addr = (uint16_t)(boot_fs_addr - 0x78);
-    const uint16_t boot_file_addr = (uint16_t)(boot_fs_addr + 30);
-    const uint16_t boot_fs_ready_addr = (uint16_t)(boot_fs_addr - 0x70);
-    const uint16_t boot_loader_busy_addr = (uint16_t)(boot_fs_addr - 0x50);
+    const uint16_t boot_event_addr =
+        O.get("boot_event$", (uint16_t)(boot_fs_addr - 0x78));
+    const uint16_t boot_file_addr =
+        O.get("boot_file$", (uint16_t)(boot_fs_addr + 30));
+    const uint16_t boot_fs_ready_addr =
+        O.get("boot_fs_ready$", (uint16_t)(boot_fs_addr - 0x70));
+    const uint16_t boot_loader_busy_addr =
+        O.get("boot_loader_busy$", (uint16_t)(boot_fs_addr - 0x50));
     const auto bootfs = emu.read_debug_memory(boot_fs_ready_addr, 1);
     const auto bootbusy = emu.read_debug_memory(boot_loader_busy_addr, 1);
     const auto bootevt = emu.read_debug_memory(boot_event_addr, 2);
     const uint16_t bootevt_ptr = rd16(bootevt);
+    const auto bootfile_meta = emu.read_debug_memory(boot_file_addr, 12);
     const auto bootfile = emu.read_debug_memory((uint16_t)(boot_file_addr + 10), 2);
+    const uint16_t boot_image_addr =
+        O.get("boot_image$", (uint16_t)(boot_fs_addr - 0x4e));
+    const auto bootimage = emu.read_debug_memory(boot_image_addr, 2);
     const auto bootfs_words = emu.read_debug_memory(boot_fs_addr, 30);
     const auto fat_work_fs = emu.read_debug_memory(O.at("fat_work_fs$"), 2);
     const auto fat_work_dev = emu.read_debug_memory(O.at("fat_work_dev$"), 2);
     const auto fat_work_evt = emu.read_debug_memory(O.at("fat_work_event$"), 2);
     const auto fat_io_evt = emu.read_debug_memory(O.at("fat_io_event$"), 2);
     const auto fat_queue_evt = emu.read_debug_memory(O.at("fat_queue_event$"), 2);
+    const auto tick_hook = emu.read_debug_memory(K.at("__sys_vec_tick"), 2);
     const auto fat_lookup_path = emu.read_debug_memory(O.at("fat_lookup_path$"), 2);
     const uint16_t fat_lookup_path_ptr = rd16(fat_lookup_path);
     const auto fat_lookup_dirent = emu.read_debug_memory(O.at("fat_lookup_dirent$"), 2);
@@ -583,6 +684,18 @@ static void dump_runtime(const char *label,
                 bootevt_ptr,
                 read_event_state(emu, bootevt_ptr),
                 rd16(bootfile));
+    if (bootfile_meta.size() >= 12) {
+        std::printf("  bootfile: cluster=%04X size=%02X%02X%02X%02X dir_sector=%04X dir_off=%02X attr=%02X image=%04X\n",
+                    (uint16_t)(bootfile_meta[0] | (uint16_t(bootfile_meta[1]) << 8)),
+                    bootfile_meta[5],
+                    bootfile_meta[4],
+                    bootfile_meta[3],
+                    bootfile_meta[2],
+                    (uint16_t)(bootfile_meta[6] | (uint16_t(bootfile_meta[7]) << 8)),
+                    bootfile_meta[8],
+                    bootfile_meta[9],
+                    rd16(bootimage));
+    }
     if (bootfs_words.size() >= 30) {
         auto fsw = [&](size_t off) -> uint16_t {
             return (uint16_t)(bootfs_words[off] | (uint16_t(bootfs_words[off + 1]) << 8));
@@ -625,6 +738,10 @@ static void dump_runtime(const char *label,
                 ascii_preview(fat_lookup_path_text).c_str(),
                 (int)fat_name.size(),
                 fat_name.empty() ? "" : reinterpret_cast<const char *>(fat_name.data()));
+    std::printf("  fat path bytes:");
+    for (uint8_t b : fat_lookup_path_text)
+        std::printf(" %02X", b);
+    std::printf("\n");
     std::printf("  fatq: queue_evt=%04X evt_state=%02X\n",
                 rd16(fat_queue_evt),
                 read_event_state(emu, rd16(fat_queue_evt)));
@@ -648,6 +765,7 @@ static void dump_runtime(const char *label,
                 ir_ref.empty() ? 0xFF : ir_ref[0],
                 ir_armed.empty() ? 0xFF : ir_armed[0],
                 emu.dbg_irref_count);
+    std::printf("  tick: hook=%04X\n", rd16(tick_hook));
     if (emu.dbg_irref_count != 0) {
         const uint32_t total = emu.dbg_irref_count;
         const uint32_t start = total > 6 ? (total - 6) : 0;
@@ -713,11 +831,23 @@ int main(int argc, char **argv)
     const uint16_t os_boot_after_evt_create = O.at("__boot_after_evt_create");
     const uint16_t os_boot_try_sda = O.at("__boot_try_sda");
     const uint16_t os_boot_try_fd0 = O.at("__boot_try_fd0");
+    const uint16_t os_boot_try_path = O.at("boot_try_path$");
     const uint16_t os_boot_cleanup = O.at("__boot_cleanup");
     const uint16_t os_boot_exit = O.at("__boot_exit");
     const uint16_t os_ctc_enable_tick = O.at("ctc_enable_tick");
     const uint16_t fat_init = O.at("_fat_init");
+    const uint16_t fat_init_busy = O.at("fi_busy$");
+    const uint16_t fat_init_nomem = O.at("fi_nomem$");
+    const uint16_t fat_init_fail_queue_evt = O.at("fi_fail_queue_evt$");
+    const uint16_t fat_init_fail_both_evts = O.at("fi_fail_both_evts$");
+    const uint16_t fat_init_after_guard_alloc = O.at("fi_after_guard_alloc$");
     const uint16_t fat_mount = O.at("_fat_mount");
+    const uint16_t mem_allocate = K.at("_mem_allocate");
+    const uint16_t thread_create = K.at("_thread_create");
+    const uint16_t thread_create_fail0 = K.at("tc_fail0$");
+    const uint16_t thread_create_fail1 = K.at("tc_fail1$");
+    const uint16_t fat_handle_mount = O.at("fat_handle_mount$");
+    const uint16_t fat_complete_fs = O.at("fat_complete_fs$");
     const uint16_t fat_open = O.at("_fat_open");
     const uint16_t fat_read = O.at("_fat_read");
     const uint16_t process_load_com = O.at("_process_load_com");
@@ -730,6 +860,9 @@ int main(int argc, char **argv)
     static const std::array<uint8_t, 8> k_nvram = {
         0x00, 0x40, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x02,
     };
+    uint16_t boot_shell_addr = 0;
+    std::vector<uint8_t> boot_shell_expected;
+    bool boot_shell_change_logged = false;
 
     probe_partner_crt emu(terminal_profile::vt52, root + "/partos/partos_shadow_nvram.bin");
     emu.load_hdd(hdd_path);
@@ -748,6 +881,19 @@ int main(int argc, char **argv)
         }
         const uint16_t kernel_base = read_area_addr(kernel_map_path, "_CODE");
         const uint16_t os_base = read_area_addr(os_map_path, "_CODE");
+        static const std::array<uint8_t, 17> k_boot_shell_bytes = {
+            '/', 'S', 'H', 'E', 'L', 'L', '.', 'C', 'O', 'M', 0,
+            's', 'h', 'e', 'l', 'l', 0,
+        };
+        const auto boot_shell_it = std::search(os_img.begin(), os_img.end(),
+                                               k_boot_shell_bytes.begin(),
+                                               k_boot_shell_bytes.end());
+        if (boot_shell_it != os_img.end()) {
+            boot_shell_addr =
+                (uint16_t)(os_base + std::distance(os_img.begin(), boot_shell_it));
+            boot_shell_expected.assign(k_boot_shell_bytes.begin(),
+                                       k_boot_shell_bytes.end());
+        }
         emu.reset();
         emu.clean_kernel_io_handoff();
         emu.seed_cmos_nvram(k_nvram.data(), k_nvram.size());
@@ -815,6 +961,7 @@ int main(int argc, char **argv)
     bool hit_boot_after_evt_create = false;
     bool hit_boot_try_sda = false;
     bool hit_boot_try_fd0 = false;
+    bool hit_boot_try_path = false;
     bool hit_boot_cleanup = false;
     bool hit_boot_exit = false;
     bool hit_ctc_enable_tick = false;
@@ -823,6 +970,16 @@ int main(int argc, char **argv)
     bool hit_fat_open = false;
     bool hit_fat_read = false;
     bool hit_process_load_com = false;
+    bool hit_fat_init_busy = false;
+    bool hit_fat_init_nomem = false;
+    bool hit_fat_init_fail_queue_evt = false;
+    bool hit_fat_init_fail_both_evts = false;
+    bool hit_fat_init_after_guard_alloc = false;
+    uint32_t trace_mem_allocate_guard_hits = 0;
+    uint32_t trace_thread_create_hits = 0;
+    uint32_t trace_thread_create_fail0_hits = 0;
+    uint32_t trace_thread_create_fail1_hits = 0;
+    bool trace_shell_saved_logged = false;
     uint64_t tick_page0 = 0;
     uint64_t tick_kernel = 0;
     uint64_t tick_os_entry = 0;
@@ -836,6 +993,7 @@ int main(int argc, char **argv)
     uint64_t tick_boot_after_evt_create = 0;
     uint64_t tick_boot_try_sda = 0;
     uint64_t tick_boot_try_fd0 = 0;
+    uint64_t tick_boot_try_path = 0;
     uint64_t tick_boot_cleanup = 0;
     uint64_t tick_boot_exit = 0;
     uint64_t tick_ctc_enable_tick = 0;
@@ -856,6 +1014,8 @@ int main(int argc, char **argv)
     uint16_t prev_process_result = 0xFFFF;
     uint16_t shell_entry_pc = 0;
     bool hit_shell_entry = false;
+    uint32_t trace_fat_handle_mount_hits = 0;
+    uint32_t trace_fat_complete_fs_hits = 0;
 
     const uint64_t prompt_limit =
         trace_preprompt ? 2'000'000ULL : SHELL_TICK_LIMIT;
@@ -917,6 +1077,10 @@ int main(int argc, char **argv)
             hit_boot_try_fd0 = true;
             tick_boot_try_fd0 = emu.get_tick_count();
         }
+        if (!hit_boot_try_path && pc == os_boot_try_path) {
+            hit_boot_try_path = true;
+            tick_boot_try_path = emu.get_tick_count();
+        }
         if (!hit_boot_cleanup && pc == os_boot_cleanup) {
             hit_boot_cleanup = true;
             tick_boot_cleanup = emu.get_tick_count();
@@ -950,9 +1114,123 @@ int main(int argc, char **argv)
             hit_fat_init = true;
             tick_fat_init = emu.get_tick_count();
         }
+        if (trace_preprompt && !hit_fat_init_busy && pc == fat_init_busy) {
+            hit_fat_init_busy = true;
+            std::printf("trace: fat_init busy tick=%llu\n",
+                        (unsigned long long)emu.get_tick_count());
+        }
+        if (trace_preprompt && !hit_fat_init_nomem && pc == fat_init_nomem) {
+            hit_fat_init_nomem = true;
+            std::printf("trace: fat_init nomem tick=%llu\n",
+                        (unsigned long long)emu.get_tick_count());
+        }
+        if (trace_preprompt && !hit_fat_init_fail_queue_evt &&
+            pc == fat_init_fail_queue_evt) {
+            hit_fat_init_fail_queue_evt = true;
+            std::printf("trace: fat_init fail_queue_evt tick=%llu\n",
+                        (unsigned long long)emu.get_tick_count());
+        }
+        if (trace_preprompt && !hit_fat_init_fail_both_evts &&
+            pc == fat_init_fail_both_evts) {
+            hit_fat_init_fail_both_evts = true;
+            std::printf("trace: fat_init fail_both_evts tick=%llu\n",
+                        (unsigned long long)emu.get_tick_count());
+        }
+        if (trace_preprompt && !hit_fat_init_after_guard_alloc &&
+            pc == fat_init_after_guard_alloc) {
+            hit_fat_init_after_guard_alloc = true;
+            const auto cpu = emu.capture_debug_cpu_state();
+            std::printf("trace: fat_init after_guard_alloc de=%04X hl=%04X bc=%04X sp=%04X tick=%llu\n",
+                        cpu.de,
+                        cpu.hl,
+                        cpu.bc,
+                        cpu.sp,
+                        (unsigned long long)emu.get_tick_count());
+        }
+        if (trace_preprompt && pc == mem_allocate &&
+            trace_mem_allocate_guard_hits < 4) {
+            const auto cpu = emu.capture_debug_cpu_state();
+            if (cpu.de == 0x2000) {
+                ++trace_mem_allocate_guard_hits;
+                std::printf("trace: mem_allocate guard #%u hl=%04X de=%04X bc=%04X sp=%04X tick=%llu\n",
+                            trace_mem_allocate_guard_hits,
+                            cpu.hl,
+                            cpu.de,
+                            cpu.bc,
+                            cpu.sp,
+                            (unsigned long long)emu.get_tick_count());
+            }
+        }
+        if (trace_preprompt && pc == thread_create &&
+            trace_thread_create_hits < 6) {
+            ++trace_thread_create_hits;
+            const auto cpu = emu.capture_debug_cpu_state();
+            std::printf("trace: thread_create #%u hl=%04X de=%04X bc=%04X sp=%04X tick=%llu\n",
+                        trace_thread_create_hits,
+                        cpu.hl,
+                        cpu.de,
+                        cpu.bc,
+                            cpu.sp,
+                            (unsigned long long)emu.get_tick_count());
+        }
+        if (trace_preprompt && pc == thread_create_fail0 &&
+            trace_thread_create_fail0_hits < 6) {
+            ++trace_thread_create_fail0_hits;
+            const auto cpu = emu.capture_debug_cpu_state();
+            std::printf("trace: thread_create fail0 #%u hl=%04X de=%04X bc=%04X sp=%04X tick=%llu\n",
+                        trace_thread_create_fail0_hits,
+                        cpu.hl,
+                        cpu.de,
+                        cpu.bc,
+                        cpu.sp,
+                        (unsigned long long)emu.get_tick_count());
+        }
+        if (trace_preprompt && pc == thread_create_fail1 &&
+            trace_thread_create_fail1_hits < 6) {
+            ++trace_thread_create_fail1_hits;
+            const auto cpu = emu.capture_debug_cpu_state();
+            const auto uhdr = emu.read_debug_memory(K.at("__usr_heap"), 16);
+            std::printf("trace: thread_create fail1 #%u hl=%04X de=%04X bc=%04X sp=%04X tick=%llu\n",
+                        trace_thread_create_fail1_hits,
+                        cpu.hl,
+                        cpu.de,
+                        cpu.bc,
+                        cpu.sp,
+                        (unsigned long long)emu.get_tick_count());
+            std::printf("trace: usr_heap head");
+            for (uint8_t b : uhdr)
+                std::printf(" %02X", b);
+            std::printf("\n");
+        }
         if (!hit_fat_mount && pc == fat_mount) {
             hit_fat_mount = true;
             tick_fat_mount = emu.get_tick_count();
+        }
+        if (trace_preprompt && pc == fat_handle_mount &&
+            trace_fat_handle_mount_hits < 8) {
+            ++trace_fat_handle_mount_hits;
+            const auto cpu = emu.capture_debug_cpu_state();
+            std::printf(
+                "trace: fat_handle_mount #%u hl=%04X de=%04X bc=%04X sp=%04X tick=%llu\n",
+                trace_fat_handle_mount_hits,
+                cpu.hl,
+                cpu.de,
+                cpu.bc,
+                cpu.sp,
+                (unsigned long long)emu.get_tick_count());
+        }
+        if (trace_preprompt && pc == fat_complete_fs &&
+            trace_fat_complete_fs_hits < 8) {
+            ++trace_fat_complete_fs_hits;
+            const auto cpu = emu.capture_debug_cpu_state();
+            std::printf(
+                "trace: fat_complete_fs #%u hl=%04X de=%04X bc=%04X sp=%04X tick=%llu\n",
+                trace_fat_complete_fs_hits,
+                cpu.hl,
+                cpu.de,
+                cpu.bc,
+                cpu.sp,
+                (unsigned long long)emu.get_tick_count());
         }
         if (!hit_fat_open && pc == fat_open) {
             hit_fat_open = true;
@@ -970,6 +1248,57 @@ int main(int argc, char **argv)
                 std::printf("trace: process_load_com hl=%04X de=%04X bc=%04X sp=%04X tick=%llu\n",
                             cpu.hl, cpu.de, cpu.bc, cpu.sp,
                             (unsigned long long)tick_process_load_com);
+            }
+        }
+        if (trace_preprompt && !trace_shell_saved_logged) {
+            const uint16_t process_first =
+                rd16(emu.read_debug_memory(O.at("_process_first"), 2));
+            if (process_first != 0) {
+                const shell_layout lay =
+                    read_shell_layout(emu, usr_heap, process_first);
+                if (lay.code != 0 && pc == (uint16_t)(lay.code + 0x00D0)) {
+                    trace_shell_saved_logged = true;
+                    const auto vars =
+                        emu.read_debug_memory((uint16_t)(lay.code + 0x026E), 8);
+                    const auto bytes =
+                        emu.read_debug_memory((uint16_t)(lay.code + 0x00D0), 8);
+                    const auto cpu = emu.capture_debug_cpu_state();
+                    std::printf(
+                        "trace: shell_call_saved pc=%04X sp=%04X partos=%04X regsvc=%04X tmp=%04X tick=%llu\n",
+                        pc,
+                        cpu.sp,
+                        rd16(vars, 0),
+                        rd16(vars, 2),
+                        rd16(vars, 4),
+                        (unsigned long long)emu.get_tick_count());
+                    std::printf("trace: shell_call_saved bytes:");
+                    for (uint8_t b : bytes)
+                        std::printf(" %02X", b);
+                    std::printf("\n");
+                }
+            }
+        }
+        if (trace_preprompt && boot_shell_addr != 0 &&
+            !boot_shell_change_logged) {
+            const auto live =
+                emu.read_debug_memory(boot_shell_addr, boot_shell_expected.size());
+            if (live != boot_shell_expected) {
+                boot_shell_change_logged = true;
+                const auto cpu = emu.capture_debug_cpu_state();
+                std::printf(
+                    "trace: boot_shell bytes changed addr=%04X pc=%04X sp=%04X tick=%llu\n",
+                    boot_shell_addr,
+                    pc,
+                    cpu.sp,
+                    (unsigned long long)emu.get_tick_count());
+                std::printf("trace: boot_shell expected:");
+                for (uint8_t b : boot_shell_expected)
+                    std::printf(" %02X", b);
+                std::printf("\n");
+                std::printf("trace: boot_shell live    :");
+                for (uint8_t b : live)
+                    std::printf(" %02X", b);
+                std::printf("\n");
             }
         }
         if (trace_preprompt_verbose) {
@@ -1110,6 +1439,9 @@ int main(int argc, char **argv)
         std::printf("  [%c] boot try fd0       @ 0x%04X tick=%llu\n",
                     hit_boot_try_fd0 ? 'x' : ' ', os_boot_try_fd0,
                     (unsigned long long)tick_boot_try_fd0);
+        std::printf("  [%c] boot try path      @ 0x%04X tick=%llu\n",
+                    hit_boot_try_path ? 'x' : ' ', os_boot_try_path,
+                    (unsigned long long)tick_boot_try_path);
         std::printf("  [%c] boot cleanup       @ 0x%04X tick=%llu\n",
                     hit_boot_cleanup ? 'x' : ' ', os_boot_cleanup,
                     (unsigned long long)tick_boot_cleanup);
@@ -1144,6 +1476,7 @@ int main(int argc, char **argv)
         dump_live_sio("prompt-fail", emu);
         dump_shell_state("prompt-fail", emu, K.at("__usr_heap"),
                          rd16(emu.read_debug_memory(O.at("_process_first"), 2)));
+        dump_boot_loader_state("prompt-fail", emu, O);
         return 1;
     }
 
@@ -1154,7 +1487,9 @@ int main(int argc, char **argv)
     const uint16_t term_head_addr = K.at("_thread_first_terminated");
     const uint16_t ir_ref_addr = K.at("ir_refcnt");
     const uint16_t process_first_addr = O.at("_process_first");
-    for (guard = 0; guard < SHELL_SETTLE_TICKS; ++guard) {
+    const uint64_t shell_settle_ticks =
+        env_u64_or("IDP_SHELL_SETTLE_TICKS", SHELL_SETTLE_TICKS);
+    for (guard = 0; guard < shell_settle_ticks; ++guard) {
         emu.tick();
         const bool term_clear =
             rd16(emu.read_debug_memory(term_head_addr, 2)) == 0;
@@ -1175,6 +1510,7 @@ int main(int argc, char **argv)
     dump_runtime("initial", emu, K, O);
     dump_live_sio("initial", emu);
     dump_shell_state("initial", emu, K.at("__usr_heap"), rd16(emu.read_debug_memory(O.at("_process_first"), 2)));
+    dump_boot_loader_state("initial", emu, O);
 
     if (std::getenv("IDP_DISABLE_TICK_AFTER_PROMPT") != nullptr) {
         emu.io_write(0xCA, 0x03);
@@ -1192,23 +1528,35 @@ int main(int argc, char **argv)
         const bool trace_first_reap =
             std::getenv("IDP_TRACE_FIRST_REAP") != nullptr;
         const uint16_t fat_handle_lookup_pc = O.at("fat_handle_lookup$");
+        const uint16_t fat_handle_readdir_pc = O.at("fat_handle_readdir$");
         const uint16_t fat_finish_dirent_pc = O.at("fat_finish_dirent$");
         const uint16_t fat_complete_dirent_pc = O.at("fat_complete_dirent$");
         const uint16_t fat_worker_loop_pc = O.at("fat_worker_loop$");
         const uint16_t fat_init_pc = O.at("_fat_init");
+        const uint16_t fat_walk_mode_addr = O.at("fat_walk_mode$");
+        const uint16_t fat_readdir_index_addr =
+            (uint16_t)(fat_walk_mode_addr + 5);
+        const uint16_t fat_lookup_dirent_addr = O.at("fat_lookup_dirent$");
+        const uint16_t fat_work_event_addr = O.at("fat_work_event$");
         const uint16_t partos_run_command_pc = O.at("_partos_run_command");
         const uint16_t boot_try_path_pc = O.at("boot_try_path$");
         const uint16_t fat_open_pc = O.at("_fat_open");
+        const uint16_t fat_read_pc = O.at("_fat_read");
         const uint16_t process_load_com_pc = O.at("_process_load_com");
         const uint16_t process_start_pc = O.at("_process_start");
+        const uint16_t process_wait_pc = O.at("_process_wait");
+        const uint16_t mem_alloc_pc = K.at("_mem_allocate");
         const uint16_t partos_write_console_pc = O.at("_partos_write_console");
         const uint16_t partos_read_keyboard_pc = O.at("_partos_read_keyboard");
         const uint16_t thread_create_pc = K.at("_thread_create");
+        const uint16_t thread_wait_events_pc = K.at("_thread_wait4events");
         const uint16_t so_destroy_pc = K.at("__so_destroy");
         const uint16_t mem_free_pc = K.at("_mem_free");
         const uint16_t pio_purge_owner_pc = O.at("_pio_purge_owner");
         const uint16_t drv_purge_owner_pc = O.at("drv_purge_owner_ix");
         const uint16_t evt_set_pc = K.at("_evt_set");
+        const uint16_t thread_robin_pc = K.at("__thread_robin");
+        const uint16_t thread_select_next_pc = K.at("__thread_select_next");
         const uint16_t mem_free_owner_scan_pc = (uint16_t)(K.at("__mem_free_owner") + 0x13);
         const uint16_t mem_free_owner_done_pc = (uint16_t)(K.at("__mem_free_owner") + 0x52);
         const uint16_t sys_heap = K.at("__sys_heap");
@@ -1223,7 +1571,10 @@ int main(int argc, char **argv)
             rd16(emu.read_debug_memory(K.at("_thread_first_terminated"), 2));
         bool first_reap_traced = false;
         for (int i = 2; i < argc; ++i) {
+            constexpr uint16_t k_sys_watch_addr = 0xFD4B;
+            constexpr size_t k_sys_watch_len = 0x25;
             uint32_t hits_lookup = 0;
+            uint32_t hits_readdir = 0;
             uint32_t hits_finish = 0;
             uint32_t hits_complete = 0;
             uint32_t hits_worker = 0;
@@ -1231,31 +1582,51 @@ int main(int argc, char **argv)
             uint32_t hits_run_command = 0;
             uint32_t hits_boot_try_path = 0;
             uint32_t hits_fat_open = 0;
+            uint32_t hits_fat_read = 0;
             uint32_t hits_process_load_com = 0;
             uint32_t hits_process_start = 0;
+            uint32_t hits_process_wait = 0;
+            uint32_t hits_mem_alloc = 0;
             uint32_t hits_write_console = 0;
             uint32_t hits_read_keyboard = 0;
             uint32_t hits_thread_create = 0;
+            uint32_t hits_thread_wait_events = 0;
             uint32_t hits_so_destroy = 0;
             uint32_t hits_mem_free = 0;
             uint32_t hits_pio_purge = 0;
             uint32_t hits_drv_purge = 0;
             uint32_t hits_evt_set = 0;
+            uint32_t hits_robin = 0;
+            uint32_t hits_select_next = 0;
             uint32_t hits_shell_call_offset = 0;
             uint32_t hits_shell_echo_char = 0;
             uint32_t hits_shell_run_command = 0;
             uint32_t hits_shell_write_buffer = 0;
+            uint32_t hits_sys_watch = 0;
+            uint32_t hits_ir_state = 0;
             uint32_t hits_mfo_scan = 0;
             uint32_t hits_mfo_done = 0;
+            bool traced_req_free = false;
+            bool tracked_read_logged = false;
             uint16_t last_mfo_hl = 0xFFFF;
+            uint16_t tracked_read_buf = 0;
+            uint16_t tracked_read_bytes = 0;
             uint16_t last_pc = 0xFFFF;
             uint32_t same_pc = 0;
             uint32_t max_same_pc = 0;
             uint16_t max_same_pc_addr = 0xFFFF;
             std::deque<uint16_t> recent_pcs;
+            std::vector<uint8_t> sys_watch =
+                emu.read_debug_memory(k_sys_watch_addr, k_sys_watch_len);
+            uint8_t prev_ir_ref =
+                emu.read_debug_memory(K.at("ir_refcnt"), 1).empty()
+                    ? 0xFF
+                    : emu.read_debug_memory(K.at("ir_refcnt"), 1)[0];
+            int prev_iff1 = emu.capture_debug_cpu_state().iff1 ? 1 : 0;
             auto trace_tick = [&](int idx) {
                 emu.tick();
                 const uint16_t pc = emu.get_current_pc();
+                const auto cpu = emu.capture_debug_cpu_state();
                 if (pc != last_pc) {
                     recent_pcs.push_back(pc);
                     if (recent_pcs.size() > RECENT_PC_LIMIT)
@@ -1269,13 +1640,63 @@ int main(int argc, char **argv)
                         max_same_pc_addr = pc;
                     }
                 }
+                const auto ir_ref_now_raw =
+                    emu.read_debug_memory(K.at("ir_refcnt"), 1);
+                const uint8_t ir_ref_now =
+                    ir_ref_now_raw.empty() ? 0xFF : ir_ref_now_raw[0];
+                const int iff1_now = cpu.iff1 ? 1 : 0;
+                if (((ir_ref_now != prev_ir_ref) || (iff1_now != prev_iff1)) &&
+                    (hits_ir_state < 48)) {
+                    ++hits_ir_state;
+                    std::printf(
+                        "%s trace: ir_state #%u pc=%04X sp=%04X ref=%02X->%02X iff1=%d->%d cur=%04X run=%04X wait=%04X\n",
+                        argv[i],
+                        hits_ir_state,
+                        pc,
+                        cpu.sp,
+                        prev_ir_ref,
+                        ir_ref_now,
+                        prev_iff1,
+                        iff1_now,
+                        rd16(emu.read_debug_memory(K.at("_thread_current"), 2)),
+                        rd16(emu.read_debug_memory(K.at("_thread_first_running"), 2)),
+                        rd16(emu.read_debug_memory(K.at("_thread_first_waiting"), 2)));
+                }
+                prev_ir_ref = ir_ref_now;
+                prev_iff1 = iff1_now;
+                const auto sys_watch_now =
+                    emu.read_debug_memory(k_sys_watch_addr, k_sys_watch_len);
+                if ((sys_watch_now.size() == sys_watch.size()) &&
+                    (sys_watch_now != sys_watch) &&
+                    (hits_sys_watch < 64)) {
+                    ++hits_sys_watch;
+                    std::printf(
+                        "%s trace: sys_watch #%u pc=%04X sp=%04X cur=%04X run=%04X wait=%04X\n",
+                        argv[i],
+                        hits_sys_watch,
+                        pc,
+                        cpu.sp,
+                        rd16(emu.read_debug_memory(K.at("_thread_current"), 2)),
+                        rd16(emu.read_debug_memory(K.at("_thread_first_running"), 2)),
+                        rd16(emu.read_debug_memory(K.at("_thread_first_waiting"), 2)));
+                    for (size_t off = 0; off < sys_watch.size(); ++off) {
+                        if (sys_watch_now[off] == sys_watch[off])
+                            continue;
+                        std::printf("  %04X: %02X -> %02X\n",
+                                    (uint16_t)(k_sys_watch_addr + off),
+                                    sys_watch[off],
+                                    sys_watch_now[off]);
+                    }
+                    sys_watch = sys_watch_now;
+                } else if (sys_watch_now.size() == sys_watch.size()) {
+                    sys_watch = sys_watch_now;
+                }
                 if (pc == fat_worker_loop_pc) {
                     ++hits_worker;
                 }
                 if (pc == fat_init_pc) {
                     ++hits_fat_init;
                     if (hits_fat_init <= 4) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: fat_init hit #%u hl=%04X de=%04X sp=%04X\n",
                                     argv[i], hits_fat_init, cpu.hl, cpu.de, cpu.sp);
                     }
@@ -1283,7 +1704,6 @@ int main(int argc, char **argv)
                 if (pc == partos_run_command_pc) {
                     ++hits_run_command;
                     if (hits_run_command <= 8) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: run_command hit #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
                                     argv[i], hits_run_command, cpu.hl, cpu.de, cpu.bc, cpu.sp);
                     }
@@ -1291,7 +1711,6 @@ int main(int argc, char **argv)
                 if (pc == boot_try_path_pc) {
                     ++hits_boot_try_path;
                     if (hits_boot_try_path <= 8) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: boot_try_path hit #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
                                     argv[i], hits_boot_try_path, cpu.hl, cpu.de, cpu.bc, cpu.sp);
                     }
@@ -1299,31 +1718,78 @@ int main(int argc, char **argv)
                 if (pc == fat_open_pc) {
                     ++hits_fat_open;
                     if (hits_fat_open <= 8) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: fat_open hit #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
                                     argv[i], hits_fat_open, cpu.hl, cpu.de, cpu.bc, cpu.sp);
+                    }
+                }
+                if (pc == fat_read_pc) {
+                    ++hits_fat_read;
+                    if (hits_fat_read <= 8) {
+                        std::printf("%s trace: fat_read hit #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
+                                    argv[i], hits_fat_read, cpu.hl, cpu.de, cpu.bc, cpu.sp);
+                        if (!tracked_read_logged) {
+                            const auto frame = emu.read_debug_memory(cpu.sp, 6);
+                            tracked_read_buf = cpu.de;
+                            tracked_read_bytes = rd16(frame, 2);
+                            tracked_read_logged = true;
+                            const uint16_t tail =
+                                (uint16_t)(tracked_read_buf + tracked_read_bytes);
+                            const auto tail_hdr =
+                                emu.read_debug_memory(tail, 12);
+                            std::printf(
+                                "%s trace: fat_read boundary buf=%04X bytes=%04X tail=%04X hdr=%s\n",
+                                argv[i],
+                                tracked_read_buf,
+                                tracked_read_bytes,
+                                tail,
+                                hex_preview(tail_hdr).c_str());
+                        }
                     }
                 }
                 if (pc == process_load_com_pc) {
                     ++hits_process_load_com;
                     if (hits_process_load_com <= 4) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: process_load_com hit #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
                                     argv[i], hits_process_load_com, cpu.hl, cpu.de, cpu.bc, cpu.sp);
+                        if (tracked_read_logged && cpu.de == tracked_read_buf) {
+                            const uint16_t tail =
+                                (uint16_t)(tracked_read_buf + tracked_read_bytes);
+                            const auto tail_hdr =
+                                emu.read_debug_memory(tail, 12);
+                            std::printf(
+                                "%s trace: process_load_com boundary buf=%04X bytes=%04X tail=%04X hdr=%s\n",
+                                argv[i],
+                                tracked_read_buf,
+                                tracked_read_bytes,
+                                tail,
+                                hex_preview(tail_hdr).c_str());
+                        }
                     }
                 }
                 if (pc == process_start_pc) {
                     ++hits_process_start;
                     if (hits_process_start <= 8) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: process_start hit #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
                                     argv[i], hits_process_start, cpu.hl, cpu.de, cpu.bc, cpu.sp);
+                    }
+                }
+                if (pc == process_wait_pc) {
+                    ++hits_process_wait;
+                    if (hits_process_wait <= 8) {
+                        std::printf("%s trace: process_wait hit #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
+                                    argv[i], hits_process_wait, cpu.hl, cpu.de, cpu.bc, cpu.sp);
+                    }
+                }
+                if (pc == mem_alloc_pc) {
+                    ++hits_mem_alloc;
+                    if (hits_mem_alloc <= 32) {
+                        std::printf("%s trace: mem_allocate hit #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
+                                    argv[i], hits_mem_alloc, cpu.hl, cpu.de, cpu.bc, cpu.sp);
                     }
                 }
                 if (pc == partos_write_console_pc) {
                     ++hits_write_console;
                     if (hits_write_console <= 16) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: write_console #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
                                     argv[i], hits_write_console, cpu.hl, cpu.de, cpu.bc, cpu.sp);
                     }
@@ -1331,7 +1797,6 @@ int main(int argc, char **argv)
                 if (pc == partos_read_keyboard_pc) {
                     ++hits_read_keyboard;
                     if (hits_read_keyboard <= 16) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: read_keyboard #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
                                     argv[i], hits_read_keyboard, cpu.hl, cpu.de, cpu.bc, cpu.sp);
                     }
@@ -1339,17 +1804,37 @@ int main(int argc, char **argv)
                 if (pc == thread_create_pc) {
                     ++hits_thread_create;
                     if (hits_thread_create <= 16) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         const auto frame = emu.read_debug_memory(cpu.sp, 6);
                         std::printf("%s trace: thread_create hit #%u hl=%04X de=%04X ret=%04X args=%04X/%04X sp=%04X\n",
                                     argv[i], hits_thread_create, cpu.hl, cpu.de,
                                     rd16(frame, 0), rd16(frame, 2), rd16(frame, 4), cpu.sp);
                     }
                 }
+                if (pc == thread_wait_events_pc) {
+                    ++hits_thread_wait_events;
+                    if (hits_thread_wait_events <= 64) {
+                        const auto frame = emu.read_debug_memory(cpu.sp, 4);
+                        const auto evtvec = emu.read_debug_memory(cpu.hl, 2);
+                        const uint16_t evt = rd16(evtvec, 0);
+                        std::printf(
+                            "%s trace: thread_wait4events hit #%u hl=%04X de=%04X bc=%04X sp=%04X cur=%04X num=%u evt0=%04X evt0_state=%02X ret=%04X/%04X\n",
+                            argv[i],
+                            hits_thread_wait_events,
+                            cpu.hl,
+                            cpu.de,
+                            cpu.bc,
+                            cpu.sp,
+                            rd16(emu.read_debug_memory(K.at("_thread_current"), 2)),
+                            frame.size() > 2 ? (unsigned)frame[2] : 0U,
+                            evt,
+                            read_event_state(emu, evt),
+                            rd16(frame, 0),
+                            rd16(frame, 2));
+                    }
+                }
                 if (pc == so_destroy_pc) {
                     ++hits_so_destroy;
                     if (hits_so_destroy <= 12) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         const auto frame = emu.read_debug_memory(cpu.sp, 2);
                         std::printf("%s trace: so_destroy hit #%u hl=%04X de=%04X ret=%04X sp=%04X\n",
                                     argv[i], hits_so_destroy, cpu.hl, cpu.de,
@@ -1359,11 +1844,50 @@ int main(int argc, char **argv)
                 if (pc == mem_free_pc) {
                     ++hits_mem_free;
                     if (hits_mem_free <= 12) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         const auto frame = emu.read_debug_memory(cpu.sp, 2);
                         std::printf("%s trace: mem_free hit #%u hl=%04X de=%04X ret=%04X sp=%04X\n",
                                     argv[i], hits_mem_free, cpu.hl, cpu.de,
                                     rd16(frame, 0), cpu.sp);
+                    }
+                    if (!traced_req_free && cpu.de == 0xFD54) {
+                        traced_req_free = true;
+                        std::printf("%s trace: stepping request free from pc=%04X sp=%04X hl=%04X de=%04X bc=%04X\n",
+                                    argv[i], pc, cpu.sp, cpu.hl, cpu.de, cpu.bc);
+                        for (int step = 0; step < 160; ++step) {
+                            const auto s = emu.capture_debug_cpu_state();
+                            const auto stack = emu.read_debug_memory(s.sp, 8);
+                            const auto hdr = emu.read_debug_memory(0xFD4B, 0x1C);
+                            std::printf(
+                                "  free %03d pc=%04X sp=%04X af=%04X bc=%04X de=%04X hl=%04X ix=%04X iy=%04X stk=%04X/%04X/%04X/%04X hdr=%s\n",
+                                step,
+                                emu.get_current_pc(),
+                                s.sp,
+                                s.af,
+                                s.bc,
+                                s.de,
+                                s.hl,
+                                s.ix,
+                                s.iy,
+                                rd16(stack, 0),
+                                rd16(stack, 2),
+                                rd16(stack, 4),
+                                rd16(stack, 6),
+                                hex_preview(hdr).c_str());
+                            step_one_instruction(emu);
+                            if (emu.get_current_pc() == 0x0134 ||
+                                emu.get_current_pc() == 0x0135) {
+                                const auto halt = emu.capture_debug_cpu_state();
+                                std::printf(
+                                    "  free halt pc=%04X sp=%04X af=%04X bc=%04X de=%04X hl=%04X\n",
+                                    emu.get_current_pc(),
+                                    halt.sp,
+                                    halt.af,
+                                    halt.bc,
+                                    halt.de,
+                                    halt.hl);
+                                break;
+                            }
+                        }
                     }
                 }
                 if (pc == fat_handle_lookup_pc) {
@@ -1374,36 +1898,145 @@ int main(int argc, char **argv)
                                     argv[i], hits_lookup, cpu.hl, cpu.de, cpu.sp);
                     }
                 }
+                if (pc == fat_handle_readdir_pc) {
+                    ++hits_readdir;
+                    if (hits_readdir <= 64) {
+                        const auto cpu = emu.capture_debug_cpu_state();
+                        const uint16_t idx =
+                            rd16(emu.read_debug_memory(fat_readdir_index_addr, 2));
+                        const uint16_t dirent =
+                            rd16(emu.read_debug_memory(fat_lookup_dirent_addr, 2));
+                        const uint16_t evt =
+                            rd16(emu.read_debug_memory(fat_work_event_addr, 2));
+                        const int16_t status =
+                            (int16_t)rd16(emu.read_debug_memory((uint16_t)(dirent + 10), 2));
+                        const uint8_t attr =
+                            emu.read_debug_memory((uint16_t)(dirent + 9), 1).empty()
+                                ? 0xFF
+                                : emu.read_debug_memory((uint16_t)(dirent + 9), 1)[0];
+                        std::string raw_name =
+                            preview_name83(emu.read_debug_memory((uint16_t)(dirent + 14), 11));
+                        std::printf(
+                            "%s trace: readdir hit #%u hl=%04X de=%04X sp=%04X idx=%u dirent=%04X status=%d attr=%02X name='%s' evt=%04X evt_state=%02X\n",
+                            argv[i],
+                            hits_readdir,
+                            cpu.hl,
+                            cpu.de,
+                            cpu.sp,
+                            (unsigned)idx,
+                            dirent,
+                            (int)status,
+                            attr,
+                            raw_name.c_str(),
+                            evt,
+                            read_event_state(emu, evt));
+                    }
+                }
                 if (pc == fat_finish_dirent_pc) {
                     ++hits_finish;
-                    if (hits_finish <= 4) {
+                    if (hits_finish <= 64) {
                         const auto cpu = emu.capture_debug_cpu_state();
-                        std::printf("%s trace: finish hit #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
-                                    argv[i], hits_finish, cpu.hl, cpu.de, cpu.bc, cpu.sp);
+                        const uint16_t idx =
+                            rd16(emu.read_debug_memory(fat_readdir_index_addr, 2));
+                        const uint16_t dirent =
+                            rd16(emu.read_debug_memory(fat_lookup_dirent_addr, 2));
+                        const uint16_t evt =
+                            rd16(emu.read_debug_memory(fat_work_event_addr, 2));
+                        std::printf(
+                            "%s trace: finish hit #%u hl=%04X de=%04X bc=%04X sp=%04X idx=%u dirent=%04X evt=%04X evt_state=%02X\n",
+                            argv[i],
+                            hits_finish,
+                            cpu.hl,
+                            cpu.de,
+                            cpu.bc,
+                            cpu.sp,
+                            (unsigned)idx,
+                            dirent,
+                            evt,
+                            read_event_state(emu, evt));
                     }
                 }
                 if (pc == fat_complete_dirent_pc) {
                     ++hits_complete;
-                    if (hits_complete <= 4) {
-                        const auto cpu = emu.capture_debug_cpu_state();
-                        std::printf("%s trace: complete hit #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
-                                    argv[i], hits_complete, cpu.hl, cpu.de, cpu.bc, cpu.sp);
+                    const auto cpu = emu.capture_debug_cpu_state();
+                    if ((hits_complete <= 64) || (cpu.de != 0)) {
+                        const uint8_t attr =
+                            emu.read_debug_memory((uint16_t)(cpu.hl + 9), 1).empty()
+                                ? 0xFF
+                                : emu.read_debug_memory((uint16_t)(cpu.hl + 9), 1)[0];
+                        std::string raw_name =
+                            preview_name83(emu.read_debug_memory((uint16_t)(cpu.hl + 14), 11));
+                        std::printf(
+                            "%s trace: complete hit #%u hl=%04X de=%04X bc=%04X sp=%04X attr=%02X name='%s' evt_state=%02X\n",
+                            argv[i],
+                            hits_complete,
+                            cpu.hl,
+                            cpu.de,
+                            cpu.bc,
+                            cpu.sp,
+                            attr,
+                            raw_name.c_str(),
+                            read_event_state(emu, cpu.bc));
                     }
                 }
                 if (pc == evt_set_pc) {
                     ++hits_evt_set;
                     if (hits_evt_set <= 8) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         const auto arg = emu.read_debug_memory((uint16_t)(cpu.sp + 2), 1);
                         std::printf("%s trace: evt_set hit #%u hl=%04X arg=%02X sp=%04X\n",
                                     argv[i], hits_evt_set, cpu.hl,
                                     arg.empty() ? 0xFF : arg[0], cpu.sp);
                     }
                 }
+                if (pc == thread_robin_pc) {
+                    ++hits_robin;
+                    if (hits_robin <= 16) {
+                        std::printf(
+                            "%s trace: robin #%u cur=%04X run=%04X wait=%04X sp=%04X iff1=%d ref=%02X\n",
+                            argv[i],
+                            hits_robin,
+                            rd16(emu.read_debug_memory(K.at("_thread_current"), 2)),
+                            rd16(emu.read_debug_memory(K.at("_thread_first_running"), 2)),
+                            rd16(emu.read_debug_memory(K.at("_thread_first_waiting"), 2)),
+                            cpu.sp,
+                            cpu.iff1 ? 1 : 0,
+                            emu.read_debug_memory(K.at("ir_refcnt"), 1).empty()
+                                ? 0xFF
+                                : emu.read_debug_memory(K.at("ir_refcnt"), 1)[0]);
+                    }
+                }
+                if (pc == thread_select_next_pc) {
+                    ++hits_select_next;
+                    if (hits_select_next <= 16) {
+                        const uint16_t wait_head =
+                            rd16(emu.read_debug_memory(K.at("_thread_first_waiting"), 2));
+                        uint16_t wait_cell = 0;
+                        uint16_t wait_evt = 0;
+                        uint8_t wait_state = 0xFF;
+                        if (wait_head != 0) {
+                            const auto t = emu.read_debug_memory((uint16_t)(wait_head + 16), 3);
+                            wait_cell = rd16(t, 0);
+                            if (wait_cell != 0) {
+                                wait_evt = rd16(emu.read_debug_memory(wait_cell, 2));
+                                wait_state = read_event_state(emu, wait_evt);
+                            }
+                        }
+                        std::printf(
+                            "%s trace: select_next #%u cur=%04X run=%04X wait=%04X wait_cell=%04X evt=%04X state=%02X sp=%04X\n",
+                            argv[i],
+                            hits_select_next,
+                            rd16(emu.read_debug_memory(K.at("_thread_current"), 2)),
+                            rd16(emu.read_debug_memory(K.at("_thread_first_running"), 2)),
+                            wait_head,
+                            wait_cell,
+                            wait_evt,
+                            wait_state,
+                            cpu.sp);
+                    }
+                }
                 if (pc == shell_call_offset_pc) {
                     ++hits_shell_call_offset;
                     if (hits_shell_call_offset <= 16) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         const auto frame = emu.read_debug_memory(cpu.sp, 6);
                         std::printf("%s trace: shell_call_offset #%u hl=%04X de=%04X bc=%04X sp=%04X ret=%04X/%04X\n",
                                     argv[i], hits_shell_call_offset, cpu.hl, cpu.de, cpu.bc,
@@ -1413,7 +2046,6 @@ int main(int argc, char **argv)
                 if (pc == shell_echo_char_pc) {
                     ++hits_shell_echo_char;
                     if (hits_shell_echo_char <= 16) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: shell_echo_char #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
                                     argv[i], hits_shell_echo_char, cpu.hl, cpu.de, cpu.bc, cpu.sp);
                     }
@@ -1421,7 +2053,6 @@ int main(int argc, char **argv)
                 if (pc == shell_run_command_pc) {
                     ++hits_shell_run_command;
                     if (hits_shell_run_command <= 8) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: shell_run_command #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
                                     argv[i], hits_shell_run_command, cpu.hl, cpu.de, cpu.bc, cpu.sp);
                         dump_shell_state("  shell_run", emu, usr_heap,
@@ -1431,7 +2062,6 @@ int main(int argc, char **argv)
                 if (pc == shell_write_buffer_pc) {
                     ++hits_shell_write_buffer;
                     if (hits_shell_write_buffer <= 16) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: shell_write_buffer #%u hl=%04X de=%04X bc=%04X sp=%04X\n",
                                     argv[i], hits_shell_write_buffer, cpu.hl, cpu.de, cpu.bc, cpu.sp);
                     }
@@ -1442,13 +2072,11 @@ int main(int argc, char **argv)
                 if (pc == drv_purge_owner_pc) {
                     ++hits_drv_purge;
                     if (hits_drv_purge <= 4) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: drv_purge hit #%u ix=%04X de=%04X sp=%04X\n",
                                     argv[i], hits_drv_purge, cpu.ix, cpu.de, cpu.sp);
                     }
                 }
                 if (pc == mem_free_owner_scan_pc) {
-                    const auto cpu = emu.capture_debug_cpu_state();
                     const bool changed = cpu.hl != last_mfo_hl;
                     if (cpu.hl != last_mfo_hl) {
                         last_mfo_hl = cpu.hl;
@@ -1462,7 +2090,6 @@ int main(int argc, char **argv)
                 if (pc == mem_free_owner_done_pc) {
                     ++hits_mfo_done;
                     if (hits_mfo_done <= 8) {
-                        const auto cpu = emu.capture_debug_cpu_state();
                         std::printf("%s trace: mfo_done #%u bc=%04X sp=%04X\n",
                                     argv[i], hits_mfo_done, cpu.bc, cpu.sp);
                     }
@@ -1528,20 +2155,27 @@ int main(int argc, char **argv)
                     step_one_instruction(emu);
                 }
             }
-            for (int n = 0; n < 2000000; ++n) {
+            uint32_t post_script_ticks = 2000000U;
+            if (const char *s = std::getenv("IDP_POST_SCRIPT_TICKS")) {
+                const unsigned long parsed = std::strtoul(s, nullptr, 10);
+                if (parsed != 0UL)
+                    post_script_ticks = (uint32_t)parsed;
+            }
+            for (uint32_t n = 0; n < post_script_ticks; ++n) {
                 trace_tick(n);
             }
             dump_state(argv[i], emu);
             dump_runtime(argv[i], emu, K, O);
             dump_live_sio(argv[i], emu);
             dump_shell_state(argv[i], emu, usr_heap, rd16(emu.read_debug_memory(O.at("_process_first"), 2)));
+            dump_boot_loader_state(argv[i], emu, O);
             if (old_term != 0) {
                 dump_owned_heap_blocks("  sys owned blocks", emu, sys_heap, old_term, 64);
                 dump_owned_heap_blocks("  usr owned blocks", emu, usr_heap, old_term, 256);
             }
             dump_heap("  sys", emu, sys_heap, 32);
             dump_heap("  usr", emu, usr_heap, 64);
-            std::printf("%s trace: fat_lookup=%u fat_finish=%u fat_complete=%u worker=%u fat_init=%u run_command=%u boot_try_path=%u fat_open=%u process_load_com=%u process_start=%u write_console=%u read_keyboard=%u thread_create=%u so_destroy=%u mem_free=%u pio_purge=%u drv_purge=%u evt_set=%u shell_calloff=%u shell_echo=%u shell_run=%u shell_write=%u max_same_pc=%u@%04X\n",
+            std::printf("%s trace: fat_lookup=%u fat_finish=%u fat_complete=%u worker=%u fat_init=%u run_command=%u boot_try_path=%u fat_open=%u fat_read=%u process_load_com=%u process_start=%u process_wait=%u mem_alloc=%u write_console=%u read_keyboard=%u thread_create=%u so_destroy=%u mem_free=%u pio_purge=%u drv_purge=%u evt_set=%u robin=%u select_next=%u shell_calloff=%u shell_echo=%u shell_run=%u shell_write=%u max_same_pc=%u@%04X\n",
                         argv[i],
                         hits_lookup,
                         hits_finish,
@@ -1551,8 +2185,11 @@ int main(int argc, char **argv)
                         hits_run_command,
                         hits_boot_try_path,
                         hits_fat_open,
+                        hits_fat_read,
                         hits_process_load_com,
                         hits_process_start,
+                        hits_process_wait,
+                        hits_mem_alloc,
                         hits_write_console,
                         hits_read_keyboard,
                         hits_thread_create,
@@ -1561,6 +2198,8 @@ int main(int argc, char **argv)
                         hits_pio_purge,
                         hits_drv_purge,
                         hits_evt_set,
+                        hits_robin,
+                        hits_select_next,
                         hits_shell_call_offset,
                         hits_shell_echo_char,
                         hits_shell_run_command,

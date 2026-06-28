@@ -12,6 +12,7 @@
             ;;   clear_screen()
             ;;   set_xy(avdc_xy_t *xy)
             ;;   write_console(buf, len)
+            ;;   set_text_attr(attr)
             ;;   peek_keyboard() -> -1 / char
             ;;   read_keyboard() -> blocks until a char is available
             ;;
@@ -26,6 +27,7 @@
             .globl  _partos_clear_screen
             .globl  _partos_set_xy
             .globl  _partos_write_console
+            .globl  _partos_set_text_attr
             .globl  _partos_peek_keyboard
             .globl  _partos_read_keyboard
 
@@ -74,7 +76,7 @@ ctpw_wait$:
 console_tty_init_ctrl$:
             ld      c,a
             ld      hl,#console_sio_init$
-            ld      b,#7
+            ld      b,#9
             otir
             ret
 
@@ -120,6 +122,7 @@ _console_init::
 
             xor     a
             ld      (console_mode$),a
+            ld      (console_attr$),a
             ld      (console_dev$),a
             ld      (console_dev$ + 1),a
 
@@ -227,6 +230,65 @@ pwc_avdc$:
             ex      de,hl
             ret
 
+_partos_set_text_attr::
+            and     #AVDC_ATTR_MASK
+            ld      (console_attr$),a
+            ld      b,a
+            ld      a,(console_mode$)
+            cp      #CONSOLE_MODE_AVDC
+            jr      z,psta_avdc$
+            ld      a,b
+            cp      #AVDC_ATTR_HIGHLIGHT
+            jr      z,psta_tty_hi$
+            cp      #AVDC_ATTR_INVERSE
+            jr      z,psta_tty_inv$
+            cp      #AVDC_ATTR_UNDERLINE
+            jr      z,psta_tty_ul$
+            ld      a,#0x1b            ; normal -> ESC q
+            call    console_tty_putc$
+            ld      a,#'q'
+            call    console_tty_putc$
+            ld      de,#DRV_OK
+            ret
+
+psta_tty_hi$:
+            ld      a,#0x1b            ; highlight -> ESC b '1'
+            call    console_tty_putc$
+            ld      a,#'b'
+            call    console_tty_putc$
+            ld      a,#'1'
+            call    console_tty_putc$
+            ld      de,#DRV_OK
+            ret
+
+psta_tty_inv$:
+            ld      a,#0x1b            ; inverse -> ESC p
+            call    console_tty_putc$
+            ld      a,#'p'
+            call    console_tty_putc$
+            ld      de,#DRV_OK
+            ret
+
+psta_tty_ul$:
+            ld      a,#0x1b            ; underline -> ESC [ 4 m
+            call    console_tty_putc$
+            ld      a,#'['
+            call    console_tty_putc$
+            ld      a,#'4'
+            call    console_tty_putc$
+            ld      a,#'m'
+            call    console_tty_putc$
+            ld      de,#DRV_OK
+            ret
+
+psta_avdc$:
+            ld      hl,(console_dev$)
+            ld      de,#console_attr$
+            ld      bc,#AVDC_IOCTL_SETATTR
+            call    avdc_ioctl
+            ex      de,hl
+            ret
+
 _partos_peek_keyboard::
             ;; Console input is a blocking/polling userland boundary. If a
             ;; caller reaches it with maskable interrupts still off, the shell
@@ -263,7 +325,7 @@ prk_wait$:
             .area   _INITIALIZED
 
 console_sio_init$:
-            .db     0x18,0x04,0x44,0x03,0xc1,0x05,0x68
+            .db     0x18,0x04,0x44,0x03,0xc1,0x05,0x68,0x01,0x00
 
             .area   _SYSVARS
 
@@ -272,6 +334,8 @@ console_mode$:
 console_tx_data$:
             .ds     1
 console_tx_ctrl$:
+            .ds     1
+console_attr$:
             .ds     1
 console_dev$:
             .ds     2

@@ -21,7 +21,8 @@
             .equ    PROCESS_PNAME,       5
             .equ    PROCESS_MAIN_THREAD, 13
             .equ    PROCESS_CMDLINE,     15
-            .equ    PROCESS_SIZE,        17
+            .equ    PROCESS_ENV,         17
+            .equ    PROCESS_SIZE,        19
 
             ;; thread_t layout bits needed by process.s
             .equ    THREAD_PROCESS,      22

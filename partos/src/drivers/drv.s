@@ -67,8 +67,8 @@ drv_isr_enter::
             ld      (drv_need_resched$),a
             inc     a
             ld      (drv_in_isr$),a
-            ;; switch off the interrupted thread's (user-heap) stack onto the
-            ;; dedicated system ISR stack BEFORE saving anything. the thread's
+            ;; switch off the interrupted thread's stack onto the shared
+            ;; top-of-common-RAM ISR stack BEFORE saving anything. the thread's
             ;; stack only holds the hardware interrupt frame; all ISR working
             ;; state lives on the system stack so a deep ISR can never overflow
             ;; into and corrupt the thread it interrupted. `ld (nn),sp` and

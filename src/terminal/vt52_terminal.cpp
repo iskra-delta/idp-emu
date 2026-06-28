@@ -253,11 +253,17 @@ void vt52_terminal::handle_csi(uint8_t final_char)
             case 1:
                 current_attr_ |= attr_highlight;
                 break;
+            case 4:
+                current_attr_ |= attr_underline;
+                break;
             case 7:
                 current_attr_ |= attr_inverse;
                 break;
             case 22:
                 current_attr_ &= (uint8_t)~attr_highlight;
+                break;
+            case 24:
+                current_attr_ &= (uint8_t)~attr_underline;
                 break;
             case 27:
                 current_attr_ &= (uint8_t)~attr_inverse;
@@ -446,6 +452,7 @@ void vt52_terminal::render_to(display &disp) const
             const int off = row * cols + col;
             const uint8_t ch = screen_[off];
             const uint8_t attr = attr_[off];
+            const bool underline = (attr & attr_underline) != 0;
             const bool highlight = (attr & attr_highlight) != 0;
             const bool inverse = (attr & attr_inverse) != 0;
 
@@ -460,6 +467,13 @@ void vt52_terminal::render_to(display &disp) const
                 disp.draw_char(col, row, (char)ch, fg, bg);
             } else if (bg != MONO_BLACK) {
                 disp.fill_char_cell(col, row, bg);
+            }
+            if (underline) {
+                const int x0 = margin_x + col * display::CHAR_W;
+                const int y = margin_y + row * display::CHAR_H + (display::CHAR_H - 2);
+                for (int x = x0; x < x0 + display::CHAR_W - 1; ++x) {
+                    disp.set_level_pixel(x, y, fg);
+                }
             }
         }
     }

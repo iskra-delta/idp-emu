@@ -136,7 +136,7 @@ The tree now ships these commands:
 - `CAT.COM`: dumps one aligned file
 - `CP.COM`: copies one aligned file
 - `MV.COM`: moves one aligned file by copy+delete
-- `DEL.COM` / `RM.COM`: remove one file
+- `DEL.COM`: remove one file
 - `MKDIR.COM` / `RMDIR.COM`: create/remove directories
 - `TOUCH.COM`: create one empty file
 - `CLEAR.COM`: clear the active console

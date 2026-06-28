@@ -37,27 +37,43 @@ set(IDP_GUI_SOURCES
 
 add_executable(idp-emu ${IDP_CORE_SOURCES} ${IDP_GUI_SOURCES})
 target_link_libraries(idp-emu PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL Threads::Threads udap_dap udap_sdcc)
+target_compile_definitions(idp-emu PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+idp_require_partos_layout(idp-emu)
 
 add_executable(idp-probe probe_floppy.cpp ${IDP_CORE_SOURCES})
 target_link_libraries(idp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
+target_compile_definitions(idp-probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+idp_require_partos_layout(idp-probe)
 
 add_executable(idp-gdp-probe probe_gdp.cpp ${IDP_CORE_SOURCES})
 target_link_libraries(idp-gdp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
+target_compile_definitions(idp-gdp-probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+idp_require_partos_layout(idp-gdp-probe)
 
 add_executable(idp-bootload-probe probe_bootload.cpp ${IDP_CORE_SOURCES})
 target_link_libraries(idp-bootload-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
+target_compile_definitions(idp-bootload-probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+idp_require_partos_layout(idp-bootload-probe)
 
 add_executable(idp-kernel-probe probe_kernel.cpp ${IDP_CORE_SOURCES})
 target_link_libraries(idp-kernel-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
 target_compile_definitions(idp-kernel-probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+idp_require_partos_layout(idp-kernel-probe)
 
 add_executable(idp-full-boot-probe probe_full_boot.cpp ${IDP_CORE_SOURCES})
 target_link_libraries(idp-full-boot-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
 target_compile_definitions(idp-full-boot-probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+idp_require_partos_layout(idp-full-boot-probe)
 
 add_executable(idp-crt-shell-probe probe_crt_shell.cpp ${IDP_CORE_SOURCES})
 target_link_libraries(idp-crt-shell-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
 target_compile_definitions(idp-crt-shell-probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+idp_require_partos_layout(idp-crt-shell-probe)
+
+add_executable(idp-shell-command-probe probe_shell_command.cpp ${IDP_CORE_SOURCES})
+target_link_libraries(idp-shell-command-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
+target_compile_definitions(idp-shell-command-probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+idp_require_partos_layout(idp-shell-command-probe)
 
 # Optional: define your own debug macro if needed
 target_compile_definitions(idp-emu PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)

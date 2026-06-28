@@ -596,7 +596,17 @@ uint64_t z80dma_write(z80dma_t *dma, uint8_t data)
                 */
                 dma->port_b.timing = data;
                 dma->port_b.is_memory = false;
-                dma->compat_state = 0;
+                /*
+                    Partner DMA tables continue with the trailer:
+
+                        CF 01 CF 87
+
+                    Keep consuming that sequence here instead of dropping back
+                    into the generic decoder, otherwise the literal 0x01 is
+                    treated as WR0 and silently flips A->B write transfers
+                    back into B->A reads.
+                */
+                dma->compat_state = 10;
                 return dma->pins;
             case 8:
                 /*
@@ -615,6 +625,34 @@ uint64_t z80dma_write(z80dma_t *dma, uint8_t data)
             case 9:
                 dma->port_b.timing = data;
                 dma->port_b.is_memory = false;
+                dma->compat_state = 10;
+                return dma->pins;
+            case 10:
+                dma->wr[4] = data;
+                dma->mode = Z80DMA_MODE_CONTINUOUS;
+                dma->compat_state = 11;
+                return dma->pins;
+            case 11:
+                /*
+                    The fixed trailer's middle byte is a mode/control literal.
+                    Swallow it so it cannot be re-decoded as WR0.
+                */
+                dma->compat_state = 12;
+                return dma->pins;
+            case 12:
+                dma->wr[4] = data;
+                dma->mode = Z80DMA_MODE_CONTINUOUS;
+                dma->compat_state = 13;
+                return dma->pins;
+            case 13:
+                dma->wr[6] = data;
+                dma->port_a.address = dma->port_a.start_address;
+                dma->port_a.block_length = dma->port_a.start_length;
+                dma->port_b.address = dma->port_b.start_address;
+                dma->port_b.block_length = dma->port_b.start_length;
+                dma->enabled = true;
+                dma->status |= Z80DMA_STATUS_BUSY;
+                dma->state = Z80DMA_STATE_IDLE;
                 dma->compat_state = 0;
                 return dma->pins;
             default:

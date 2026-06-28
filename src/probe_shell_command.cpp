@@ -1,0 +1,1141 @@
+// probe_shell_command.cpp
+//
+// Lightweight PartOS shell probe:
+//   - boots straight to the shell prompt using the same staged handoff as the
+//     existing full-boot probe
+//   - injects one scripted command
+//   - runs for a bounded number of ticks or until the prompt returns
+//   - prints the final terminal/raw output so shell app regressions are quick
+//     to inspect without the heavyweight tracing probe
+//
+// 2026-06-28   tstih
+
+#include "partner_crt.hpp"
+
+#include <array>
+#include <algorithm>
+#include <cstdint>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
+#include <map>
+#include <regex>
+#include <string>
+#include <vector>
+
+namespace {
+
+constexpr uint16_t PC_STAGE1_READY = 0x2003;
+constexpr uint16_t PC_BOOT_HD = 0x2052;
+constexpr uint16_t ADDR_MODEL = 0xDE0E;
+constexpr uint16_t ADDR_NVRAM_CACHE = 0xDE0F;
+constexpr uint64_t BOOT_TICK_LIMIT = 40'000'000ULL;
+constexpr uint64_t DEFAULT_KEY_TICKS = 4000ULL;
+constexpr uint64_t DEFAULT_POST_TICKS = 2'000'000ULL;
+
+struct symbol_map {
+    std::map<std::string, std::vector<uint16_t>> syms;
+    std::vector<std::pair<uint16_t, std::string>> by_addr;
+
+    explicit symbol_map(const std::string &path)
+    {
+        std::ifstream f(path);
+        std::string line;
+        const std::regex re("([0-9A-Fa-f]{8})\\s+([_A-Za-z.][_A-Za-z0-9$.]*)");
+
+        while (std::getline(f, line)) {
+            for (auto it = std::sregex_iterator(line.begin(), line.end(), re);
+                 it != std::sregex_iterator(); ++it) {
+                const uint16_t a =
+                    (uint16_t)std::stoul((*it)[1].str(), nullptr, 16);
+                const std::string name = (*it)[2].str();
+                syms[name].push_back(a);
+                by_addr.push_back({a, name});
+            }
+        }
+        for (auto &kv : syms) {
+            std::sort(kv.second.begin(), kv.second.end());
+            kv.second.erase(std::unique(kv.second.begin(), kv.second.end()),
+                            kv.second.end());
+        }
+        std::sort(by_addr.begin(), by_addr.end());
+        by_addr.erase(std::unique(by_addr.begin(), by_addr.end()), by_addr.end());
+    }
+
+    uint16_t at(const std::string &name, size_t idx = 0) const
+    {
+        auto it = syms.find(name);
+
+        if (it == syms.end() || idx >= it->second.size()) {
+            std::printf("FATAL: symbol '%s'[%zu] not in map\n",
+                        name.c_str(), idx);
+            std::exit(2);
+        }
+        return it->second[idx];
+    }
+
+    std::string nearest(uint16_t addr) const
+    {
+        std::string best = "?";
+        uint16_t best_addr = 0;
+
+        for (const auto &it : by_addr) {
+            if (it.first > addr)
+                break;
+            best_addr = it.first;
+            best = it.second;
+        }
+        char buf[64];
+        std::snprintf(buf, sizeof(buf), "%s+0x%X", best.c_str(),
+                      (unsigned)(addr - best_addr));
+        return std::string(buf);
+    }
+};
+
+static uint16_t rd16(const std::vector<uint8_t> &v, size_t off = 0)
+{
+    return (v.size() >= (off + 2))
+               ? (uint16_t)(v[off] | (uint16_t(v[off + 1]) << 8))
+               : uint16_t(0);
+}
+
+static std::string bytes_hex(const std::vector<uint8_t> &v, size_t max_count = 16)
+{
+    std::string out;
+    char buf[8];
+    const size_t count = std::min(v.size(), max_count);
+
+    for (size_t i = 0; i < count; ++i) {
+        if (!out.empty())
+            out.push_back(' ');
+        std::snprintf(buf, sizeof(buf), "%02X", (unsigned)v[i]);
+        out += buf;
+    }
+    return out;
+}
+
+static std::string read_cstr_bounded(const partner_crt &emu,
+                                     uint16_t addr,
+                                     size_t cap = 16)
+{
+    std::string out;
+    const auto bytes = emu.read_debug_memory(addr, cap);
+
+    for (uint8_t b : bytes) {
+        if (b == 0)
+            break;
+        out.push_back((char)b);
+    }
+    return out;
+}
+
+static void dump_heap(const char *label,
+                      const partner_crt &emu,
+                      uint16_t heap,
+                      size_t limit)
+{
+    std::vector<uint16_t> seen;
+    uint16_t block = heap;
+    size_t count = 0;
+
+    std::printf("%s heap @%04X\n", label, heap);
+    while (block != 0 && count < limit) {
+        if (std::find(seen.begin(), seen.end(), block) != seen.end()) {
+            std::printf("  cycle at %04X\n", block);
+            return;
+        }
+        seen.push_back(block);
+        const auto hdr = emu.read_debug_memory(block, 9);
+        if (hdr.size() < 9) {
+            std::printf("  %04X <short read>\n", block);
+            return;
+        }
+        const uint16_t next = rd16(hdr, 0);
+        const uint16_t owner = rd16(hdr, 2);
+        const uint8_t stat = hdr[4];
+        const uint16_t size = rd16(hdr, 5);
+        const uint16_t dtor = rd16(hdr, 7);
+
+        std::printf("  %02zu: blk=%04X next=%04X owner=%04X stat=%02X size=%04X dtor=%04X\n",
+                    count, block, next, owner, stat, size, dtor);
+        block = next;
+        ++count;
+    }
+    if (block != 0)
+        std::printf("  ... truncated after %zu blocks, next=%04X\n", count, block);
+}
+
+static uint64_t env_u64_or(const char *name, uint64_t fallback)
+{
+    const char *s = std::getenv(name);
+
+    if (s == nullptr || *s == '\0')
+        return fallback;
+    const unsigned long long parsed = std::strtoull(s, nullptr, 10);
+    return parsed == 0ULL ? fallback : (uint64_t)parsed;
+}
+
+static std::string command_stem(const std::string &command)
+{
+    std::string out;
+
+    for (char ch : command) {
+        if (ch == '\r' || ch == '\n' || ch == ' ')
+            break;
+        if (ch >= 'A' && ch <= 'Z')
+            out.push_back((char)(ch - 'A' + 'a'));
+        else
+            out.push_back(ch);
+    }
+    return out;
+}
+
+static std::string uppercase_ascii(std::string s)
+{
+    for (char &ch : s) {
+        if (ch >= 'a' && ch <= 'z')
+            ch = (char)(ch - 'a' + 'A');
+    }
+    return s;
+}
+
+static bool shell_prompt_seen(const partner_crt &emu)
+{
+    const std::string term = emu.dump_terminal_text();
+    if (term.find("PARTOS shell") != std::string::npos &&
+        term.find("> ") != std::string::npos)
+        return true;
+    const std::string raw = emu.dump_raw_serial_text();
+    return raw.find("PARTOS shell") != std::string::npos &&
+           raw.find("> ") != std::string::npos;
+}
+
+static bool prompt_returned(const std::string &term, const std::string &raw)
+{
+    if (term.size() >= 2 && term.compare(term.size() - 2, 2, "> ") == 0)
+        return true;
+    return raw.size() >= 2 && raw.compare(raw.size() - 2, 2, "> ") == 0;
+}
+
+static bool build_all(const std::string &root)
+{
+    if (std::system(("make -C " + root + "/partos -s sys rom").c_str()) != 0) {
+        std::puts("FAIL: PartOS ROM/sys build failed");
+        return false;
+    }
+    if (std::system(("python3 " + root + "/tools/mkdosdisk.py " + root + "/disks").c_str()) != 0) {
+        std::puts("FAIL: disk image build failed");
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+int main(int argc, char **argv)
+{
+    std::string root = ".";
+    std::string command = "ls\r";
+#ifdef IDP_SOURCE_ROOT
+    root = IDP_SOURCE_ROOT;
+#endif
+    if (argc > 1)
+        root = argv[1];
+    if (argc > 2)
+        command = argv[2];
+
+    if (std::getenv("IDP_SKIP_BUILD") == nullptr && !build_all(root))
+        return 1;
+
+    const std::string rom_path = root + "/partos/bin/partos.rom";
+    const std::string hdd_path = root + "/disks/hdd-dos.img";
+    const std::string kernel_map_path = root + "/partos/build/kernel.map";
+    const std::string os_map_path = root + "/partos/build/os.map";
+    const std::string shell_map_path = root + "/partos/build/shell_payload.map";
+    const std::string app_stem = command_stem(command);
+    const std::string expected_proc_name = uppercase_ascii(app_stem);
+    const std::string app_xld_map_path =
+        root + "/partos/build/" + app_stem + "_xld.map";
+    const std::string app_payload_map_path =
+        root + "/partos/build/" + app_stem + "_payload.map";
+    symbol_map K(kernel_map_path);
+    symbol_map O(os_map_path);
+    symbol_map S(shell_map_path);
+    const bool have_xld_map = std::ifstream(app_xld_map_path).good();
+    const bool have_payload_map = std::ifstream(app_payload_map_path).good();
+    const bool have_app_map = have_xld_map || have_payload_map;
+    const std::string app_map_path =
+        have_xld_map ? app_xld_map_path : app_payload_map_path;
+    const symbol_map A = have_app_map ? symbol_map(app_map_path) : symbol_map(os_map_path);
+    const uint16_t app_symbol_bias = have_xld_map ? 0x000c : 0x0000;
+
+    const uint16_t pc_process_wait = O.at("_process_wait");
+    const uint16_t pwait_target_addr = O.at("_process_wait_target_debug");
+    const uint16_t pwait_hl_addr = O.at("_process_wait_hl_debug");
+    const uint16_t pwait_de_addr = O.at("_process_wait_de_debug");
+    const uint16_t syscall_service_addr = O.at("_syscall_service");
+    const uint16_t pc_run_command = O.at("_partos_run_command");
+    const uint16_t pc_write_console = O.at("_partos_write_console");
+    const uint16_t pc_svc_query = O.at("_svc_query");
+    const uint16_t pc_svc_register = O.at("_svc_register");
+    const uint16_t pc_thread_create = K.at("_thread_create");
+    const uint16_t pc_tc_fail0 = K.at("tc_fail0$");
+    const uint16_t pc_tc_fail1 = K.at("tc_fail1$");
+
+    partner_crt emu(terminal_profile::vt52,
+                    root + "/partos/partos_shadow_nvram.bin");
+    emu.load_rom(rom_path);
+    emu.load_hdd(hdd_path);
+    emu.reset();
+
+    uint64_t guard = 0;
+    while (emu.is_rom_enabled() || emu.get_current_pc() != PC_STAGE1_READY) {
+        emu.tick();
+        if (++guard > 50'000'000ULL) {
+            std::printf("FAIL: never reached stage-1 ready state (pc=%04X rom=%d)\n",
+                        emu.get_current_pc(), emu.is_rom_enabled() ? 1 : 0);
+            return 1;
+        }
+    }
+
+    static const std::array<uint8_t, 8> k_nvram = {
+        0x00, 0x40, 0x80, 0x3F, 0x00, 0x00, 0x00, 0x02,
+    };
+    emu.seed_cmos_nvram(k_nvram.data(), k_nvram.size());
+    emu.write_debug_memory(ADDR_MODEL, {0x00});
+    emu.write_debug_memory(ADDR_NVRAM_CACHE,
+                           std::vector<uint8_t>(k_nvram.begin(), k_nvram.end()));
+
+    auto st = emu.capture_debug_cpu_state();
+    st.sp = 0xBFFF;
+    emu.apply_debug_cpu_state(st);
+    emu.debug_set_pc(PC_BOOT_HD);
+
+    uint64_t hits_svc_register = 0;
+    uint64_t first_svc_register_tick = 0;
+    uint16_t first_svc_register_hl = 0;
+    uint16_t first_svc_register_de = 0;
+    std::string first_svc_register_name;
+    std::string first_svc_register_name_bytes;
+    std::string first_svc_register_table_bytes;
+
+    while (true) {
+        emu.tick();
+        if (emu.get_current_pc() == pc_svc_register) {
+            hits_svc_register++;
+            if (first_svc_register_tick == 0) {
+                const auto boot_st = emu.capture_debug_cpu_state();
+                first_svc_register_tick = emu.get_tick_count();
+                first_svc_register_hl = boot_st.hl;
+                first_svc_register_de = boot_st.de;
+                first_svc_register_name =
+                    read_cstr_bounded(emu, boot_st.hl, 24);
+                first_svc_register_name_bytes =
+                    bytes_hex(emu.read_debug_memory(boot_st.hl, 16), 16);
+                first_svc_register_table_bytes =
+                    bytes_hex(emu.read_debug_memory(boot_st.de, 16), 16);
+            }
+        }
+        if ((guard & 0x3FFu) == 0 && shell_prompt_seen(emu))
+            break;
+        if (++guard > BOOT_TICK_LIMIT) {
+            std::printf("FAIL: never reached shell prompt (pc=%04X tick=%llu)\n",
+                        emu.get_current_pc(),
+                        (unsigned long long)emu.get_tick_count());
+            std::printf("terminal:\n%s\n", emu.dump_terminal_text().c_str());
+            std::printf("raw:\n%s\n", emu.dump_raw_serial_text().c_str());
+            return 1;
+        }
+    }
+
+    const std::string initial_term = emu.dump_terminal_text();
+    const uint64_t key_ticks = env_u64_or("IDP_KEY_TICKS", DEFAULT_KEY_TICKS);
+    const uint64_t post_ticks = env_u64_or("IDP_POST_TICKS", DEFAULT_POST_TICKS);
+    const bool break_on_prompt = (std::getenv("IDP_KEEP_RUNNING_AFTER_PROMPT") == nullptr);
+
+    uint64_t hits_process_wait = 0;
+    uint64_t hits_run_command = 0;
+    uint64_t first_process_wait_tick = 0;
+    uint64_t first_run_command_tick = 0;
+    uint16_t first_wait_current = 0;
+    uint16_t first_wait_running = 0;
+    uint16_t first_wait_current_next = 0;
+    std::array<uint16_t, 96> wait_pc_trace{};
+    std::array<uint16_t, 96> wait_current_trace{};
+    size_t wait_trace_len = 0;
+    uint64_t child_current_hits = 0;
+    uint64_t first_child_current_tick = 0;
+    uint16_t first_child_pc = 0;
+    uint64_t child_user_hits = 0;
+    uint64_t first_child_user_tick = 0;
+    uint16_t first_child_user_pc = 0;
+    std::array<uint16_t, 128> child_user_pc_trace{};
+    size_t child_user_pc_trace_len = 0;
+    std::array<uint16_t, 64> child_pc_trace{};
+    size_t child_pc_trace_len = 0;
+    std::array<uint16_t, 128> current_trace_threads{};
+    std::array<uint16_t, 128> current_trace_pcs{};
+    std::array<uint64_t, 128> current_trace_ticks{};
+    size_t current_trace_len = 0;
+    uint16_t last_current = 0xffff;
+    uint64_t thread_create_hits = 0;
+    uint16_t last_thread_create_hl = 0;
+    uint16_t last_thread_create_de = 0;
+    uint16_t last_thread_create_bank = 0;
+    uint16_t last_thread_create_data = 0;
+    uint64_t tc_fail0_hits = 0;
+    uint64_t tc_fail1_hits = 0;
+    bool saw_child_write_console = false;
+    uint16_t child_write_hl = 0;
+    uint16_t child_write_de = 0;
+    std::string child_write_bytes;
+    bool saw_child_call_hl = false;
+    uint16_t child_call_hl_pc = 0;
+    uint16_t child_call_hl_hl = 0;
+    bool saw_child_call_iy = false;
+    uint16_t child_call_iy_pc = 0;
+    uint16_t child_call_iy_iy = 0;
+    bool saw_child_main = false;
+    uint16_t child_main_pc = 0;
+    bool saw_child_app_write_cstr = false;
+    uint16_t child_app_write_cstr_pc = 0;
+    uint16_t child_app_write_cstr_hl = 0;
+    bool saw_child_svc_query = false;
+    uint16_t child_svc_query_hl = 0;
+    std::string child_svc_query_name;
+    std::array<uint16_t, 8> child_svc_query_pcs{};
+    std::array<uint16_t, 8> child_svc_query_hls{};
+    std::array<std::string, 8> child_svc_query_names{};
+    size_t child_svc_query_count = 0;
+    std::array<uint16_t, 64> child_svc_pc_trace{};
+    size_t child_svc_pc_trace_len = 0;
+    bool saw_child_svc_found = false;
+    uint16_t child_svc_found_pc = 0;
+    uint16_t child_svc_found_hl = 0;
+    bool saw_child_crt0_tail = false;
+    uint16_t child_crt0_tail_pc = 0;
+    uint16_t child_crt0_tail_hl = 0;
+    uint16_t child_crt0_tail_de = 0;
+    uint16_t child_crt0_tail_bc = 0;
+    uint16_t child_crt0_tail_sp = 0;
+    std::string child_crt0_tail_stack;
+    std::string child_crt0_tail_hl_bytes;
+    std::string child_crt0_tail_de_bytes;
+    bool saw_child_boot_after_init = false;
+    uint16_t child_boot_after_init_pc = 0;
+    uint16_t child_boot_after_init_de = 0;
+    uint16_t child_boot_after_init_hl = 0;
+    uint16_t child_boot_after_init_iy = 0;
+    bool saw_child_pa_init_after_rst = false;
+    uint16_t child_pa_init_after_rst_pc = 0;
+    uint16_t child_pa_init_after_rst_de = 0;
+    uint16_t child_pa_init_after_rst_hl = 0;
+    bool saw_child_pa_dead = false;
+    uint16_t child_pa_dead_pc = 0;
+    uint16_t child_pa_dead_sp = 0;
+    std::string child_pa_dead_stack;
+    uint16_t target_process = 0;
+    uint16_t target_main_thread = 0;
+    std::string target_name;
+    bool captured_child_process_state = false;
+    uint16_t child_process_ptr = 0;
+    uint16_t child_process_cmd = 0;
+    uint16_t child_process_env = 0;
+    std::string child_process_cmd_text;
+    std::string child_process_env_bytes;
+    uint16_t child_libc_service = 0;
+    std::string child_libc_name_bytes;
+
+    for (char ch : command) {
+        if (ch == '\n') {
+            for (uint64_t n = 0; n < post_ticks; ++n) {
+                emu.tick();
+                const std::string term = emu.dump_terminal_text();
+                const std::string raw = emu.dump_raw_serial_text();
+                if (prompt_returned(term, raw))
+                    break;
+            }
+            continue;
+        }
+        emu.key_input((uint8_t)ch);
+        for (uint64_t n = 0; n < key_ticks; ++n)
+            emu.tick();
+    }
+
+    bool returned = false;
+    for (uint64_t n = 0; n < post_ticks; ++n) {
+        emu.tick();
+        const uint16_t pc = emu.get_current_pc();
+        if (first_process_wait_tick != 0 && wait_trace_len < wait_pc_trace.size()) {
+            wait_pc_trace[wait_trace_len] = pc;
+            wait_current_trace[wait_trace_len] =
+                rd16(emu.read_debug_memory(K.at("_thread_current"), 2));
+            wait_trace_len++;
+        }
+
+        if (pc == pc_process_wait) {
+            hits_process_wait++;
+            if (first_process_wait_tick == 0) {
+                first_process_wait_tick = emu.get_tick_count();
+                first_wait_current =
+                    rd16(emu.read_debug_memory(K.at("_thread_current"), 2));
+                first_wait_running =
+                    rd16(emu.read_debug_memory(K.at("_thread_first_running"), 2));
+                if (first_wait_current != 0) {
+                    first_wait_current_next =
+                        rd16(emu.read_debug_memory(first_wait_current, 2));
+                }
+            }
+        }
+        if (pc == pc_run_command) {
+            hits_run_command++;
+            if (first_run_command_tick == 0)
+                first_run_command_tick = emu.get_tick_count();
+        }
+        if (pc == pc_svc_register) {
+            hits_svc_register++;
+            if (first_svc_register_tick == 0) {
+                const auto st = emu.capture_debug_cpu_state();
+                first_svc_register_tick = emu.get_tick_count();
+                first_svc_register_hl = st.hl;
+                first_svc_register_de = st.de;
+                first_svc_register_name = read_cstr_bounded(emu, st.hl, 24);
+                first_svc_register_name_bytes =
+                    bytes_hex(emu.read_debug_memory(st.hl, 16), 16);
+                first_svc_register_table_bytes =
+                    bytes_hex(emu.read_debug_memory(st.de, 16), 16);
+            }
+        }
+        if (pc == pc_thread_create) {
+            const auto st = emu.capture_debug_cpu_state();
+            const auto stack = emu.read_debug_memory(st.sp, 6);
+
+            thread_create_hits++;
+            last_thread_create_hl = st.hl;
+            last_thread_create_de = st.de;
+            last_thread_create_bank = stack.size() >= 4 ? rd16(stack, 2) : 0;
+            last_thread_create_data = stack.size() >= 6 ? rd16(stack, 4) : 0;
+        }
+        if (pc == pc_tc_fail0)
+            tc_fail0_hits++;
+        if (pc == pc_tc_fail1)
+            tc_fail1_hits++;
+        {
+            const uint16_t current =
+                rd16(emu.read_debug_memory(K.at("_thread_current"), 2));
+            if (current != last_current) {
+                last_current = current;
+                if (current_trace_len < current_trace_threads.size()) {
+                    current_trace_threads[current_trace_len] = current;
+                    current_trace_pcs[current_trace_len] = pc;
+                    current_trace_ticks[current_trace_len] = emu.get_tick_count();
+                    current_trace_len++;
+                }
+            }
+            const uint16_t process0 =
+                rd16(emu.read_debug_memory(O.at("_process_first"), 2));
+            const uint16_t main0 =
+                process0 == 0
+                    ? 0
+                    : rd16(emu.read_debug_memory((uint16_t)(process0 + 13), 2));
+            const uint16_t process1 =
+                process0 == 0 ? 0 : rd16(emu.read_debug_memory(process0, 2));
+            const uint16_t main1 =
+                process1 == 0
+                    ? 0
+                    : rd16(emu.read_debug_memory((uint16_t)(process1 + 13), 2));
+            if (target_main_thread == 0) {
+                const std::string name0 =
+                    process0 == 0 ? "" : read_cstr_bounded(emu, (uint16_t)(process0 + 5), 8);
+                const std::string name1 =
+                    process1 == 0 ? "" : read_cstr_bounded(emu, (uint16_t)(process1 + 5), 8);
+                if (!name0.empty() && name0 == expected_proc_name &&
+                    main0 >= 0x0100) {
+                    target_process = process0;
+                    target_main_thread = main0;
+                    target_name = name0;
+                } else if (!name1.empty() && name1 == expected_proc_name &&
+                           main1 >= 0x0100) {
+                    target_process = process1;
+                    target_main_thread = main1;
+                    target_name = name1;
+                }
+            }
+            const uint16_t entry0 =
+                target_main_thread == 0
+                    ? 0
+                    : rd16(emu.read_debug_memory((uint16_t)(target_main_thread + 7), 2));
+            uint16_t child_base = 0;
+            uint16_t child_top = 0;
+
+            if (have_app_map && entry0 >= A.at("_app_crt0_entry")) {
+                child_base = (uint16_t)(entry0 - A.at("_app_crt0_entry"));
+                child_top = (uint16_t)(child_base + A.at("l__CODE"));
+            }
+
+	            if (target_main_thread != 0 && current == target_main_thread) {
+                child_current_hits++;
+                if (first_child_current_tick == 0) {
+                    first_child_current_tick = emu.get_tick_count();
+                    first_child_pc = pc;
+                }
+                if (!captured_child_process_state && target_process != 0) {
+                    child_process_ptr = rd16(
+                        emu.read_debug_memory((uint16_t)(current + 22), 2));
+                    child_process_cmd = rd16(
+                        emu.read_debug_memory((uint16_t)(target_process + 15), 2));
+                    child_process_env = rd16(
+                        emu.read_debug_memory((uint16_t)(target_process + 17), 2));
+                    child_process_cmd_text =
+                        child_process_cmd == 0
+                            ? ""
+                            : read_cstr_bounded(emu, child_process_cmd, 64);
+                    child_process_env_bytes =
+                        child_process_env == 0
+                            ? ""
+                            : bytes_hex(emu.read_debug_memory(child_process_env, 16), 16);
+                    child_libc_service =
+                        rd16(emu.read_debug_memory(O.at("__svc_first"), 2));
+                    child_libc_name_bytes =
+                        child_libc_service == 0
+                            ? ""
+                            : bytes_hex(
+                                  emu.read_debug_memory((uint16_t)(child_libc_service + 4),
+                                                        16),
+                                  16);
+                    captured_child_process_state = true;
+                }
+                if (child_pc_trace_len < child_pc_trace.size() &&
+                    (child_pc_trace_len == 0 ||
+                     child_pc_trace[child_pc_trace_len - 1] != pc)) {
+                    child_pc_trace[child_pc_trace_len++] = pc;
+                }
+                if (have_app_map && pc >= child_base && pc < child_top) {
+                    child_user_hits++;
+                    if (first_child_user_tick == 0) {
+                        first_child_user_tick = emu.get_tick_count();
+                        first_child_user_pc = pc;
+                    }
+                    if (child_user_pc_trace_len < child_user_pc_trace.size() &&
+                        (child_user_pc_trace_len == 0 ||
+                         child_user_pc_trace[child_user_pc_trace_len - 1] != pc)) {
+                        child_user_pc_trace[child_user_pc_trace_len++] = pc;
+                    }
+                }
+                if (!saw_child_call_hl && have_app_map &&
+                    pc == child_base) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_call_hl_pc = pc;
+                    child_call_hl_hl = st.hl;
+                    saw_child_call_hl = true;
+                }
+                if (!saw_child_call_iy && have_app_map &&
+                    pc == child_base + 1) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_call_iy_pc = pc;
+                    child_call_iy_iy = st.iy;
+                    saw_child_call_iy = true;
+                }
+                if (!saw_child_crt0_tail && have_app_map &&
+                    pc >= child_base + 0x002a &&
+                    pc <= child_base + 0x002c) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_crt0_tail_pc = pc;
+                    child_crt0_tail_hl = st.hl;
+                    child_crt0_tail_de = st.de;
+                    child_crt0_tail_bc = st.bc;
+                    child_crt0_tail_sp = st.sp;
+                    child_crt0_tail_stack =
+                        bytes_hex(emu.read_debug_memory(st.sp, 12), 12);
+                    child_crt0_tail_hl_bytes =
+                        bytes_hex(emu.read_debug_memory(st.hl, 16), 16);
+                    child_crt0_tail_de_bytes =
+                        bytes_hex(emu.read_debug_memory(st.de, 16), 16);
+                    saw_child_crt0_tail = true;
+                }
+	                if (!saw_child_main && have_app_map &&
+	                    pc == child_base + A.at("_main") + app_symbol_bias) {
+	                    child_main_pc = pc;
+	                    saw_child_main = true;
+	                }
+	                if (!saw_child_boot_after_init && have_app_map &&
+	                    A.syms.count("_app_bootstrap") != 0 &&
+	                    pc == (uint16_t)(child_base + A.at("_app_bootstrap") +
+	                                     app_symbol_bias + 0x000c)) {
+	                    const auto st = emu.capture_debug_cpu_state();
+	                    child_boot_after_init_pc = pc;
+	                    child_boot_after_init_de = st.de;
+	                    child_boot_after_init_hl = st.hl;
+	                    child_boot_after_init_iy = st.iy;
+	                    saw_child_boot_after_init = true;
+	                }
+	                if (!saw_child_pa_init_after_rst &&
+	                    pc == (uint16_t)(child_base + 0x0036)) {
+	                    const auto st = emu.capture_debug_cpu_state();
+	                    child_pa_init_after_rst_pc = pc;
+	                    child_pa_init_after_rst_de = st.de;
+	                    child_pa_init_after_rst_hl = st.hl;
+	                    saw_child_pa_init_after_rst = true;
+	                }
+	                if (!saw_child_pa_dead && have_app_map &&
+	                    A.syms.count("_pa_dead") != 0 &&
+	                    pc == (uint16_t)(child_base + A.at("_pa_dead") +
+	                                     app_symbol_bias)) {
+	                    const auto st = emu.capture_debug_cpu_state();
+	                    child_pa_dead_pc = pc;
+	                    child_pa_dead_sp = st.sp;
+	                    child_pa_dead_stack =
+	                        bytes_hex(emu.read_debug_memory(st.sp, 16), 16);
+	                    saw_child_pa_dead = true;
+	                }
+	                if (!saw_child_app_write_cstr && have_app_map &&
+	                    A.syms.count("_app_write_cstr") != 0 &&
+	                    pc == child_base + A.at("_app_write_cstr") + app_symbol_bias) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_app_write_cstr_pc = pc;
+                    child_app_write_cstr_hl = st.hl;
+                    saw_child_app_write_cstr = true;
+                }
+                if (!saw_child_write_console && pc == pc_write_console) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_write_hl = st.hl;
+                    child_write_de = st.de;
+                    child_write_bytes =
+                        bytes_hex(emu.read_debug_memory(st.hl, st.de > 24 ? 24 : st.de),
+                                  st.de > 24 ? 24 : st.de);
+                    saw_child_write_console = true;
+                }
+                if (!saw_child_svc_query && pc == pc_svc_query) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_svc_query_hl = st.hl;
+                    child_svc_query_name = read_cstr_bounded(emu, st.hl, 24);
+                    saw_child_svc_query = true;
+                }
+                if (pc == pc_svc_query &&
+                    child_svc_query_count < child_svc_query_pcs.size()) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_svc_query_pcs[child_svc_query_count] = pc;
+                    child_svc_query_hls[child_svc_query_count] = st.hl;
+                    child_svc_query_names[child_svc_query_count] =
+                        read_cstr_bounded(emu, st.hl, 24);
+                    child_svc_query_count++;
+                }
+                if (pc >= pc_svc_query && pc < (uint16_t)(pc_svc_query + 0x30) &&
+                    child_svc_pc_trace_len < child_svc_pc_trace.size() &&
+                    (child_svc_pc_trace_len == 0 ||
+                     child_svc_pc_trace[child_svc_pc_trace_len - 1] != pc)) {
+                    child_svc_pc_trace[child_svc_pc_trace_len++] = pc;
+                }
+                if (!saw_child_svc_found &&
+                    pc == (uint16_t)(pc_svc_query + 0x1f)) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_svc_found_pc = pc;
+                    child_svc_found_hl = st.hl;
+                    saw_child_svc_found = true;
+                }
+            }
+        }
+        if ((n & 0x3FFu) != 0)
+            continue;
+        const std::string term = emu.dump_terminal_text();
+        const std::string raw = emu.dump_raw_serial_text();
+        if ((term != initial_term || raw.find(command) != std::string::npos) &&
+            prompt_returned(term, raw)) {
+            returned = true;
+            if (break_on_prompt)
+                break;
+        }
+    }
+
+    std::printf("returned=%d pc=%04X tick=%llu\n",
+                returned ? 1 : 0,
+                emu.get_current_pc(),
+                (unsigned long long)emu.get_tick_count());
+    std::printf("pc.sym=%s\n", O.nearest(emu.get_current_pc()).c_str());
+    std::printf("trace: run_command_hits=%llu first_run=%llu process_wait_hits=%llu first_wait=%llu\n",
+                (unsigned long long)hits_run_command,
+                (unsigned long long)first_run_command_tick,
+                (unsigned long long)hits_process_wait,
+                (unsigned long long)first_process_wait_tick);
+    if (first_svc_register_tick != 0) {
+        std::printf("trace: svc_register_hits=%llu first_reg=%llu hl=%04X de=%04X name='%s'\n",
+                    (unsigned long long)hits_svc_register,
+                    (unsigned long long)first_svc_register_tick,
+                    first_svc_register_hl,
+                    first_svc_register_de,
+                    first_svc_register_name.c_str());
+        std::printf("trace: svc_register_name_bytes=%s\n",
+                    first_svc_register_name_bytes.c_str());
+        std::printf("trace: svc_register_table_bytes=%s\n",
+                    first_svc_register_table_bytes.c_str());
+    }
+    if (first_process_wait_tick != 0) {
+        std::printf("trace: first_wait_current=%04X running=%04X current_next=%04X\n",
+                    first_wait_current, first_wait_running, first_wait_current_next);
+        std::printf("trace: pwait_hl=%04X pwait_de=%04X\n",
+                    rd16(emu.read_debug_memory(pwait_hl_addr, 2)),
+                    rd16(emu.read_debug_memory(pwait_de_addr, 2)));
+        std::printf("trace: pwait_target=%04X\n",
+                    rd16(emu.read_debug_memory(pwait_target_addr, 2)));
+        if (wait_trace_len != 0) {
+            std::string trace;
+            char buf[32];
+
+            for (size_t i = 0; i < wait_trace_len; ++i) {
+                if (!trace.empty())
+                    trace += " ";
+                std::snprintf(buf, sizeof(buf), "%04X/%04X",
+                              wait_current_trace[i], wait_pc_trace[i]);
+                trace += buf;
+            }
+            std::printf("trace: wait_trace=%s\n", trace.c_str());
+        }
+    }
+    std::printf("trace: child_current_hits=%llu first_child=%llu\n",
+                (unsigned long long)child_current_hits,
+                (unsigned long long)first_child_current_tick);
+    if (target_main_thread != 0) {
+        std::printf("trace: target_process=%04X target_main=%04X name='%s'\n",
+                    target_process, target_main_thread, target_name.c_str());
+    }
+    if (captured_child_process_state) {
+        std::printf(
+            "trace: child_process ptr=%04X current.process=%04X cmd=%04X env=%04X cmdtext='%s' envbytes=%s libc=%04X libc_name_bytes=%s\n",
+            target_process,
+            child_process_ptr,
+            child_process_cmd,
+            child_process_env,
+            child_process_cmd_text.c_str(),
+            child_process_env_bytes.c_str(),
+            child_libc_service,
+            child_libc_name_bytes.c_str());
+    }
+    std::printf("trace: first_child_pc=%04X\n", first_child_pc);
+    if (child_pc_trace_len != 0) {
+        std::string trace;
+        char buf[8];
+
+        for (size_t i = 0; i < child_pc_trace_len; ++i) {
+            if (!trace.empty())
+                trace += " ";
+            std::snprintf(buf, sizeof(buf), "%04X", child_pc_trace[i]);
+            trace += buf;
+        }
+        std::printf("trace: child_pc_trace=%s\n", trace.c_str());
+    }
+    if (current_trace_len != 0) {
+        std::string trace;
+        char buf[96];
+
+        for (size_t i = 0; i < current_trace_len; ++i) {
+            if (!trace.empty())
+                trace += " | ";
+            std::snprintf(buf, sizeof(buf), "%04X@%04X#%llu",
+                          current_trace_threads[i],
+                          current_trace_pcs[i],
+                          (unsigned long long)current_trace_ticks[i]);
+            trace += buf;
+        }
+        std::printf("trace: current_trace=%s\n", trace.c_str());
+    }
+    if (have_app_map) {
+        std::printf("trace: child_user_hits=%llu first_user=%llu first_user_pc=%04X\n",
+                    (unsigned long long)child_user_hits,
+                    (unsigned long long)first_child_user_tick,
+                    first_child_user_pc);
+        if (child_user_pc_trace_len != 0) {
+            std::string trace;
+            char buf[8];
+
+            for (size_t i = 0; i < child_user_pc_trace_len; ++i) {
+                if (!trace.empty())
+                    trace += " ";
+                std::snprintf(buf, sizeof(buf), "%04X", child_user_pc_trace[i]);
+                trace += buf;
+            }
+            std::printf("trace: child_user_pc_trace=%s\n", trace.c_str());
+        }
+    }
+    if (saw_child_call_hl) {
+        std::printf("trace: child_call_hl pc=%04X hl=%04X\n",
+                    child_call_hl_pc, child_call_hl_hl);
+    }
+    if (saw_child_call_iy) {
+        std::printf("trace: child_call_iy pc=%04X iy=%04X\n",
+                    child_call_iy_pc, child_call_iy_iy);
+    }
+    if (saw_child_main) {
+        std::printf("trace: child_main pc=%04X\n", child_main_pc);
+    }
+    if (saw_child_app_write_cstr) {
+        std::printf("trace: child_app_write_cstr pc=%04X hl=%04X\n",
+                    child_app_write_cstr_pc, child_app_write_cstr_hl);
+    }
+    if (saw_child_write_console) {
+        std::printf("trace: child_write_console hl=%04X de=%04X bytes=%s\n",
+                    child_write_hl, child_write_de, child_write_bytes.c_str());
+    }
+    if (saw_child_svc_query) {
+        std::printf("trace: child_svc_query hl=%04X name='%s'\n",
+                    child_svc_query_hl, child_svc_query_name.c_str());
+    }
+    if (child_svc_query_count != 0) {
+        std::string trace;
+        char buf[64];
+
+        for (size_t i = 0; i < child_svc_query_count; ++i) {
+            if (!trace.empty())
+                trace += " ";
+            std::snprintf(buf, sizeof(buf), "%04X:%04X:%s",
+                          child_svc_query_pcs[i],
+                          child_svc_query_hls[i],
+                          child_svc_query_names[i].c_str());
+            trace += buf;
+        }
+        std::printf("trace: child_svc_queries=%s\n", trace.c_str());
+    }
+    if (child_svc_pc_trace_len != 0) {
+        std::string trace;
+        char buf[8];
+
+        for (size_t i = 0; i < child_svc_pc_trace_len; ++i) {
+            if (!trace.empty())
+                trace += " ";
+            std::snprintf(buf, sizeof(buf), "%04X", child_svc_pc_trace[i]);
+            trace += buf;
+        }
+        std::printf("trace: child_svc_pc_trace=%s\n", trace.c_str());
+    }
+    if (saw_child_svc_found) {
+        std::printf("trace: child_svc_found pc=%04X hl=%04X\n",
+                    child_svc_found_pc,
+                    child_svc_found_hl);
+    }
+    if (saw_child_crt0_tail) {
+        std::printf("trace: child_crt0_tail pc=%04X hl=%04X de=%04X bc=%04X sp=%04X stack=%s hlmem=%s demem=%s\n",
+                    child_crt0_tail_pc,
+                    child_crt0_tail_hl,
+                    child_crt0_tail_de,
+                    child_crt0_tail_bc,
+                    child_crt0_tail_sp,
+                    child_crt0_tail_stack.c_str(),
+                    child_crt0_tail_hl_bytes.c_str(),
+                    child_crt0_tail_de_bytes.c_str());
+    }
+    if (saw_child_boot_after_init) {
+        std::printf("trace: child_boot_after_init pc=%04X de=%04X hl=%04X iy=%04X\n",
+                    child_boot_after_init_pc,
+                    child_boot_after_init_de,
+                    child_boot_after_init_hl,
+                    child_boot_after_init_iy);
+    }
+    if (saw_child_pa_init_after_rst) {
+        std::printf("trace: child_pa_init_after_rst pc=%04X de=%04X hl=%04X\n",
+                    child_pa_init_after_rst_pc,
+                    child_pa_init_after_rst_de,
+                    child_pa_init_after_rst_hl);
+    }
+    if (saw_child_pa_dead) {
+        std::printf("trace: child_pa_dead pc=%04X sp=%04X stack=%s\n",
+                    child_pa_dead_pc,
+                    child_pa_dead_sp,
+                    child_pa_dead_stack.c_str());
+    }
+    std::printf("threads: current=%04X running=%04X waiting=%04X terminated=%04X\n",
+                rd16(emu.read_debug_memory(K.at("_thread_current"), 2)),
+                rd16(emu.read_debug_memory(K.at("_thread_first_running"), 2)),
+                rd16(emu.read_debug_memory(K.at("_thread_first_waiting"), 2)),
+                rd16(emu.read_debug_memory(K.at("_thread_first_terminated"), 2)));
+    std::printf("thread.create: hits=%llu last_entry=%04X last_stack=%04X last_bank=%04X last_data=%04X fail0=%llu fail1=%llu\n",
+                (unsigned long long)thread_create_hits,
+                last_thread_create_hl,
+                last_thread_create_de,
+                last_thread_create_bank,
+                last_thread_create_data,
+                (unsigned long long)tc_fail0_hits,
+                (unsigned long long)tc_fail1_hits);
+    std::printf("processes: first=%04X perror=%02X pstage=%02X presult=%04X\n",
+                rd16(emu.read_debug_memory(O.at("_process_first"), 2)),
+                emu.read_debug_memory(O.at("_process_last_error"), 1).empty()
+                    ? 0xFF
+                    : emu.read_debug_memory(O.at("_process_last_error"), 1)[0],
+                emu.read_debug_memory(O.at("_process_last_stage"), 1).empty()
+                    ? 0xFF
+                    : emu.read_debug_memory(O.at("_process_last_stage"), 1)[0],
+                rd16(emu.read_debug_memory(O.at("_process_last_result"), 2)));
+    {
+        const uint16_t svc = rd16(emu.read_debug_memory(syscall_service_addr, 2));
+        const uint16_t fntable =
+            svc == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(svc + 20), 2));
+        std::printf("syscall.service: svc=%04X table=%04X get_sys=%04X write=%04X query=%04X exit=%04X\n",
+                    svc,
+                    fntable,
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 0), 2)),
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 6), 2)),
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 42), 2)),
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 70), 2)));
+        const uint16_t svc_head = rd16(emu.read_debug_memory(O.at("__svc_first"), 2));
+        const uint16_t svc_next =
+            svc_head == 0 ? 0 : rd16(emu.read_debug_memory(svc_head, 2));
+        const uint16_t svc_table =
+            svc_head == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(svc_head + 20), 2));
+        const uint16_t svc2_table =
+            svc_next == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(svc_next + 20), 2));
+        const uint16_t svc_next2 =
+            svc_next == 0 ? 0 : rd16(emu.read_debug_memory(svc_next, 2));
+        const uint16_t svc3_table =
+            svc_next2 == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(svc_next2 + 20), 2));
+        std::printf("svc.list.raw: head=%04X next=%04X next2=%04X table=%04X next_table=%04X next2_table=%04X\n",
+                    svc_head, svc_next, svc_next2, svc_table, svc2_table, svc3_table);
+        std::printf("svc.list.names: head='%s' next='%s' next2='%s'\n",
+                    svc_head == 0 ? "" : read_cstr_bounded(emu, (uint16_t)(svc_head + 4), 16).c_str(),
+                    svc_next == 0 ? "" : read_cstr_bounded(emu, (uint16_t)(svc_next + 4), 16).c_str(),
+                    svc_next2 == 0 ? "" : read_cstr_bounded(emu, (uint16_t)(svc_next2 + 4), 16).c_str());
+    }
+    {
+        const uint16_t current = rd16(emu.read_debug_memory(K.at("_thread_current"), 2));
+        const uint16_t waiting = rd16(emu.read_debug_memory(K.at("_thread_first_waiting"), 2));
+        const uint16_t process0 = rd16(emu.read_debug_memory(O.at("_process_first"), 2));
+        const uint16_t process1 =
+            process0 == 0 ? 0 : rd16(emu.read_debug_memory(process0, 2));
+        if (current != 0) {
+            const auto t = emu.read_debug_memory(current, 25);
+            std::printf("current.thread: next=%04X wait=%04X num=%u state=%u process=%04X bank=%u\n",
+                        rd16(t, 0), rd16(t, 16),
+                        t.size() > 18 ? (unsigned)t[18] : 0U,
+                        t.size() > 19 ? (unsigned)t[19] : 0U,
+                        rd16(t, 22),
+                        t.size() > 24 ? (unsigned)t[24] : 0U);
+            if (t.size() >= 9) {
+                const uint16_t shell_base = (uint16_t)(rd16(t, 7) - S.at("shell_entry"));
+                const uint16_t shell_run_result =
+                    rd16(emu.read_debug_memory((uint16_t)(shell_base + S.at("shell_registered_service$")), 2));
+                const uint16_t shell_tmp_ptr =
+                    rd16(emu.read_debug_memory((uint16_t)(shell_base + S.at("shell_tmp_ptr$")), 2));
+                std::printf("shell.debug: base=%04X run_result=%04X tmp_ptr=%04X\n",
+                            shell_base, shell_run_result, shell_tmp_ptr);
+            }
+        }
+        if (waiting != 0) {
+            const auto t = emu.read_debug_memory(waiting, 25);
+            std::printf("waiting.thread: next=%04X wait=%04X num=%u state=%u process=%04X bank=%u\n",
+                        rd16(t, 0), rd16(t, 16),
+                        t.size() > 18 ? (unsigned)t[18] : 0U,
+                        t.size() > 19 ? (unsigned)t[19] : 0U,
+                        rd16(t, 22),
+                        t.size() > 24 ? (unsigned)t[24] : 0U);
+        }
+        if (process0 != 0) {
+            const auto p = emu.read_debug_memory(process0, 19);
+            const uint16_t main0 = rd16(p, 13);
+            std::printf("process[0]: next=%04X name='%s' main=%04X cmd=%04X env=%04X\n",
+                        rd16(p, 0),
+                        read_cstr_bounded(emu, (uint16_t)(process0 + 5), 8).c_str(),
+                        main0, rd16(p, 15), rd16(p, 17));
+            if (main0 != 0) {
+                const auto t = emu.read_debug_memory(main0, 25);
+                std::printf("process[0].main: next=%04X sp=%04X wait=%04X num=%u state=%u process=%04X bank=%u entry=%04X\n",
+                            rd16(t, 0), rd16(t, 4), rd16(t, 16),
+                            t.size() > 18 ? (unsigned)t[18] : 0U,
+                            t.size() > 19 ? (unsigned)t[19] : 0U,
+                            rd16(t, 22),
+                            t.size() > 24 ? (unsigned)t[24] : 0U,
+                            rd16(t, 7));
+                if (have_app_map && rd16(t, 7) >= A.at("_app_crt0_entry")) {
+                    const uint16_t base =
+                        (uint16_t)(rd16(t, 7) - A.at("_app_crt0_entry"));
+                    const uint16_t entry = rd16(t, 7);
+                    std::printf("process[0].main.map: base=%04X entry.sym=%s first_user.sym=%s\n",
+                                base,
+                                A.nearest(A.at("_app_crt0_entry")).c_str(),
+                                first_child_user_pc == 0
+                                    ? "?"
+                                    : A.nearest((uint16_t)(first_child_user_pc - base)).c_str());
+                    std::printf("process[0].main.entry.bytes: %s\n",
+                                bytes_hex(emu.read_debug_memory(entry, 16)).c_str());
+                    std::printf("process[0].main.crt0.tail.bytes: %s\n",
+                                bytes_hex(emu.read_debug_memory((uint16_t)(entry + 0x20), 16), 16).c_str());
+                    {
+                        const uint16_t app_data_base =
+                            rd16(emu.read_debug_memory((uint16_t)(entry + 4), 2));
+                        std::printf("process[0].main.data: base=%04X words=%04X %04X %04X %04X\n",
+                                    app_data_base,
+                                    rd16(emu.read_debug_memory(app_data_base, 2)),
+                                    rd16(emu.read_debug_memory((uint16_t)(app_data_base + 2), 2)),
+                                    rd16(emu.read_debug_memory((uint16_t)(app_data_base + 4), 2)),
+                                    rd16(emu.read_debug_memory((uint16_t)(app_data_base + 6), 2)));
+                    }
+                    if (A.syms.count("_app_bootstrap") != 0) {
+                        const uint16_t boot_pc =
+                            (uint16_t)(base + A.at("_app_bootstrap") + app_symbol_bias);
+                        std::printf("process[0].main.bootstrap.bytes: %s\n",
+                                    bytes_hex(emu.read_debug_memory(boot_pc, 96), 96).c_str());
+                        const uint16_t app_partos_ptr_addr =
+                            rd16(emu.read_debug_memory((uint16_t)(boot_pc + 14), 2));
+                        const uint16_t app_libc_ptr_addr =
+                            rd16(emu.read_debug_memory((uint16_t)(boot_pc + 36), 2));
+                        std::printf("process[0].main.bootstrap.data: app_partos_ptr@%04X=%04X app_libc_ptr@%04X=%04X\n",
+                                    app_partos_ptr_addr,
+                                    app_partos_ptr_addr == 0
+                                        ? 0
+                                        : rd16(emu.read_debug_memory(app_partos_ptr_addr, 2)),
+                                    app_libc_ptr_addr,
+                                    app_libc_ptr_addr == 0
+                                        ? 0
+                                        : rd16(emu.read_debug_memory(app_libc_ptr_addr, 2)));
+                        if (A.syms.count("_app_bootstrap") != 0 &&
+                            A.at("_app_bootstrap") <= 0x070c &&
+                            A.at("l__CODE") > 0x073f) {
+                            const uint16_t call_hl_pc =
+                                (uint16_t)(base + 0x070c);
+                            const uint16_t call_iy_pc =
+                                (uint16_t)(base + 0x073c);
+                            std::printf("process[0].main.call_hl.bytes: %s\n",
+                                        bytes_hex(emu.read_debug_memory(call_hl_pc, 12), 12).c_str());
+                            std::printf("process[0].main.call_iy.bytes: %s\n",
+                                        bytes_hex(emu.read_debug_memory(call_iy_pc, 12), 12).c_str());
+                        }
+                    }
+                    if (A.syms.count("_pa_init") != 0) {
+                        const uint16_t pa_init_pc =
+                            (uint16_t)(base + A.at("_pa_init") + app_symbol_bias);
+                        std::printf("process[0].main._pa_init.bytes: %s\n",
+                                    bytes_hex(emu.read_debug_memory(pa_init_pc, 8), 8).c_str());
+                    }
+                    if (A.syms.count("_pa_write_buffer") != 0) {
+                        const uint16_t pa_wb_pc =
+                            (uint16_t)(base + A.at("_pa_write_buffer") + app_symbol_bias);
+                        std::printf("process[0].main._pa_write_buffer.bytes: %s\n",
+                                    bytes_hex(emu.read_debug_memory(pa_wb_pc, 8), 8).c_str());
+                    }
+                    std::printf("process[0].main.startup.bytes: %s\n",
+                                bytes_hex(emu.read_debug_memory((uint16_t)(main0 + 6), 10), 10).c_str());
+                    std::printf("process[0].main.stack.bytes: %s\n",
+                                bytes_hex(emu.read_debug_memory(rd16(t, 4), 24), 24).c_str());
+                }
+            }
+        }
+        if (process1 != 0) {
+            const auto p = emu.read_debug_memory(process1, 19);
+            const uint16_t main1 = rd16(p, 13);
+            std::printf("process[1]: next=%04X name='%s' main=%04X cmd=%04X env=%04X\n",
+                        rd16(p, 0),
+                        read_cstr_bounded(emu, (uint16_t)(process1 + 5), 8).c_str(),
+                        main1, rd16(p, 15), rd16(p, 17));
+            if (main1 != 0) {
+                const auto t = emu.read_debug_memory(main1, 25);
+                std::printf("process[1].main: next=%04X wait=%04X num=%u state=%u process=%04X bank=%u\n",
+                            rd16(t, 0), rd16(t, 16),
+                            t.size() > 18 ? (unsigned)t[18] : 0U,
+                            t.size() > 19 ? (unsigned)t[19] : 0U,
+                            rd16(t, 22),
+                            t.size() > 24 ? (unsigned)t[24] : 0U);
+            }
+        }
+    }
+    dump_heap("sys", emu, K.at("__sys_heap"), 32);
+    dump_heap("usr", emu, K.at("__usr_heap"), 64);
+    std::printf("terminal:\n%s\n", emu.dump_terminal_text().c_str());
+    std::printf("raw:\n%s\n", emu.dump_raw_serial_text().c_str());
+    return 0;
+}

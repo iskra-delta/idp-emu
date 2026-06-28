@@ -34,6 +34,7 @@ DEFAULT_LS = os.path.join(ROOT_DIR, "partos", "bin", "ls.com")
 DEFAULT_PS = os.path.join(ROOT_DIR, "partos", "bin", "ps.com")
 DEFAULT_MEM = os.path.join(ROOT_DIR, "partos", "bin", "mem.com")
 DEFAULT_CAT = os.path.join(ROOT_DIR, "partos", "bin", "cat.com")
+DEFAULT_CD = os.path.join(ROOT_DIR, "partos", "bin", "cd.com")
 DEFAULT_MKDIR = os.path.join(ROOT_DIR, "partos", "bin", "mkdir.com")
 DEFAULT_RMDIR = os.path.join(ROOT_DIR, "partos", "bin", "rmdir.com")
 DEFAULT_DEL = os.path.join(ROOT_DIR, "partos", "bin", "del.com")
@@ -43,7 +44,6 @@ DEFAULT_CLEAR = os.path.join(ROOT_DIR, "partos", "bin", "clear.com")
 DEFAULT_ECHO = os.path.join(ROOT_DIR, "partos", "bin", "echo.com")
 DEFAULT_HELP = os.path.join(ROOT_DIR, "partos", "bin", "help.com")
 DEFAULT_TOUCH = os.path.join(ROOT_DIR, "partos", "bin", "touch.com")
-DEFAULT_RM = os.path.join(ROOT_DIR, "partos", "bin", "rm.com")
 
 # Legacy 8 KiB staging window used by --shelldisk (direct-kernel fixture).
 LEGACY_OS_STAGING_SECTORS = 32
@@ -239,6 +239,7 @@ def main():
         ps_path = os.environ.get("PARTOS_PS", DEFAULT_PS)
         mem_path = os.environ.get("PARTOS_MEM", DEFAULT_MEM)
         cat_path = os.environ.get("PARTOS_CAT", DEFAULT_CAT)
+        cd_path = os.environ.get("PARTOS_CD", DEFAULT_CD)
         mkdir_path = os.environ.get("PARTOS_MKDIR", DEFAULT_MKDIR)
         rmdir_path = os.environ.get("PARTOS_RMDIR", DEFAULT_RMDIR)
         del_path = os.environ.get("PARTOS_DEL", DEFAULT_DEL)
@@ -248,7 +249,6 @@ def main():
         echo_path = os.environ.get("PARTOS_ECHO", DEFAULT_ECHO)
         help_path = os.environ.get("PARTOS_HELP", DEFAULT_HELP)
         touch_path = os.environ.get("PARTOS_TOUCH", DEFAULT_TOUCH)
-        rm_path = os.environ.get("PARTOS_RM", DEFAULT_RM)
         if not os.path.isfile(shell_path):
             print(f"error: shell image not found at {shell_path} (build partos first)", file=sys.stderr)
             sys.exit(1)
@@ -261,6 +261,7 @@ def main():
         for label, path in (
             ("mem", mem_path),
             ("cat", cat_path),
+            ("cd", cd_path),
             ("mkdir", mkdir_path),
             ("rmdir", rmdir_path),
             ("del", del_path),
@@ -270,7 +271,6 @@ def main():
             ("echo", echo_path),
             ("help", help_path),
             ("touch", touch_path),
-            ("rm", rm_path),
         ):
             if not os.path.isfile(path):
                 print(f"error: {label} image not found at {path} (build partos first)", file=sys.stderr)
@@ -280,6 +280,7 @@ def main():
         ps_cmd = read_image(ps_path)
         mem_cmd = read_image(mem_path)
         cat_cmd = read_image(cat_path)
+        cd_cmd = read_image(cd_path)
         mkdir_cmd = read_image(mkdir_path)
         rmdir_cmd = read_image(rmdir_path)
         del_cmd = read_image(del_path)
@@ -289,18 +290,18 @@ def main():
         echo_cmd = read_image(echo_path)
         help_cmd = read_image(help_path)
         touch_cmd = read_image(touch_path)
-        rm_cmd = read_image(rm_path)
         build_image(path, total_sectors=80 * 2 * 18, spc=1, root_entries=112,
                     media=0xF9, spt=18, heads=2, fat_bits=12,
                     drive_num=0x00, label="FDD DOS    ",
                     reserved_sectors=reserved,
                     files=[("SHELL   COM", shell), ("LS      COM", ls_cmd), ("PS      COM", ps_cmd),
                            ("MEM     COM", mem_cmd), ("CAT     COM", cat_cmd),
+                           ("CD      COM", cd_cmd),
                            ("MKDIR   COM", mkdir_cmd), ("RMDIR   COM", rmdir_cmd),
                            ("DEL     COM", del_cmd), ("CP      COM", cp_cmd),
                            ("MV      COM", mv_cmd), ("CLEAR   COM", clear_cmd),
                            ("ECHO    COM", echo_cmd), ("HELP    COM", help_cmd),
-                           ("TOUCH   COM", touch_cmd), ("RM      COM", rm_cmd)],
+                           ("TOUCH   COM", touch_cmd)],
                     bootable=True)
         print(f"{path}: FAT12 floppy with shell/tools payload set")
         return
@@ -312,6 +313,7 @@ def main():
     ps_path = os.environ.get("PARTOS_PS", DEFAULT_PS)
     mem_path = os.environ.get("PARTOS_MEM", DEFAULT_MEM)
     cat_path = os.environ.get("PARTOS_CAT", DEFAULT_CAT)
+    cd_path = os.environ.get("PARTOS_CD", DEFAULT_CD)
     mkdir_path = os.environ.get("PARTOS_MKDIR", DEFAULT_MKDIR)
     rmdir_path = os.environ.get("PARTOS_RMDIR", DEFAULT_RMDIR)
     del_path = os.environ.get("PARTOS_DEL", DEFAULT_DEL)
@@ -321,7 +323,6 @@ def main():
     echo_path = os.environ.get("PARTOS_ECHO", DEFAULT_ECHO)
     help_path = os.environ.get("PARTOS_HELP", DEFAULT_HELP)
     touch_path = os.environ.get("PARTOS_TOUCH", DEFAULT_TOUCH)
-    rm_path = os.environ.get("PARTOS_RM", DEFAULT_RM)
     if not os.path.isfile(ukernel_path):
         print(f"error: micro-kernel not found at {ukernel_path} (build partos first)", file=sys.stderr)
         sys.exit(1)
@@ -340,6 +341,7 @@ def main():
     for label, path in (
         ("mem", mem_path),
         ("cat", cat_path),
+        ("cd", cd_path),
         ("mkdir", mkdir_path),
         ("rmdir", rmdir_path),
         ("del", del_path),
@@ -349,7 +351,6 @@ def main():
         ("echo", echo_path),
         ("help", help_path),
         ("touch", touch_path),
-        ("rm", rm_path),
     ):
         if not os.path.isfile(path):
             print(f"error: {label} image not found at {path} (build partos first)", file=sys.stderr)
@@ -362,6 +363,7 @@ def main():
     ps_cmd = read_image(ps_path)
     mem_cmd = read_image(mem_path)
     cat_cmd = read_image(cat_path)
+    cd_cmd = read_image(cd_path)
     mkdir_cmd = read_image(mkdir_path)
     rmdir_cmd = read_image(rmdir_path)
     del_cmd = read_image(del_path)
@@ -371,7 +373,6 @@ def main():
     echo_cmd = read_image(echo_path)
     help_cmd = read_image(help_path)
     touch_cmd = read_image(touch_path)
-    rm_cmd = read_image(rm_path)
     print(f"split images: ukernel {len(ukernel_bytes)} B "
           f"(lba 1..{UKERNEL_SECTORS}) + services {len(services_bytes)} B "
           f"(lba {1 + UKERNEL_SECTORS}..{UKERNEL_SECTORS + SERVICES_SECTORS}), "
@@ -397,11 +398,12 @@ def main():
                 reserved_sectors=SPLIT_RESERVED,
                 files=[("SHELL   COM", shell), ("LS      COM", ls_cmd), ("PS      COM", ps_cmd),
                        ("MEM     COM", mem_cmd), ("CAT     COM", cat_cmd),
+                       ("CD      COM", cd_cmd),
                        ("MKDIR   COM", mkdir_cmd), ("RMDIR   COM", rmdir_cmd),
                        ("DEL     COM", del_cmd), ("CP      COM", cp_cmd),
                        ("MV      COM", mv_cmd), ("CLEAR   COM", clear_cmd),
                        ("ECHO    COM", echo_cmd), ("HELP    COM", help_cmd),
-                       ("TOUCH   COM", touch_cmd), ("RM      COM", rm_cmd)],
+                       ("TOUCH   COM", touch_cmd)],
                 split_bytes=(ukernel_bytes, services_bytes), bootable=True)
 
 

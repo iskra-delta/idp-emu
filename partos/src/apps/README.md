@@ -14,10 +14,10 @@ Current applications:
 - `partos/src/apps/ps/`
 - `partos/src/apps/mem/`
 - `partos/src/apps/cat/`
+- `partos/src/apps/cd/`
 - `partos/src/apps/mkdir/`
 - `partos/src/apps/rmdir/`
 - `partos/src/apps/del/`
-- `partos/src/apps/rm/`
 - `partos/src/apps/cp/`
 - `partos/src/apps/mv/`
 - `partos/src/apps/clear/`

@@ -107,7 +107,7 @@ typedef struct com_header_s {
 /*
  * Process object. Layout must match src/os/process.inc:
  *   +0 next / +2 owner (sysobj), +4 pflags, +5 pname[8],
- *   +13 main_thread, +15 cmdline.
+ *   +13 main_thread, +15 cmdline, +17 environment.
  */
 typedef struct process_s {
     sysobj_t hdr;                       /* process is a system object */
@@ -115,6 +115,7 @@ typedef struct process_s {
     char     pname[MAX_PNAME_LEN];      /* name, max 7 chars + NUL */
     thread_t *main_thread;              /* bootstrap/main thread, or NULL */
     const char *cmdline;                /* original launch command line, or "" */
+    const char *environment;            /* NUL-separated NAME=VALUE block */
 } process_t;
 
 /*

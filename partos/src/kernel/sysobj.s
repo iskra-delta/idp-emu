@@ -1,7 +1,7 @@
             ;; sysobj.s
             ;;
-            ;; system-owned object helpers layered on top of the kernel heap
-            ;; allocator and intrusive list primitives.
+            ;; tracked object helpers layered on top of the heap allocator and
+            ;; intrusive list primitives.
             ;;
             ;; native assembly calling convention:
             ;;
@@ -22,10 +22,13 @@
             .globl  _list_insert
             .globl  _list_remove
             .globl  _mem_allocate
+            .globl  __mem_allocate$
             .globl  _mem_free
 
             .globl  __so_create
             .globl  __so_destroy
+            .globl  __so_create_on_heap
+            .globl  __so_destroy_on_heap
             .globl  _set_cleanup
 
             ;; owner-death cleanup (merged from owner_cleanup.s): the reason
@@ -42,21 +45,39 @@
             ;; ----------------------------------------------------------------
             ;; <de> <= __so_create(<hl> **first, <de> size, stack owner)
             ;; ----------------------------------------------------------------
+            ;; convenience wrapper that keeps using the shared system heap.
+            ;; ----------------------------------------------------------------
 __so_create::
+            ld      bc,#__sys_heap
+
+            ;; ----------------------------------------------------------------
+            ;; <de> <= __so_create_on_heap(<hl> **first, <de> size, <bc> heap,
+            ;;                              stack owner)
+            ;; ----------------------------------------------------------------
+            ;; generic variant used when the caller knows which heap the object
+            ;; belongs to. shared/kernel registries keep using __sys_heap, while
+            ;; bank-local objects such as events may use the active user heap.
+            ;; ----------------------------------------------------------------
+__so_create_on_heap::
             push    hl
             exx
             pop     hl                  ; hl' = &first
             exx
+            ld      h,b
+            ld      l,c                 ; hl = chosen heap
+            ;; consume the caller's stacked owner long enough to feed the
+            ;; internal allocator register ABI directly. calling the public
+            ;; _mem_allocate wrapper from here would treat our caller's return
+            ;; address as the owner, because this helper already sits on top
+            ;; of the original [return][owner] frame.
             pop     af                  ; af = caller return
             pop     bc                  ; bc = stacked owner
-            push    af                  ; restore caller return below owner
-            push    bc                  ; owner now matches _mem_allocate ABI
-            ld      hl,#__sys_heap
-            call    _mem_allocate
-            pop     bc                  ; bc = stacked owner
-            pop     af                  ; af = caller return
             push    bc                  ; keep owner on caller stack
             push    af                  ; restore our return address
+            push    bc                  ; preserve owner across __mem_allocate$
+            call    __mem_allocate$
+            pop     bc                  ; restore stacked owner
+            ex      de,hl
             ld      a,d
             or      e
             ret     z
@@ -71,18 +92,29 @@ __so_create::
             push    hl
             exx
             pop     hl                  ; hl = &first
-            call    _list_insert
-            ret
+            jp      _list_insert
 
             ;; ----------------------------------------------------------------
             ;; <de> <= __so_destroy(<hl> **first, <de> object)
             ;; ----------------------------------------------------------------
 __so_destroy::
+            ld      bc,#__sys_heap
+
+            ;; ----------------------------------------------------------------
+            ;; <de> <= __so_destroy_on_heap(<hl> **first, <de> object,
+            ;;                               <bc> heap)
+            ;; ----------------------------------------------------------------
+            ;; generic destroy helper paired with __so_create_on_heap().
+            ;; ----------------------------------------------------------------
+__so_destroy_on_heap::
+            push    bc                  ; preserve chosen heap across list walk
             call    _list_remove
+            pop     bc
             ld      a,d
             or      e
             ret     z
-            ld      hl,#__sys_heap
+            ld      h,b
+            ld      l,c
             jp      _mem_free
 
             ;; ----------------------------------------------------------------

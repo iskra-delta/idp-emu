@@ -1086,7 +1086,7 @@ _fat_lookup::
             ;; live entry and fat_scan_sector$ emits it in FAT_WALK_READDIR mode.
             ;; ----------------------------------------------------------------
 fat_handle_readdir$:
-            ld      a,#FAT_WALK_READDIR
+            xor     a
             ld      (fat_walk_mode$),a
             call    fat_prepare_path_req$
             ld      a,h
@@ -1125,6 +1125,8 @@ fat_handle_readdir$:
             ld      (fat_lookup_cluster$),de
 
 fhrd_scan$:
+            ld      a,#FAT_WALK_READDIR
+            ld      (fat_walk_mode$),a
             call    fat_scan_active_dir$
             jr      fhrd_finish_hl$
 

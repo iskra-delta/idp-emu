@@ -27,7 +27,6 @@
             .globl  _ir_disable
             .globl  _ir_enable
             .globl  _thread_wait4events
-            .globl  __thread_cleanup_terminated
             .globl  _thread_current
             .globl  _thread_exit
             .globl  _evt_create
@@ -40,12 +39,17 @@
             .globl  _mem_free
             .globl  _partos_get_boot_fs
             .globl  _partos_get_command_line
+            .globl  _partos_get_current_dir
             .globl  _partos_run_command
             .globl  _boot_debug_stage
             .globl  _boot_debug_rc
             .globl  ctc_enable_tick
             .globl  __usr_heap
+            .globl  boot_event$
+            .globl  boot_fs_ready$
+            .globl  boot_loader_busy$
             .globl  boot_fs$
+            .globl  boot_file$
             .globl  boot_try_path$
             .globl  boot_try_device$
             .globl  __boot_after_evt_create
@@ -114,6 +118,15 @@ boot_free_image$:
             ;; staging image buffer (if any). the mounted boot fs stays live.
             ;; ----------------------------------------------------------------
 boot_cleanup_loader$:
+            call    boot_destroy_event$
+            jp      boot_free_image$
+
+            ;; ----------------------------------------------------------------
+            ;; boot_destroy_event$()
+            ;; ----------------------------------------------------------------
+            ;; drops the shared loader event handle if one is live.
+            ;; ----------------------------------------------------------------
+boot_destroy_event$:
             ld      hl,(boot_event$)
             ld      a,h
             or      l
@@ -121,7 +134,7 @@ boot_cleanup_loader$:
             xor     a
             ld      (boot_event$),a
             ld      (boot_event$ + 1),a
-            jp      boot_free_image$
+            ret
 
             ;; ----------------------------------------------------------------
             ;; <a> <= boot_ascii_upper$(<a> ch)
@@ -258,51 +271,6 @@ bpc_fail$:
             ld      (boot_cmd_name$),a
             ld      (boot_cmdline_len$),a
             scf
-            ret
-
-            ;; ----------------------------------------------------------------
-            ;; boot_attach_cmdline$(<de> process) -> <de> process
-            ;; ----------------------------------------------------------------
-            ;; makes a private heap-owned copy of the prepared command line and
-            ;; stores it in process->cmdline. allocation failure is non-fatal:
-            ;; the process still runs, it just sees an empty command line.
-            ;; ----------------------------------------------------------------
-boot_attach_cmdline$:
-            ld      (boot_process$),de
-            push    de                  ; owner = process
-            ld      a,(boot_cmdline_len$)
-            ld      e,a
-            ld      d,#0
-            inc     de                  ; include terminating NUL
-            ld      hl,#__usr_heap
-            call    _mem_allocate
-            pop     bc
-            ld      a,d
-            or      e
-            jr      nz,bac_have_buf$
-            ld      de,(boot_process$)
-            ret
-
-bac_have_buf$:
-            ld      (boot_cmd_copy$),de
-            ex      de,hl               ; hl = allocated destination
-            ld      de,#boot_cmdline_buf$
-            ld      a,(boot_cmdline_len$)
-            ld      c,a
-            ld      b,#0
-            inc     bc
-            ex      de,hl               ; hl = source, de = destination
-            ldir
-
-            ld      de,(boot_process$)
-            ex      de,hl               ; hl = process
-            ld      bc,#PROCESS_CMDLINE
-            add     hl,bc
-            ld      de,(boot_cmd_copy$)
-            ld      (hl),e
-            inc     hl
-            ld      (hl),d
-            ld      de,(boot_process$)
             ret
 
             ;; ----------------------------------------------------------------
@@ -478,10 +446,13 @@ btp_open_wait$:
 
             ;; allocate one temporary image buffer from the user heap, owned by
             ;; the bootstrap thread for now; process_load_image() transfers that
-            ;; ownership to the final process object.
+            ;; ownership to the final process object. keep one extra 256-byte
+            ;; guard sector after the COM payload so the following free-block
+            ;; header survives any whole-sector overrun in the current read path.
             ld      hl,(_thread_current)
             push    hl                  ; owner = current bootstrap/caller thread
             ld      de,(boot_img_size$)
+            inc     d                   ; +0x0100 guard (sizes are 256-byte aligned)
             ld      hl,#__usr_heap
             call    _mem_allocate
             pop     bc                  ; drop owner
@@ -511,6 +482,11 @@ btp_open_wait$:
             ld      a,h
             or      l
             jr      nz,btp_fail_free$
+
+            ;; FAT no longer needs the loader event once the COM image is fully
+            ;; in RAM. Free it before process/thread startup so the child and
+            ;; its own app event can use the shared heap slots instead.
+            call    boot_destroy_event$
 
             ;; the loaded file is a COM header wrapping one embedded XL image.
             ld      de,(boot_img_size$)
@@ -564,6 +540,10 @@ boot_try_device$:
 
             ld      a,#1
             ld      (boot_fs_ready$),a
+            ld      a,#'/'
+            ld      (boot_cwd$),a
+            xor     a
+            ld      (boot_cwd$ + 1),a
             ld      hl,#boot_shell_com$
             ld      de,#boot_shell_pname$
             jp      boot_try_path$
@@ -579,9 +559,6 @@ btd_fail_zero$:
             ;; returns the new process object or 0 on failure.
             ;; ----------------------------------------------------------------
 _partos_run_command::
-            ld      a,(boot_fs_ready$)
-            or      a
-            jr      z,brc_fail_nolock$
             call    boot_lock_loader$
             or      a
             jr      z,brc_fail_nolock$
@@ -597,23 +574,9 @@ _partos_run_command::
             ld      de,#boot_pname_buf$
             call    boot_try_path$
             push    de
-            ld      a,d
-            or      e
-            call    nz,boot_attach_cmdline$
             call    boot_cleanup_loader$
             call    boot_unlock_loader$
             pop     de
-            ld      a,d
-            or      e
-            ret     z
-            ;; Give the freshly launched process one immediate cooperative time
-            ;; slice before the shell falls back into keyboard polling. The
-            ;; child then reaches its own waits/exits even if the periodic tick
-            ;; source is momentarily absent or late.
-            rst     0x18
-            call    _ir_disable
-            call    __thread_cleanup_terminated
-            call    _ir_enable
             ret
 
 brc_fail_nolock$:
@@ -628,17 +591,11 @@ brc_fail$:
             ;; ----------------------------------------------------------------
             ;; <de> <= _partos_get_boot_fs()
             ;; ----------------------------------------------------------------
-            ;; returns the mounted boot filesystem kept alive by the bootstrap,
-            ;; or 0 when no boot volume is available.
+            ;; returns the active shell filesystem. userland may update this
+            ;; shared fs object after it mounts another volume successfully.
             ;; ----------------------------------------------------------------
 _partos_get_boot_fs::
-            ld      a,(boot_fs_ready$)
-            or      a
-            jr      z,pgbf_fail$
             ld      de,#boot_fs$
-            ret
-pgbf_fail$:
-            ld      de,#0x0000
             ret
 
             ;; ----------------------------------------------------------------
@@ -674,6 +631,13 @@ pgcl_empty$:
             ld      de,#boot_empty_cmd$
 pgcl_done$:
             call    _ir_enable
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; <de> <= _partos_get_current_dir()
+            ;; ----------------------------------------------------------------
+_partos_get_current_dir::
+            ld      de,#boot_cwd$
             ret
 
             ;; ----------------------------------------------------------------
@@ -774,10 +738,6 @@ boot_cmd_name$:
             .ds     13
 boot_cmdline_len$:
             .ds     1
-boot_process$:
-            .ds     2
-boot_cmd_copy$:
-            .ds     2
 _boot_debug_rc::
             .ds     2
 _boot_debug_stage::
@@ -785,6 +745,8 @@ _boot_debug_stage::
 boot_pname_buf$:
             .ds     8
 boot_cmdline_buf$:
+            .ds     64
+boot_cwd$:
             .ds     64
 boot_fs$:
             .ds     FATFS_SIZE

@@ -44,7 +44,10 @@
             ;; <de> <= _evt_create(<hl> owner)
             ;; ----------------------------------------------------------------
             ;; allocates an event sysobj, links it into the event list and
-            ;; clears it to the non-signaled state.
+            ;; clears it to the non-signaled state. events are shared kernel
+            ;; synchronization objects: worker threads, bootstrap code and
+            ;; driver ISRs may all touch them, so they stay on the shared
+            ;; system heap.
             ;; ----------------------------------------------------------------
 _evt_create::
             push    hl                  ; stack owner for __so_create

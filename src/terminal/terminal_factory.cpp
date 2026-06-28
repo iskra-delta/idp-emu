@@ -10,7 +10,7 @@ std::unique_ptr<terminal_emulator> make_terminal_emulator(terminal_profile profi
         return std::make_unique<vt52_terminal>(true);
     case terminal_profile::vt100_ansi:
         // Shared terminal currently implements VT52 plus a small ANSI subset
-        // (cursor visibility, clear/home, cursor motion, SGR highlight/inverse).
+        // (cursor visibility, clear/home, cursor motion, SGR highlight/inverse/underline).
         return std::make_unique<vt52_terminal>(true);
     default:
         return std::make_unique<vt52_terminal>(true);

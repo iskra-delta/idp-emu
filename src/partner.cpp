@@ -1,4 +1,5 @@
 #include "partner.hpp"
+#include "partos_layout.hpp"
 #include <fstream>
 #include <iostream>
 #include <cstring>
@@ -24,11 +25,11 @@ constexpr size_t MAX_TCP_TX_FIFO_BYTES = 32768;
 constexpr size_t MAX_PRINTER_TEXT_BYTES = 1 << 20;
 constexpr uint64_t TCP_POLL_INTERVAL_ACTIVE_TICKS = 2048;
 constexpr uint64_t TCP_POLL_INTERVAL_IDLE_TICKS = 8192;
-uint16_t g_partner_hd_dev0 = 0xCF9A;
-uint16_t g_partner_hd_io_ptr = 0xCFAE;
-uint16_t g_partner_hd_read = 0xCD63;
-uint16_t g_partner_hd_dma_lo = 0xCE08;
-uint16_t g_partner_hd_dma_hi = 0xCE50;
+constexpr uint16_t PARTOS_HD_DEV0 = partos_layout::hd_dev0;
+constexpr uint16_t PARTOS_HD_IO_PTR = partos_layout::hd_io_ptr;
+constexpr uint16_t PARTOS_HD_READ = partos_layout::hd_read;
+constexpr uint16_t PARTOS_HD_DMA_LO = partos_layout::hd_dma_trace_lo;
+constexpr uint16_t PARTOS_HD_DMA_HI = partos_layout::hd_dma_trace_hi;
 constexpr uint16_t PARTNER_KERNEL_IM2    = 0xFE00;
 constexpr uint16_t PARTNER_SPURIOUS_IM2  = 0x0038;
 constexpr uint8_t  PARTNER_HD_DMA_VECTOR = 0x90;
@@ -36,42 +37,6 @@ constexpr uint8_t  PARTNER_CTC_TICK_VECTOR = 0x8C;
 constexpr uint8_t  PARTNER_CTC_VBL_VECTOR  = 0x8E;
 constexpr uint8_t  PARTNER_SPURIOUS_VECTOR = 0x00;
 constexpr uint8_t  PARTNER_DEV_FLAG_BUSY = 0x02;
-
-static bool parse_partos_map_symbol(const std::string &path,
-                                    const char *symbol,
-                                    uint16_t &value_out) {
-    std::ifstream f(path);
-    if (!f)
-        return false;
-    std::string line;
-    while (std::getline(f, line)) {
-        if (line.find(symbol) == std::string::npos)
-            continue;
-        unsigned value = 0;
-        if (std::sscanf(line.c_str(), " %8x", &value) == 1) {
-            value_out = (uint16_t)value;
-            return true;
-        }
-    }
-    return false;
-}
-
-static void refresh_partos_hd_symbols() {
-    const char *env = std::getenv("IDP_PARTOS_OS_MAP");
-    const std::string map_path = (env && env[0]) ? std::string(env) : "partos/build/os.map";
-    uint16_t hd_dev0 = 0;
-    uint16_t hd_read = 0;
-    if (!parse_partos_map_symbol(map_path, "hd_dev0", hd_dev0) ||
-        !parse_partos_map_symbol(map_path, "hd_read", hd_read)) {
-        return;
-    }
-    g_partner_hd_dev0 = hd_dev0;
-    g_partner_hd_io_ptr = (uint16_t)(hd_dev0 + 0x14);
-    g_partner_hd_read = hd_read;
-    // hd_dma_setup$ stays at a fixed offset inside the current PartOS hd_read path.
-    g_partner_hd_dma_lo = (uint16_t)(hd_read + 0xA5);
-    g_partner_hd_dma_hi = (uint16_t)(hd_read + 0xED);
-}
 
 static inline uint8_t partner_fallback_im2_vector(const z80ctc_t&) {
     /*
@@ -1483,7 +1448,6 @@ bool partner::write_hdd_blocks_cb(uint32_t lba, uint32_t count, const uint8_t *b
 
 void partner::load_rom(const std::string &path)
 {
-    refresh_partos_hd_symbols();
     std::ifstream file(path, std::ios::binary);
     if (!file)
         throw std::runtime_error("cannot open rom file: " + path);
@@ -1496,7 +1460,6 @@ void partner::load_rom(const std::string &path)
 
 void partner::reset()
 {
-    refresh_partos_hd_symbols();
     pins = z80_reset(&cpu);
     z80dma_reset(&dma);
     z80ctc_reset(&ctc);
@@ -1590,7 +1553,7 @@ void partner::tick()
 
             const int fallback_vector = partner_fallback_im2_vector(ctc);
             if (ack_vector == PARTNER_HD_DMA_VECTOR &&
-                ((peek_ram((uint16_t)(g_partner_hd_dev0 + 8)) & PARTNER_DEV_FLAG_BUSY) == 0)) {
+                ((peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)) & PARTNER_DEV_FLAG_BUSY) == 0)) {
                 ack_vector = fallback_vector;
             }
 
@@ -1604,7 +1567,7 @@ void partner::tick()
             if (trace_int) {
                 std::fprintf(stderr, "[int] ack vec=%02X busy=%02X pc=%04X\n",
                     ack_vector,
-                    peek_ram((uint16_t)(g_partner_hd_dev0 + 8)),
+                    peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)),
                     cpu.pc);
             }
             dbg_im2_ack_vectors[dbg_im2_ack_count & 0x7u] = (uint8_t)ack_vector;
@@ -1616,9 +1579,9 @@ void partner::tick()
 
         // Tick the CPU
         pins = z80_tick(&cpu, pins);
-        if (cpu.pc >= g_partner_hd_dma_lo && cpu.pc <= g_partner_hd_dma_hi)
+        if (cpu.pc >= PARTOS_HD_DMA_LO && cpu.pc <= PARTOS_HD_DMA_HI)
             ++hd_dma_region_ticks_;
-        if (cpu.pc == g_partner_hd_read && cpu.bc == 0x0100) {
+        if (cpu.pc == PARTOS_HD_READ && cpu.bc == 0x0100) {
             static const bool trace_hd = [] {
                 const char *s = std::getenv("IDP_TRACE_HD");
                 return s && s[0] && s[0] != '0';
@@ -1759,14 +1722,14 @@ void partner::tick()
     if (dma.int_state & Z80DMA_INT_NEEDED) {
         const bool hd_xfer_active =
             (dma.int_vector == PARTNER_HD_DMA_VECTOR) &&
-            ((peek_ram((uint16_t)(g_partner_hd_dev0 + 8)) & PARTNER_DEV_FLAG_BUSY) != 0);
+            ((peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)) & PARTNER_DEV_FLAG_BUSY) != 0);
         if (!hd_xfer_active)
             dma.int_state &= ~Z80DMA_INT_NEEDED;
     }
     if (dma.int_state & Z80DMA_INT_REQUESTED) {
         const bool hd_xfer_active =
             (dma.int_vector == PARTNER_HD_DMA_VECTOR) &&
-            ((peek_ram((uint16_t)(g_partner_hd_dev0 + 8)) & PARTNER_DEV_FLAG_BUSY) != 0);
+            ((peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)) & PARTNER_DEV_FLAG_BUSY) != 0);
         if (dma.int_vector != PARTNER_HD_DMA_VECTOR || hd_xfer_active)
             pins |= Z80_INT;
         else
@@ -1908,9 +1871,9 @@ void partner::clean_kernel_io_handoff()
         s1410_write_control(&hdc, 0x00);
     // Kernel _SYSVARS is not zero-initialized; clear HD driver scratch so a
     // stale DEV_FLAGS busy bit cannot acknowledge a spurious DMA vector.
-    write_mem((uint16_t)(g_partner_hd_dev0 + 8), 0);
-    write_mem(g_partner_hd_io_ptr, 0);
-    write_mem((uint16_t)(g_partner_hd_io_ptr + 1), 0);
+    write_mem((uint16_t)(PARTOS_HD_DEV0 + 8), 0);
+    write_mem(PARTOS_HD_IO_PTR, 0);
+    write_mem((uint16_t)(PARTOS_HD_IO_PTR + 1), 0);
     // Slot 0 is our spurious-IM2 sink: vector 0 -> 0x0038, where the low page
     // already holds `jp __sys_rst38_default`, so an unexpected acknowledge
     // collapses into a plain RETI instead of re-entering kernel cold-start.
@@ -1938,7 +1901,7 @@ int partner::get_pending_daisy_vector() const
     if (dma.int_state & (Z80DMA_INT_NEEDED | Z80DMA_INT_REQUESTED)) {
         const bool hd_xfer_active =
             (dma.int_vector == PARTNER_HD_DMA_VECTOR) &&
-            ((peek_ram((uint16_t)(g_partner_hd_dev0 + 8)) & PARTNER_DEV_FLAG_BUSY) != 0);
+            ((peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)) & PARTNER_DEV_FLAG_BUSY) != 0);
         if (hd_xfer_active)
             return dma.int_vector;
         const_cast<partner *>(this)->dma.int_state = 0;
@@ -2094,7 +2057,7 @@ void partner::service_cpu_bus(uint64_t &bus_pins)
 
         const int fallback_vector = partner_fallback_im2_vector(ctc);
         if (ack_vector == PARTNER_HD_DMA_VECTOR &&
-            ((peek_ram((uint16_t)(g_partner_hd_dev0 + 8)) & PARTNER_DEV_FLAG_BUSY) == 0))
+            ((peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)) & PARTNER_DEV_FLAG_BUSY) == 0))
             ack_vector = fallback_vector;
 
         if (ack_vector < 0)

@@ -36,12 +36,15 @@
             .globl  __thread_cleanup_terminated
             .globl  __thread_select_next
             .globl  __thread_robin
+            .globl  tc_fail0$
+            .globl  tc_fail1$
 
             .globl  _thread_current
             .globl  _thread_first_suspended
             .globl  _thread_first_running
             .globl  _thread_first_waiting
             .globl  _thread_first_terminated
+            .globl  __evt_first
 
             .globl  __so_create
             .globl  __so_destroy
@@ -646,6 +649,19 @@ trbn_done$:
             ;; the .globl declarations at the top of this module.
 
             .area   _SYSVARS
+
+_thread_current::
+            .ds     2
+_thread_first_suspended::
+            .ds     2
+_thread_first_running::
+            .ds     2
+_thread_first_waiting::
+            .ds     2
+_thread_first_terminated::
+            .ds     2
+__evt_first::
+            .ds     2
 
             ;; thread_create scratch (valid only inside its critical section)
 tc_entry$:

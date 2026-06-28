@@ -809,22 +809,25 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
             if ((mods & KMOD_CTRL) && (sym == SDLK_q))
                 return false;
 
-            // Always allow debugger hotkeys even when ImGui has keyboard navigation focus.
-            switch (sym)
-            {
-            case SDLK_SPACE:
-                paused = !paused;
-                break;
-            case SDLK_F11:
-                if (paused)
-                    action = dbg_action::STEP_INTO;
-                break;
-            case SDLK_F10:
-                if (paused)
-                    action = dbg_action::STEP_OVER;
-                break;
-            default:
-                break;
+            // Keep debugger controls on explicit host chords so plain keys stay
+            // available to the emulated machine.
+            if ((mods & KMOD_CTRL) != 0) {
+                switch (sym)
+                {
+                case SDLK_F9:
+                    paused = !paused;
+                    break;
+                case SDLK_F11:
+                    if (paused)
+                        action = dbg_action::STEP_INTO;
+                    break;
+                case SDLK_F10:
+                    if (paused)
+                        action = dbg_action::STEP_OVER;
+                    break;
+                default:
+                    break;
+                }
             }
 
             // Route terminal keys unless user is actively editing an ImGui text field.
@@ -948,7 +951,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
         ImGui::SetNextWindowPos(custom_title_menu_pos(0), ImGuiCond_Always);
     if (ImGui::BeginPopup("##m_emulation"))
     {
-        if (ImGui::MenuItem(paused ? "Run" : "Pause", "Space"))
+        if (ImGui::MenuItem(paused ? "Run" : "Pause", "Ctrl+F9"))
             paused = !paused;
         if (ImGui::MenuItem("Reset"))
         {
@@ -1466,7 +1469,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
         ImGui::Text("Last: %s", last_click_info[0] ? last_click_info : "(none)");
         ImGui::TextUnformatted("SET-UP host key: Pause, F12, or Delete.");
         ImGui::TextUnformatted("Quit: Ctrl+Q.");
-        ImGui::TextUnformatted("Debugger keys reserved: F10, F11.");
+        ImGui::TextUnformatted("Debugger shortcuts: Ctrl+F9, Ctrl+F10, Ctrl+F11.");
         ImGui::End();
     }
 

@@ -74,7 +74,13 @@ Run Partner G (GDP) with empty HDD:
 ./bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g-empty.img
 ```
 
-In VS Code, `F5` uses the `.vscode/launch.json` debug configuration, which starts the emulator under `gdb`. If you only want the emulator window, use `Run Without Debugging` (`Ctrl+F5`).
+In VS Code, `F5` uses the guarded `PartOS Boot` launch configuration from `.vscode/launch.json`. It now runs a PartOS layout check plus the `partos_kernel_boot` and `partos_full_boot` smoke probes first, and refuses to launch the emulator when boot is already broken. If you explicitly want to bypass that guardrail for manual debugging, use `PartOS Boot (Unsafe Build Only)`. If you only want the emulator window, use `Run Without Debugging` (`Ctrl+F5`).
+
+For the same guarded check from the terminal, run:
+
+```bash
+make partos-smoke
+```
 
 # Dependencies
 

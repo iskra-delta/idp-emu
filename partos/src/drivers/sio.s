@@ -485,6 +485,9 @@ sss_rx$:
             jr      z,sss_ring$
             ld      l,SIO_ST_RDBUF(ix)
             ld      h,SIO_ST_RDBUF+1(ix)
+            ld      a,h
+            or      l
+            jr      z,sss_rx$
             ld      a,e
             ld      (hl),a
             inc     hl
@@ -505,6 +508,9 @@ sss_ring$:
             jr      nc,sss_overrun$
             ld      l,SIO_ST_RXBUF(ix)
             ld      h,SIO_ST_RXBUF+1(ix)
+            ld      a,h
+            or      l
+            jr      z,sss_rx$
             ld      b,e                 ; keep received byte while tail is used
             ld      d,#0
             ld      a,SIO_ST_RXTAIL(ix)

@@ -33,6 +33,57 @@
       ],
       "MIMode": "gdb",
       "miDebuggerPath": "${workspaceFolder}/tools/gdb-no-debuginfod.sh",
+      "preLaunchTask": "Build + Smoke PartOS",
+      "setupCommands": [
+        {
+          "description": "Enable async MI so Pause/interrupt works while the target is running",
+          "text": "-gdb-set mi-async on",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Enable pretty-printing for gdb",
+          "text": "-enable-pretty-printing",
+          "ignoreFailures": true
+        },
+        {
+          "description": "Disable pagination in gdb",
+          "text": "set pagination off",
+          "ignoreFailures": true
+        }
+      ]
+    },
+    {
+      "name": "PartOS Boot (Unsafe Build Only)",
+      "type": "cppdbg",
+      "request": "launch",
+      "program": "${workspaceFolder}/bin/idp-emu",
+      "args": [
+        "--model",
+        "crt",
+        "--rom",
+        "${workspaceFolder}/partos/bin/partos.rom",
+        "--nvram",
+        "${workspaceFolder}/partos/partos_shadow_nvram.bin",
+        "--disk",
+        "${workspaceFolder}/disks/fdd-dos.img",
+        "--hdd",
+        "${workspaceFolder}/disks/hdd-dos.img"
+      ],
+      "cwd": "${workspaceFolder}",
+      "stopAtEntry": false,
+      "externalConsole": false,
+      "miDebuggerArgs": "-iex \"set debuginfod enabled off\"",
+      "launchCompleteCommand": "exec-run",
+      "symbolLoadInfo": {
+        "loadAll": false
+      },
+      "environment": [
+        { "name": "DISPLAY", "value": ":0" },
+        { "name": "WAYLAND_DISPLAY", "value": "wayland-0" },
+        { "name": "IDP_EMU_VIEWPORTS", "value": "1" }
+      ],
+      "MIMode": "gdb",
+      "miDebuggerPath": "${workspaceFolder}/tools/gdb-no-debuginfod.sh",
       "preLaunchTask": "Build Emulator + PartOS",
       "setupCommands": [
         {

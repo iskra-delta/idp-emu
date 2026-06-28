@@ -22,6 +22,8 @@ extern "C" {
 #endif
 
 #define PARTOS_SERVICE_NAME         "partos"
+#define LIBC_SERVICE_NAME           "libc"
+#define SHELL_SERVICE_NAME          LIBC_SERVICE_NAME
 
 /*
  * Generic intrusive list / object model.
@@ -204,6 +206,7 @@ typedef struct process_s {
     char     pname[MAX_PNAME_LEN];
     thread_t *main_thread;
     const char *cmdline;
+    const char *environment;
 } process_t;
 
 /*
@@ -348,9 +351,19 @@ typedef struct minimal_rtc_time_s {
     uint8_t year;
 } minimal_rtc_time_t;
 
-#define AVDC_ATTR_NORMAL            0x00
-#define AVDC_ATTR_HIGHLIGHT         0x10
-#define AVDC_ATTR_INVERSE           0x20
+#define PARTOS_TEXT_ATTR_NORMAL     0x00
+#define PARTOS_TEXT_ATTR_UNDERLINE  0x02
+#define PARTOS_TEXT_ATTR_HIGHLIGHT  0x10
+#define PARTOS_TEXT_ATTR_INVERSE    0x20
+#define PARTOS_TEXT_ATTR_MASK       (PARTOS_TEXT_ATTR_UNDERLINE | \
+                                     PARTOS_TEXT_ATTR_HIGHLIGHT | \
+                                     PARTOS_TEXT_ATTR_INVERSE)
+
+#define AVDC_ATTR_NORMAL            PARTOS_TEXT_ATTR_NORMAL
+#define AVDC_ATTR_UNDERLINE         PARTOS_TEXT_ATTR_UNDERLINE
+#define AVDC_ATTR_HIGHLIGHT         PARTOS_TEXT_ATTR_HIGHLIGHT
+#define AVDC_ATTR_INVERSE           PARTOS_TEXT_ATTR_INVERSE
+#define AVDC_ATTR_MASK              PARTOS_TEXT_ATTR_MASK
 
 #define AVDC_CURSOR_HIDE            0
 #define AVDC_CURSOR_SHOW            1
@@ -503,11 +516,32 @@ typedef struct partos_s {
     int16_t (*read_directory)(fat_fs_t *fs, const char *path, fat_dirinfo_t *info, event_t *event);
     fat_fs_t *(*get_boot_filesystem)(void);
     const char *(*get_command_line)(void);
+    char *(*get_current_dir)(void);
     int16_t (*unlink_path)(fat_fs_t *fs, const char *path, fat_dirent_t *result, event_t *event);
     int16_t (*mkdir_path)(fat_fs_t *fs, const char *path, fat_dirent_t *result, event_t *event);
     int16_t (*rmdir_path)(fat_fs_t *fs, const char *path, fat_dirent_t *result, event_t *event);
     int16_t (*wait_process)(process_t *process);
+    /* Appended to preserve all existing offsets in the live service table. */
+    int16_t (*set_text_attr)(uint8_t attr);
 } partos_t;
+
+/*
+ * Optional shell-owned libc service table.
+ *
+ * The interactive shell may register this under LIBC_SERVICE_NAME while it is
+ * alive. The first entries cover process launch metadata in a shell-owned but
+ * process-addressable way; the trailing entries are shell presentation helpers
+ * that remain useful to interactive tools.
+ */
+typedef struct libc_s {
+    const char *(*get_command_line)(void);
+    const char *(*get_environment)(void);
+    const char *(*getenv)(const char *name);
+    const char *(*get_current_device_name)(void);
+    int16_t (*write_prompt)(void);
+} libc_t;
+
+typedef libc_t shell_t;
 
 /*
  * Registered named service and its exported PartOS function table.

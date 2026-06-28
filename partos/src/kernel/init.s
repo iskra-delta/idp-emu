@@ -35,7 +35,7 @@
             ;; kernel knows about. with no payload present only the idle thread
             ;; runs (see __sys_kernel below).
             .equ    PAYLOAD_THREAD_STACK,  4096
-            .equ    IDLE_THREAD_STACK,      256
+            .equ    IDLE_THREAD_STACK,     1024
 
             ;; the boot bank threads run in -- bank 1 is the power-on/cold-start
             ;; bank. (the kernel stores this per-thread; it does not yet schedule
@@ -75,9 +75,10 @@ __sys_kernel::
             call    __ir_init
             ;; preconfigure the heaps (the stack pointer was set above). the
             ;; system heap lives in the top reserve (small kernel + OS objects);
-            ;; the process arena (0x0b20..0xbfff) is the per-bank heap for thread
-            ;; stacks and process images. both banks share this window; bank 2's
-            ;; own RAM is initialised when banking is brought up.
+            ;; the process arena (0x0d00..0xbfff) is the per-bank heap for thread
+            ;; stacks and process images; 0x0c00..0x0cff is reserved for the
+            ;; driver ISR stack in each bank. bank 2's own RAM is initialised
+            ;; when banking is brought up.
             ld      hl,#__usr_heap            ; process arena (bank 1)
             ld      de,#USER_HEAP_SIZE
             call    _mem_init
@@ -103,8 +104,8 @@ __sys_kernel::
             call    KERNEL_EXEC_SPACE
             ;; 3. initialise bank B's process arena by replicating the block-0
             ;;    free-list header mem_init just wrote into the current arena.
-            ld      hl,#USER_HEAP_BASE           ; src 0x0b20 (bank A)
-            ld      de,#USER_HEAP_BASE           ; dst 0x0b20 (bank B)
+            ld      hl,#USER_HEAP_BASE           ; src process arena base (bank A)
+            ld      de,#USER_HEAP_BASE           ; dst process arena base (bank B)
             ld      bc,#HEAP_HDR_BYTES
             xor     a                           ; dir = 0 -> A -> B
             call    KERNEL_EXEC_SPACE

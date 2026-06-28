@@ -9,10 +9,12 @@
             .equ    PARTOS_OFF_GET_SYS_INFO,    0
             .equ    PARTOS_OFF_CLEAR_SCREEN,    2
             .equ    PARTOS_OFF_WRITE_CONSOLE,   6
+            .equ    PARTOS_OFF_QUERY_SERVICE,   42
             .equ    PARTOS_OFF_CREATE_EVENT,    44
             .equ    PARTOS_OFF_DESTROY_EVENT,   46
             .equ    PARTOS_OFF_WAIT_EVENTS,     62
             .equ    PARTOS_OFF_EXIT_PROCESS,    70
+            .equ    PARTOS_OFF_MOUNT_FS,        74
             .equ    PARTOS_OFF_LOOKUP_PATH,     76
             .equ    PARTOS_OFF_OPEN_FILE,       78
             .equ    PARTOS_OFF_CREATE_FILE,     80
@@ -21,10 +23,12 @@
             .equ    PARTOS_OFF_READDIR,         86
             .equ    PARTOS_OFF_GET_BOOT_FS,     88
             .equ    PARTOS_OFF_GET_CMDLINE,     90
-            .equ    PARTOS_OFF_UNLINK_PATH,     92
-            .equ    PARTOS_OFF_MKDIR_PATH,      94
-            .equ    PARTOS_OFF_RMDIR_PATH,      96
-            .equ    PARTOS_OFF_WAIT_PROCESS,    98
+            .equ    PARTOS_OFF_GET_CWD,         92
+            .equ    PARTOS_OFF_UNLINK_PATH,     94
+            .equ    PARTOS_OFF_MKDIR_PATH,      96
+            .equ    PARTOS_OFF_RMDIR_PATH,      98
+            .equ    PARTOS_OFF_WAIT_PROCESS,    100
+            .equ    PARTOS_OFF_SET_TEXT_ATTR,   102
 
             .globl  pa_init$
             .globl  pa_call_offset$
@@ -36,12 +40,16 @@
             .globl  pa_write_char$
             .globl  pa_write_newline$
             .globl  pa_write_hex16$
+            .globl  pa_query_service$
+            .globl  pa_bind_event$
             .globl  pa_create_event$
             .globl  pa_destroy_event$
             .globl  pa_wait_one$
             .globl  pa_get_sys_info$
             .globl  pa_get_boot_fs$
             .globl  pa_get_command_line$
+            .globl  pa_get_current_dir$
+            .globl  pa_mount_fs$
             .globl  pa_exit_process$
             .globl  pa_wait_process$
             .globl  pa_lookup_path$
@@ -53,6 +61,7 @@
             .globl  pa_unlink_path$
             .globl  pa_mkdir_path$
             .globl  pa_rmdir_path$
+            .globl  pa_set_text_attr$
             .globl  pa_skip_spaces$
             .globl  pa_arg_start$
             .globl  pa_copy_token$
@@ -63,7 +72,8 @@
 pa_init$:
             ld      hl,#pa_service_name$
             rst     0x10
-            ld      (pa_partos$),de
+            .db     0xed, 0x53
+            .dw     pa_partos$
             ret
 
 pa_clear_screen$:
@@ -71,11 +81,15 @@ pa_clear_screen$:
             call    pa_call_offset$
             ld      a,h
             or      l
-            ret     z
+            jr      z,pcs_fail$
             jp      (hl)
+pcs_fail$:
+            ld      de,#0x0000
+            ret
 
 pa_call_offset$:
-            ld      hl,(pa_partos$)
+            .db     0x2a
+            .dw     pa_partos$
             ld      a,h
             or      l
             ret     z
@@ -87,7 +101,8 @@ pa_call_offset$:
             ret
 
 pa_call_fn$:
-            ld      bc,(pa_fn$)
+            .db     0xed, 0x4b
+            .dw     pa_fn$
             push    bc
             ret
 
@@ -107,7 +122,8 @@ pa_write_buffer$:
             ld      a,h
             or      l
             jr      z,pwb_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     de
             pop     hl
             call    pa_call_fn$
@@ -115,6 +131,7 @@ pa_write_buffer$:
 pwb_fail$:
             pop     de
             pop     hl
+            ld      de,#0x0000
             ret
 
 pa_write_cstr$:
@@ -132,8 +149,10 @@ pwcs_go$:
             jp      pa_write_buffer$
 
 pa_write_char$:
-            ld      (pa_char$),a
-            ld      hl,#pa_char$
+            .db     0x32
+            .dw     pa_char$
+            .db     0x21
+            .dw     pa_char$
             ld      de,#1
             jp      pa_write_buffer$
 
@@ -166,7 +185,8 @@ pa_hex_byte_pair$:
             ret
 
 pa_write_hex16$:
-            ld      de,#pa_hexbuf$
+            .db     0x11
+            .dw     pa_hexbuf$
             ld      a,#'0'
             ld      (de),a
             inc     de
@@ -177,9 +197,34 @@ pa_write_hex16$:
             call    pa_hex_byte_pair$
             ld      a,l
             call    pa_hex_byte_pair$
-            ld      hl,#pa_hexbuf$
+            .db     0x21
+            .dw     pa_hexbuf$
             ld      de,#6
             jp      pa_write_buffer$
+
+pa_query_service$:
+            push    hl
+            ld      bc,#PARTOS_OFF_QUERY_SERVICE
+            call    pa_call_offset$
+            ld      a,h
+            or      l
+            jr      z,pqs_fail$
+            .db     0x22
+            .dw     pa_fn$
+            pop     hl
+            call    pa_call_fn$
+            ret
+pqs_fail$:
+            pop     hl
+            ld      de,#0x0000
+            ret
+
+pa_bind_event$:
+            .db     0x22
+            .dw     pa_event$
+            .db     0x22
+            .dw     pa_wait_events$
+            ret
 
 pa_create_event$:
             ld      bc,#PARTOS_OFF_CREATE_EVENT
@@ -187,11 +232,14 @@ pa_create_event$:
             ld      a,h
             or      l
             jr      z,pa_ce_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             ld      hl,#0x0000
             call    pa_call_fn$
-            ld      (pa_event$),de
-            ld      hl,#pa_wait_events$
+            .db     0xed, 0x53
+            .dw     pa_event$
+            .db     0x21
+            .dw     pa_wait_events$
             ld      (hl),e
             inc     hl
             ld      (hl),d
@@ -201,7 +249,8 @@ pa_ce_fail$:
             ret
 
 pa_destroy_event$:
-            ld      hl,(pa_event$)
+            .db     0x2a
+            .dw     pa_event$
             ld      a,h
             or      l
             ret     z
@@ -211,14 +260,21 @@ pa_destroy_event$:
             ld      a,h
             or      l
             jr      z,pde_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     hl
             call    pa_call_fn$
             xor     a
-            ld      (pa_event$),a
-            ld      (pa_event$ + 1),a
-            ld      (pa_wait_events$),a
-            ld      (pa_wait_events$ + 1),a
+            .db     0x21
+            .dw     pa_event$
+            ld      (hl),a
+            inc     hl
+            ld      (hl),a
+            .db     0x21
+            .dw     pa_wait_events$
+            ld      (hl),a
+            inc     hl
+            ld      (hl),a
             ret
 pde_fail$:
             pop     hl
@@ -230,8 +286,10 @@ pa_wait_one$:
             ld      a,h
             or      l
             ret     z
-            ld      (pa_fn$),hl
-            ld      hl,#pa_wait_events$
+            .db     0x22
+            .dw     pa_fn$
+            .db     0x21
+            .dw     pa_wait_events$
             ld      a,#1
             push    af
             inc     sp
@@ -243,9 +301,13 @@ pa_get_sys_info$:
             call    pa_call_offset$
             ld      a,h
             or      l
-            ret     z
-            ld      (pa_fn$),hl
+            jr      z,pgsi_fail$
+            .db     0x22
+            .dw     pa_fn$
             call    pa_call_fn$
+            ret
+pgsi_fail$:
+            ld      de,#0x0000
             ret
 
 pa_get_boot_fs$:
@@ -253,9 +315,27 @@ pa_get_boot_fs$:
             call    pa_call_offset$
             ld      a,h
             or      l
-            ret     z
-            ld      (pa_fn$),hl
+            jr      z,pgbf_fail$
+            .db     0x22
+            .dw     pa_fn$
             call    pa_call_fn$
+            ret
+pgbf_fail$:
+            ld      de,#0x0000
+            ret
+
+pa_get_current_dir$:
+            ld      bc,#PARTOS_OFF_GET_CWD
+            call    pa_call_offset$
+            ld      a,h
+            or      l
+            jr      z,pgcd_fail$
+            .db     0x22
+            .dw     pa_fn$
+            call    pa_call_fn$
+            ret
+pgcd_fail$:
+            ld      de,#0x0000
             ret
 
 pa_get_command_line$:
@@ -263,9 +343,36 @@ pa_get_command_line$:
             call    pa_call_offset$
             ld      a,h
             or      l
-            ret     z
-            ld      (pa_fn$),hl
+            jr      z,pgcl_fail$
+            .db     0x22
+            .dw     pa_fn$
             call    pa_call_fn$
+            ret
+pgcl_fail$:
+            ld      de,#0x0000
+            ret
+
+pa_mount_fs$:
+            push    hl
+            push    de
+            ld      bc,#PARTOS_OFF_MOUNT_FS
+            call    pa_call_offset$
+            ld      a,h
+            or      l
+            jr      z,pa_mount_fail$
+            .db     0x22
+            .dw     pa_fn$
+            pop     de
+            pop     hl
+            .db     0xed, 0x4b
+            .dw     pa_event$
+            push    bc                  ; event
+            call    pa_call_fn$
+            ret
+pa_mount_fail$:
+            pop     de
+            pop     hl
+            ld      de,#0xfffe
             ret
 
 pa_exit_process$:
@@ -277,12 +384,24 @@ pa_exit_process$:
             jp      (hl)
 
 pa_wait_process$:
+            push    hl                  ; preserve process pointer across lookup
             ld      bc,#PARTOS_OFF_WAIT_PROCESS
             call    pa_call_offset$
             ld      a,h
             or      l
-            ret     z
-            jp      (hl)
+            jr      z,pa_wait_fail$
+            ex      de,hl               ; de = resolved _process_wait entry
+            pop     hl                  ; hl = process pointer
+            push    hl                  ; duplicate target so DE matches HL
+            pop     bc
+            ex      de,hl               ; hl = resolved entry, de = process
+            push    hl
+            ld      h,b
+            ld      l,c                 ; hl = process, de = process
+            ret
+pa_wait_fail$:
+            pop     hl
+            ret
 
 pa_lookup_path$:
             push    hl
@@ -293,12 +412,14 @@ pa_lookup_path$:
             ld      a,h
             or      l
             jr      z,pa_lkp_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     bc
             pop     de
             pop     hl
             push    bc                  ; result
-            ld      bc,(pa_event$)
+            .db     0xed, 0x4b
+            .dw     pa_event$
             push    bc                  ; event
             call    pa_call_fn$
             ret
@@ -318,12 +439,14 @@ pa_open_file$:
             ld      a,h
             or      l
             jr      z,pa_open_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     bc
             pop     de
             pop     hl
             push    bc                  ; file
-            ld      bc,(pa_event$)
+            .db     0xed, 0x4b
+            .dw     pa_event$
             push    bc                  ; event
             call    pa_call_fn$
             ret
@@ -343,12 +466,14 @@ pa_create_file$:
             ld      a,h
             or      l
             jr      z,pa_create_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     bc
             pop     de
             pop     hl
             push    bc                  ; file
-            ld      bc,(pa_event$)
+            .db     0xed, 0x4b
+            .dw     pa_event$
             push    bc                  ; event
             call    pa_call_fn$
             ret
@@ -368,14 +493,18 @@ pa_read_file$:
             ld      a,h
             or      l
             jr      z,pa_read_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     bc
             pop     de
             pop     hl
-            ld      (pa_tmp_word$),bc
-            ld      bc,(pa_event$)
+            .db     0xed, 0x43
+            .dw     pa_tmp_word$
+            .db     0xed, 0x4b
+            .dw     pa_event$
             push    bc                  ; event
-            ld      bc,(pa_tmp_word$)
+            .db     0xed, 0x4b
+            .dw     pa_tmp_word$
             push    bc                  ; bytes
             call    pa_call_fn$
             ret
@@ -395,14 +524,18 @@ pa_write_file$:
             ld      a,h
             or      l
             jr      z,pa_write_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     bc
             pop     de
             pop     hl
-            ld      (pa_tmp_word$),bc
-            ld      bc,(pa_event$)
+            .db     0xed, 0x43
+            .dw     pa_tmp_word$
+            .db     0xed, 0x4b
+            .dw     pa_event$
             push    bc                  ; event
-            ld      bc,(pa_tmp_word$)
+            .db     0xed, 0x4b
+            .dw     pa_tmp_word$
             push    bc                  ; bytes
             call    pa_call_fn$
             ret
@@ -422,12 +555,14 @@ pa_readdir$:
             ld      a,h
             or      l
             jr      z,pa_readdir_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     bc
             pop     de
             pop     hl
             push    bc                  ; info
-            ld      bc,(pa_event$)
+            .db     0xed, 0x4b
+            .dw     pa_event$
             push    bc                  ; event
             call    pa_call_fn$
             ret
@@ -447,12 +582,14 @@ pa_unlink_path$:
             ld      a,h
             or      l
             jr      z,pa_unlink_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     bc
             pop     de
             pop     hl
             push    bc                  ; result
-            ld      bc,(pa_event$)
+            .db     0xed, 0x4b
+            .dw     pa_event$
             push    bc                  ; event
             call    pa_call_fn$
             ret
@@ -472,12 +609,14 @@ pa_mkdir_path$:
             ld      a,h
             or      l
             jr      z,pa_mkdir_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     bc
             pop     de
             pop     hl
             push    bc                  ; result
-            ld      bc,(pa_event$)
+            .db     0xed, 0x4b
+            .dw     pa_event$
             push    bc                  ; event
             call    pa_call_fn$
             ret
@@ -497,12 +636,14 @@ pa_rmdir_path$:
             ld      a,h
             or      l
             jr      z,pa_rmdir_fail$
-            ld      (pa_fn$),hl
+            .db     0x22
+            .dw     pa_fn$
             pop     bc
             pop     de
             pop     hl
             push    bc                  ; result
-            ld      bc,(pa_event$)
+            .db     0xed, 0x4b
+            .dw     pa_event$
             push    bc                  ; event
             call    pa_call_fn$
             ret
@@ -510,6 +651,23 @@ pa_rmdir_fail$:
             pop     bc
             pop     de
             pop     hl
+            ld      de,#0x0000
+            ret
+
+pa_set_text_attr$:
+            push    af
+            ld      bc,#PARTOS_OFF_SET_TEXT_ATTR
+            call    pa_call_offset$
+            ld      a,h
+            or      l
+            jr      z,psta_fail$
+            .db     0x22
+            .dw     pa_fn$
+            pop     af
+            call    pa_call_fn$
+            ret
+psta_fail$:
+            pop     af
             ld      de,#0x0000
             ret
 
@@ -581,7 +739,7 @@ pa_service_name$:
 pa_newline$:
             .db     0x0d,0x0a
 
-            .area   _INITIALIZED
+            .area   _DATA
 
 pa_partos$:
             .dw     0x0000

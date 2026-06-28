@@ -59,8 +59,8 @@
             ;; worker + bootstrap stacks both live in the user heap; a sacrificial
             ;; guard block is allocated between them so a deep lookup cannot
             ;; scribble into the bootstrap stack. (user-heap only, not kernel.)
-            .equ    FAT_USER_STACK_GUARD,   8192
-            .equ    FAT_WORKER_STACK,       12288
+            .equ    FAT_USER_STACK_GUARD,   2048
+            .equ    FAT_WORKER_STACK,       0
 
             ;; --- fat_fs_t offsets (30 bytes) --------------------------------
             .equ    FATFS_DEV,              0

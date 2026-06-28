@@ -21,6 +21,32 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_options(-g -O0 -Wall -Wextra -Wno-unused-parameter)
 endif()
 
+set(PARTOS_LAYOUT_HEADER ${CMAKE_SOURCE_DIR}/partos/build/partos_layout.hpp)
+file(GLOB_RECURSE PARTOS_LAYOUT_DEPENDS CONFIGURE_DEPENDS
+    ${CMAKE_SOURCE_DIR}/partos/src/*.s
+    ${CMAKE_SOURCE_DIR}/partos/src/*.c
+    ${CMAKE_SOURCE_DIR}/partos/src/*.inc
+    ${CMAKE_SOURCE_DIR}/partos/include/*.h
+    ${CMAKE_SOURCE_DIR}/partos/Makefile
+    ${CMAKE_SOURCE_DIR}/tools/check_partos_layout.py
+)
+add_custom_command(
+    OUTPUT ${PARTOS_LAYOUT_HEADER}
+    COMMAND ${CMAKE_MAKE_PROGRAM} -C ${CMAKE_SOURCE_DIR}/partos build/partos_layout.hpp
+    DEPENDS ${PARTOS_LAYOUT_DEPENDS}
+    COMMENT "Generating PartOS layout header"
+    VERBATIM
+)
+add_custom_target(partos_layout_header DEPENDS ${PARTOS_LAYOUT_HEADER})
+
+function(idp_require_partos_layout target_name)
+    add_dependencies(${target_name} partos_layout_header)
+    target_include_directories(${target_name} PRIVATE
+        ${CMAKE_SOURCE_DIR}/src
+        ${CMAKE_SOURCE_DIR}/partos/build
+    )
+endfunction()
+
 # --- SDL2 (system) ---
 find_package(SDL2 REQUIRED)
 

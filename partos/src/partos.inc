@@ -20,18 +20,20 @@
             .equ    SERVICES_LOAD_BASE, 0xc000 ; shared OS payload (16 KB)
             .equ    SERVICES_SECTORS,   64     ; 16 KB / 256
 
-            ;; OS bank-local scratch lives in the first 800 bytes above the
-            ;; mirrored kernel. it holds zero-initialized OS/private driver
-            ;; work state so the shared OS image can stay below the kernel
-            ;; reserve while keeping its loaded code+data contiguous.
+            ;; OS bank-local scratch lives in the first 1 KB above the mirrored
+            ;; kernel. it holds zero-initialized OS/private driver work state
+            ;; so the shared OS image can stay below the kernel reserve while
+            ;; keeping its loaded code+data contiguous.
             .equ    OS_SYSVARS_BASE,    0x0800
-            .equ    OS_SYSVARS_SIZE,    0x0320 ; 800 bytes reserved in bank 1
+            .equ    OS_SYSVARS_SIZE,    0x0400 ; 1 KB reserved in bank 1
 
-            ;; process arena: per-bank heap above the OS scratch window, running
-            ;; up to the shared region. thread stacks and process images come
-            ;; from here; both banks use this same window.
-            .equ    USER_HEAP_BASE,     0x0b20 ; 0x0800..0x0b1f reserved for OS
-            .equ    USER_HEAP_SIZE,     0xb4e0 ; 0x0b20..0xbfff
+            ;; a dedicated bank-local ISR stack lives just above the OS
+            ;; scratch window so driver interrupts never collide with the
+            ;; small common-RAM kernel heap. the process arena starts above it
+            ;; and runs up to the shared region; thread stacks and process
+            ;; images come from there in either bank.
+            .equ    USER_HEAP_BASE,     0x0d00 ; 0x0800..0x0cff reserved
+            .equ    USER_HEAP_SIZE,     0xb300 ; 0x0d00..0xbfff
             .equ    USER_HEAP_TOP,      0xc000
 
             ;; ram bank-select ports: any i/o access in 0x88..0x8f maps bank A,
@@ -61,27 +63,27 @@
             ;; micro-kernel page (0x0000) holds no mutable data, so it stays
             ;; read-only / mirrored. sizes are provisional -- bump them here (and
             ;; the OS automatically gets less room) if the kernel needs more.
-            ;;   0xfb50..0xfb7f  exec space (bank fns)     (48 bytes)
-            ;;   0xfb80..0xfbbf  sysvars (scratch)        (64 bytes)
-            ;;   0xfbc0..0xfd7f  system heap (kernel + OS) (448 bytes)
-            ;;   0xfd00..0xfd7f  isr stack                (128 bytes)
-            ;;   0xfd80..0xfdff  kernel stack             (128 bytes)
-            ;;   0xfe00..0xffff  im 2 table (page-aligned)(512 bytes)
-            .equ    KERNEL_SYSVARS_BASE, 0xfb80
+            ;;   0xfc20..0xfc3f  exec space (bank fns)      (32 bytes)
+            ;;   0xfc40..0xfc5f  sysvars (scratch)          (32 bytes)
+            ;;   0xfc60..0xfd9f  system heap (shared objects only) (320 bytes)
+            ;;   0xfda0..0xfdff  kernel bootstrap / ISR stack (96 bytes)
+            ;;   0xfe00..0xffff  im 2 table (page-aligned) (512 bytes)
+            .equ    KERNEL_SYSVARS_BASE, 0xfc40
             ;; exec space: a few small kernel routines that MUST run from
             ;; always-mapped shared RAM -- the bank block-copy and the bank-call
             ;; trampoline. they cannot live in the mirrored low page because they
             ;; are what builds the mirror (and they flip banks under their own
             ;; PC). the kernel copies them here from its image at boot. this is
             ;; the lowest reserve address, so it is the OS payload's ceiling.
-            .equ    KERNEL_EXEC_SIZE,   0x0030 ; 48 bytes; __bank_copy uses 31
+            .equ    KERNEL_EXEC_SIZE,   0x0020 ; 32 bytes; __bank_copy uses 31
             .equ    KERNEL_EXEC_SPACE,  (KERNEL_SYSVARS_BASE - KERNEL_EXEC_SIZE)
-            .equ    KERNEL_HEAP_BASE,   0xfbc0
-            .equ    KERNEL_HEAP_SIZE,   0x01c0 ; 448 bytes; butts against the stack
-            ;; device ISRs switch to this dedicated stack so they never run on
-            ;; (and overflow) the interrupted thread's own stack. grows down.
-            .equ    DRV_ISR_STACK_TOP,  0xfd80
+            .equ    KERNEL_HEAP_BASE,   0xfc68
             .equ    KERNEL_STACK_TOP,   0xfe00
+            .equ    KERNEL_HEAP_SIZE,   0x0138 ; 312 bytes; leaves 96 B above it
+            ;; device ISRs switch to the dedicated bank-local stack just below
+            ;; USER_HEAP_BASE, which gives them 256 bytes of headroom without
+            ;; touching the common-RAM heap.
+            .equ    DRV_ISR_STACK_TOP,  USER_HEAP_BASE
             ;; im 2 table must be page-aligned (the i register supplies its high
             ;; byte). a device vector V selects the handler at base + V, so the
             ;; full vector range spans 512 bytes / two pages.

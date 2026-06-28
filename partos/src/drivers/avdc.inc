@@ -43,9 +43,10 @@
             .equ    AVDC_CLEAR_END,         0x1fff
 
             .equ    AVDC_ATTR_NORMAL,       0x00
+            .equ    AVDC_ATTR_UNDERLINE,    0x02
             .equ    AVDC_ATTR_HIGHLIGHT,    0x10
             .equ    AVDC_ATTR_INVERSE,      0x20
-            .equ    AVDC_ATTR_MASK,         0x30
+            .equ    AVDC_ATTR_MASK,         0x32
 
             .equ    AVDC_MEM_ACC,           0x10
             .equ    AVDC_STS_RDY,           0x20
@@ -103,6 +104,7 @@
             .equ    GDP_CLEAR_END,          AVDC_CLEAR_END
 
             .equ    GDP_ATTR_NORMAL,        AVDC_ATTR_NORMAL
+            .equ    GDP_ATTR_UNDERLINE,     AVDC_ATTR_UNDERLINE
             .equ    GDP_ATTR_HIGHLIGHT,     AVDC_ATTR_HIGHLIGHT
             .equ    GDP_ATTR_INVERSE,       AVDC_ATTR_INVERSE
             .equ    GDP_ATTR_MASK,          AVDC_ATTR_MASK

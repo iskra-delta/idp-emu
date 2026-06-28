@@ -85,7 +85,7 @@ runtime via `rst 0x08` (see §6).
 0xF940 ├───────────────────────────────────────────────┤  ┐
        │ 0xF940  exec scratch (bank routine)  128 B     │  │ kernel
        │ 0xF9C0  sysvars                        64 B     │  │ runtime
-       │ 0xFA00  system heap (kernel + OS)     768 B     │  │ reserve
+       │ 0xFA00  system heap (shared objects)    768 B      │  │ reserve
        │ 0xFD00  stack (isr 128 + kernel 128)  256 B     │  │ (NOT loaded)
        │ 0xFE00  IM2 vector table (page-al.)   512 B     │  │
 0xFFFF └───────────────────────────────────────────────┘  ┘
