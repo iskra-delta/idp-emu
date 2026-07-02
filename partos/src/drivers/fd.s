@@ -133,6 +133,16 @@ fd_open::
             ;; the recalibrate below would otherwise never complete.
             xor     a
             out     (FD_PORT_MOTOR),a
+            ;; an enumerated floppy drive can still be empty. detect that up
+            ;; front so callers get DRV_ERR instead of waiting forever on a
+            ;; completion event that no read will ever signal.
+            call    fd_sense_dev$
+            jr      c,fdo_fail$
+            and     #FD_ST3_READY
+            jr      nz,fdo_ready$
+fdo_fail$:
+            jp      drv_err
+fdo_ready$:
             ;; mask the fdc completion interrupt across the recalibrate: the
             ;; recal waits via a polled SENSE-INTERRUPT loop, and the installed
             ;; _fd_isr would otherwise race it and consume the seek-complete
@@ -420,6 +430,24 @@ fd_get_hu$:
             add     a,a
             or      (hl)
             pop     hl
+            ret
+
+fd_sense_dev$:
+            push    hl
+            ld      a,#FD_CMD_SENSE_DRIVE
+            call    fd_write_data$
+            jr      c,fdsd_fail$
+            ld      b,#0
+            call    fd_get_hu$
+            call    fd_write_data$
+            jr      c,fdsd_fail$
+            call    fd_read_data$
+            pop     hl
+            or      a
+            ret
+fdsd_fail$:
+            pop     hl
+            scf
             ret
 
 fd_recal_dev$:

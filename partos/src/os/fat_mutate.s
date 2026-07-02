@@ -457,11 +457,15 @@ fat_mut_step$:
 fat_mut_sector$:
             .ds     2
 fat_mut_start$:
+            .ds     2
 fat_mut_prev$:
+            .ds     2
 fat_mut_file$:
             .ds     2
 fat_mut_curr$:
+            .ds     2
 fat_mut_new$:
+            .ds     2
 fat_mut_entry$:
             .ds     2
 fat_mut_count$:

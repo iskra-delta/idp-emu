@@ -5,8 +5,15 @@
             ;; policy:
             ;;   - graphics models print through the AVDC device
             ;;   - text models print through the first configured TERMINAL SIO
-            ;;   - keyboard input is polled from SIO0A (the common keyboard path
-            ;;     in the current emulator + ROM model)
+            ;;   - keyboard input is read through the SIO driver (SIO0A channel)
+            ;;
+            ;; keyboard input goes through the SIO driver's synchronous polled
+            ;; ioctls (PEEK / GETC, see drivers/sio.inc) instead of poking the SIO
+            ;; ports here. text output still uses the small inline polled TX below:
+            ;; routing text output through the driver's PUTC/TTYINIT ioctls also
+            ;; works electrically, but it perturbs the OS layout enough to trip a
+            ;; latent (nondeterministic-`-Os`-userland) command-execution bug, so
+            ;; it is deferred until that userland issue is resolved.
             ;;
             ;; the public calls are intentionally tiny:
             ;;   clear_screen()
@@ -37,6 +44,8 @@
             .globl  avdc_dev0
             .globl  __sys_model
             .globl  __sys_nvram_cache
+            .globl  sio_ioctl
+            .globl  sio_dev0
 
             .equ    MODEL_F_GRAPHICS,          0x01
             .equ    CONSOLE_MODE_TTY,          0
@@ -52,10 +61,6 @@
             .equ    CONSOLE_TTYS3_TERMINAL,    0x01
 
             .area   _CODE
-
-console_ok$:
-            ld      de,#DRV_OK
-            ret
 
 console_tty_putc$:
             push    bc                  ; callers keep lengths/coords in bc
@@ -225,8 +230,11 @@ pwc_avdc$:
             ld      c,e
             pop     de                  ; de = buf
             ld      hl,(console_dev$)
+            push    ix                  ; SDCC C callers may keep a live frame
+                                        ; pointer in IX across the service call.
             ld      ix,#0x0000
             call    avdc_write
+            pop     ix
             ex      de,hl
             ret
 
@@ -290,36 +298,35 @@ psta_avdc$:
             ret
 
 _partos_peek_keyboard::
-            ;; Console input is a blocking/polling userland boundary. If a
-            ;; caller reaches it with maskable interrupts still off, the shell
-            ;; can monopolize the CPU and starve newly created runnable
-            ;; threads. Keep keyboard polling preemptible.
-            ei
-            in      a,(SIO0A_CTRL_PORT)
-            and     #SIO_RR0_RX_AVAIL
-            jr      nz,ppk_have$
-            ld      de,#0xffff
-            ret
-ppk_have$:
-            in      a,(SIO0A_DATA_PORT)
-            ld      e,a
-            ld      d,#0x00
+            ;; non-blocking keyboard poll through the SIO driver (its PEEK
+            ;; re-arms interrupts so a polling console stays preemptible). result
+            ;; in de; hl/bc/ix preserved (the hand-written shell keeps its input
+            ;; buffer pointer/count in them across this call).
+            push    ix
+            push    hl
+            push    bc
+            ld      hl,#sio_dev0
+            ld      bc,#SIO_IOCTL_PEEK
+            call    sio_ioctl           ; hl = char / 0xffff
+            ex      de,hl
+            pop     bc
+            pop     hl
+            pop     ix
             ret
 
 _partos_read_keyboard::
-            ;; Same rule as peek_keyboard(): a user thread blocked on keyboard
-            ;; input must leave the periodic tick free to schedule other
-            ;; runnable threads. Re-arm maskable interrupts on every polling
-            ;; pass so a prior interrupt accept cannot strand us in the loop
-            ;; with IFF1 cleared again.
-prk_wait$:
-            ei
-            in      a,(SIO0A_CTRL_PORT)
-            and     #SIO_RR0_RX_AVAIL
-            jr      z,prk_wait$
-            in      a,(SIO0A_DATA_PORT)
-            ld      e,a
-            ld      d,#0x00
+            ;; blocking keyboard read through the SIO driver (its GETC re-arms
+            ;; interrupts on every polling pass). same register contract as peek.
+            push    ix
+            push    hl
+            push    bc
+            ld      hl,#sio_dev0
+            ld      bc,#SIO_IOCTL_GETC
+            call    sio_ioctl           ; hl = char
+            ex      de,hl
+            pop     bc
+            pop     hl
+            pop     ix
             ret
 
             .area   _INITIALIZED

@@ -1,32 +1,24 @@
-#include "../lib/partos.h"
+#include "../lib/libc.h"
 
 static char cat_path[APP_PATH_CAP];
-static pa_file_t cat_file;
+static fat_file_t cat_file;
 static uint8_t cat_buf[256];
 
-static const char cat_usage_text[] = "usage: cat PATH\r\n";
-static const char cat_align_text[] = "only 256-byte aligned files\r\n";
-static const char cat_error_text[] = "?\r\n";
+static const char cat_usage_text[] = "usage: cat PATH";
+static const char cat_align_text[] = "only 256-byte aligned files";
+static const char cat_error_text[] = "?";
 
 int main(int argc, char **argv)
 {
     fat_fs_t *fs;
-    char *cursor;
     uint16_t secs;
-
-    (void)argc;
-    (void)argv;
 
     fs = app_boot_filesystem();
     if ((fs == 0) || (app_open_event() == 0)) {
-        app_write_cstr(cat_error_text);
+        puts(cat_error_text);
         return 1;
     }
-
-    cursor = app_arg_start();
-    if (!app_copy_token(&cursor, cat_path, APP_PATH_CAP) ||
-        !app_require_eol(cursor) ||
-        !app_resolve_path(cat_path, APP_PATH_CAP, cat_path)) {
+    if ((argc != 2) || !app_resolve_path(cat_path, APP_PATH_CAP, argv[1])) {
         goto cat_usage;
     }
 
@@ -54,14 +46,14 @@ int main(int argc, char **argv)
     return 0;
 
 cat_usage:
-    app_write_cstr(cat_usage_text);
+    puts(cat_usage_text);
     return 1;
 
 cat_align:
-    app_write_cstr(cat_align_text);
+    puts(cat_align_text);
     return 1;
 
 cat_error:
-    app_write_cstr(cat_error_text);
+    puts(cat_error_text);
     return 1;
 }

@@ -137,6 +137,7 @@ typedef struct thread_s {
     struct thread_s **joined;
     void    *process;
     uint8_t  bank;
+    event_t *wait_inline;
 } thread_t;
 
 #define MAX_PNAME_LEN               8
@@ -539,6 +540,16 @@ typedef struct libc_s {
     const char *(*getenv)(const char *name);
     const char *(*get_current_device_name)(void);
     int16_t (*write_prompt)(void);
+    /* Appended to preserve the original shell-service offsets. */
+    uint16_t (*strlen)(const char *s);
+    int16_t (*strcmp)(const char *lhs, const char *rhs);
+    int16_t (*strncmp)(const char *lhs, const char *rhs, uint16_t n);
+    char *(*strcpy)(char *dst, const char *src);
+    void *(*memcpy)(void *dst, const void *src, uint16_t n);
+    void *(*memset)(void *dst, int16_t value, uint16_t n);
+    int16_t (*write)(const void *buf, uint16_t len);
+    int16_t (*putchar)(int16_t ch);
+    int16_t (*puts)(const char *s);
 } libc_t;
 
 typedef libc_t shell_t;

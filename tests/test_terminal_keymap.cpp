@@ -71,8 +71,17 @@ int main()
 
     {
         std::vector<uint8_t> out;
+        if (!map_terminal_key(SDLK_BACKSPACE, out, false) ||
+            !expect_bytes(out, { 0x08 }, "backspace"))
+        {
+            fails++;
+        }
+    }
+
+    {
+        std::vector<uint8_t> out;
         if (!map_terminal_key(SDLK_DELETE, out, false) ||
-            !expect_bytes(out, { 0xFE }, "delete_setup"))
+            !expect_bytes(out, { 0x7F }, "delete"))
         {
             fails++;
         }

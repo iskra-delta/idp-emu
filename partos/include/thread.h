@@ -39,6 +39,7 @@ typedef struct thread_s {
     struct thread_s **joined;           /* joined threads (unused for now) */
     void    *process;                   /* parent process / opaque thread data */
     uint8_t  bank;                      /* RAM bank the thread runs in */
+    event_t *wait_inline;               /* shared one-event wait mirror (kernel-owned) */
 } thread_t;
 
 extern thread_t *thread_current;

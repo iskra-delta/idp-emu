@@ -66,6 +66,24 @@ target_include_directories(test_partner_gdp_keyboard PRIVATE ${CMAKE_SOURCE_DIR}
 
 add_test(NAME partner_gdp_keyboard_unit COMMAND test_partner_gdp_keyboard)
 
+add_executable(test_partner_gdp_memacc
+    test_partner_gdp_memacc.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partner_gdp_memacc PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partner_gdp_memacc PRIVATE GL_GLEXT_PROTOTYPES)
+target_link_libraries(test_partner_gdp_memacc PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partner_gdp_memacc)
+
+add_test(NAME partner_gdp_memacc_unit COMMAND test_partner_gdp_memacc)
+
 add_executable(test_ef9367
     test_ef9367.cpp
 )
@@ -144,6 +162,150 @@ idp_require_partos_layout(test_partos_bios_menu_gdp)
 
 add_test(NAME partos_bios_menu_gdp COMMAND test_partos_bios_menu_gdp)
 
+add_executable(test_partos_gdp_ls_scroll
+    test_partos_gdp_ls_scroll.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partos_gdp_ls_scroll PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partos_gdp_ls_scroll PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
+target_link_libraries(test_partos_gdp_ls_scroll PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_gdp_ls_scroll)
+
+add_test(NAME partos_gdp_ls_scroll COMMAND test_partos_gdp_ls_scroll)
+
+add_executable(test_partos_gdp_shell_edit
+    test_partos_gdp_shell_edit.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partos_gdp_shell_edit PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partos_gdp_shell_edit PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
+target_link_libraries(test_partos_gdp_shell_edit PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_gdp_shell_edit)
+
+add_test(NAME partos_gdp_shell_edit COMMAND test_partos_gdp_shell_edit)
+
+add_executable(test_partos_mkdir_return
+    test_partos_mkdir_return.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partos_mkdir_return PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partos_mkdir_return PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
+target_link_libraries(test_partos_mkdir_return PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_mkdir_return)
+
+add_test(NAME partos_mkdir_return COMMAND test_partos_mkdir_return)
+
+add_executable(test_partos_cd_return
+    test_partos_cd_return.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partos_cd_return PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partos_cd_return PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
+target_link_libraries(test_partos_cd_return PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_cd_return)
+
+add_test(NAME partos_cd_return COMMAND test_partos_cd_return)
+
+add_executable(test_partos_cp_return
+    test_partos_cp_return.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partos_cp_return PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partos_cp_return PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
+target_link_libraries(test_partos_cp_return PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_cp_return)
+
+add_test(NAME partos_cp_return COMMAND test_partos_cp_return)
+
+add_executable(test_partos_cwd_command_lookup
+    test_partos_cwd_command_lookup.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partos_cwd_command_lookup PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partos_cwd_command_lookup PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
+target_link_libraries(test_partos_cwd_command_lookup PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_cwd_command_lookup)
+
+add_test(NAME partos_cwd_command_lookup COMMAND test_partos_cwd_command_lookup)
+
+add_executable(test_partos_mv_cross_dir_lookup
+    test_partos_mv_cross_dir_lookup.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partos_mv_cross_dir_lookup PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partos_mv_cross_dir_lookup PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
+target_link_libraries(test_partos_mv_cross_dir_lookup PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_mv_cross_dir_lookup)
+
+add_test(NAME partos_mv_cross_dir_lookup COMMAND test_partos_mv_cross_dir_lookup)
+
+add_executable(test_partos_cd_fd0_missing
+    test_partos_cd_fd0_missing.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partos_cd_fd0_missing PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partos_cd_fd0_missing PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}" GL_GLEXT_PROTOTYPES)
+target_link_libraries(test_partos_cd_fd0_missing PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partos_cd_fd0_missing)
+
+add_test(NAME partos_cd_fd0_missing COMMAND test_partos_cd_fd0_missing)
+
 add_executable(test_rtc_nvram_shadow
     test_rtc_nvram_shadow.cpp
     ../src/chips_impl.cpp
@@ -161,9 +323,47 @@ add_test(NAME rtc_nvram_shadow COMMAND test_rtc_nvram_shadow)
 # device probe, the round-robin scheduler and FAT mount-submit.
 add_test(NAME partos_kernel_boot COMMAND idp-kernel-probe)
 
+# ROM loader byte-for-byte verification for the real HD split image path.
+add_test(NAME partos_bootload COMMAND idp-bootload-probe partos/bin/partos.rom hd)
+
 # ROM -> HDD kernel load -> scheduler -> FAT shell read (no kernel overlay).
 add_test(NAME partos_full_boot COMMAND idp-full-boot-probe)
 
-set_tests_properties(partos_kernel_boot partos_full_boot PROPERTIES
+# Match the normal F5 launch topology: mounted FD0 first, then fall through to
+# the HD boot path that carries the split PartOS image.
+add_test(NAME partos_full_boot_fd0 COMMAND idp-full-boot-probe)
+set_tests_properties(partos_full_boot_fd0 PROPERTIES
+    ENVIRONMENT "IDP_BOOT_VIA_FD0=1"
+)
+
+# End-to-end shell regression pack: boots to the prompt and drives a scripted
+# sequence of real keypress commands (ls/echo/mkdir/cd/cp/mv/run/rename/del/
+# rmdir + cwd-only-lookup and slash-path negative cases), asserting output and
+# detecting freezes/timeouts.
+add_test(NAME partos_shell_regression COMMAND idp-shell-regression)
+
+set_tests_properties(
+    partos_kernel_boot
+    partos_bootload
+    partos_full_boot
+    partos_full_boot_fd0
+    partos_shell_regression
+    PROPERTIES
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
+
+# Freeze the emulated RTC to a fixed epoch so PartOS boots are reproducible.
+# The mm58167 otherwise latches host time() on every access (see
+# lib/chipsex/national/mm58167.h), which makes the screen-scraping golden tests
+# flap PASS/FAIL run-to-run even though the build is byte-for-byte deterministic.
+# APPEND so tests that already set ENVIRONMENT (e.g. full_boot_fd0) keep theirs.
+foreach(idp_partos_test
+    partos_boot_banner partos_bios_menu_crt partos_bios_menu_gdp
+    partos_gdp_ls_scroll partos_gdp_shell_edit partos_mkdir_return
+    partos_cd_return partos_cp_return partos_cwd_command_lookup
+    partos_mv_cross_dir_lookup partos_cd_fd0_missing rtc_nvram_shadow
+    partos_kernel_boot partos_bootload partos_full_boot
+    partos_full_boot_fd0 partos_shell_regression)
+  set_property(TEST ${idp_partos_test} APPEND PROPERTY
+      ENVIRONMENT "IDP_FIXED_RTC=1700000000")
+endforeach()

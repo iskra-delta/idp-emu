@@ -37,6 +37,10 @@ constexpr uint8_t  PARTNER_CTC_TICK_VECTOR = 0x8C;
 constexpr uint8_t  PARTNER_CTC_VBL_VECTOR  = 0x8E;
 constexpr uint8_t  PARTNER_SPURIOUS_VECTOR = 0x00;
 constexpr uint8_t  PARTNER_DEV_FLAG_BUSY = 0x02;
+constexpr uint8_t  PARTNER_FD0_TYPE_MASK = 0xC0;
+constexpr uint8_t  PARTNER_FD1_TYPE_MASK = 0x30;
+constexpr uint8_t  PARTNER_FD2_TYPE_MASK = 0x0C;
+constexpr uint8_t  PARTNER_FD3_TYPE_MASK = 0x03;
 
 static inline uint8_t partner_fallback_im2_vector(const z80ctc_t&) {
     /*
@@ -1471,6 +1475,25 @@ void partner::reset()
     idpartner_sasi_reset(&sasi_);
     mm58167a_reset(&rtc);
     load_rtc_nvram();
+    rtc.regs[0x0F] &= 0xF0;
+    if (disks_[0].data.empty())
+        rtc.regs[0x09] &= (uint8_t)~PARTNER_FD0_TYPE_MASK;
+    if (disks_[1].data.empty())
+        rtc.regs[0x09] &= (uint8_t)~PARTNER_FD1_TYPE_MASK;
+    if (disks_[2].data.empty())
+        rtc.regs[0x09] &= (uint8_t)~PARTNER_FD2_TYPE_MASK;
+    if (disks_[3].data.empty())
+        rtc.regs[0x09] &= (uint8_t)~PARTNER_FD3_TYPE_MASK;
+    {
+        uint8_t nibble_sum = 0;
+
+        for (uint8_t i = 0; i < 8; ++i) {
+            const uint8_t value = rtc.regs[0x08 + i];
+            nibble_sum = (uint8_t)((nibble_sum + (value & 0x0F)) & 0x0F);
+            nibble_sum = (uint8_t)((nibble_sum + ((value >> 4) & 0x0F)) & 0x0F);
+        }
+        rtc.regs[0x0F] |= (uint8_t)((-nibble_sum) & 0x0F);
+    }
 
     rom_enabled = true;
     ram_bank = 1;

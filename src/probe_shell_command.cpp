@@ -32,6 +32,15 @@ constexpr uint16_t ADDR_NVRAM_CACHE = 0xDE0F;
 constexpr uint64_t BOOT_TICK_LIMIT = 40'000'000ULL;
 constexpr uint64_t DEFAULT_KEY_TICKS = 4000ULL;
 constexpr uint64_t DEFAULT_POST_TICKS = 2'000'000ULL;
+constexpr uint16_t APP_RUNTIME_DATA_OFF = 0x0F19;
+constexpr uint16_t APP_RUNTIME_EVENT_OFF = APP_RUNTIME_DATA_OFF + 4;
+constexpr uint16_t FATFS_ALLOC_HINT_OFF = 22;
+constexpr uint16_t FATFILE_FIRST_CLUSTER_OFF = 0;
+constexpr uint16_t FATFILE_FS_OFF = 12;
+constexpr uint16_t FATFILE_POS_OFF = 14;
+constexpr uint16_t FATREQ_OP_OFF = 4;
+constexpr uint16_t FATREQ_BYTES_OFF = 14;
+constexpr uint16_t FATREQ_ARG_OFF = 16;
 
 struct symbol_map {
     std::map<std::string, std::vector<uint16_t>> syms;
@@ -199,6 +208,15 @@ static std::string uppercase_ascii(std::string s)
     return s;
 }
 
+static std::string lowercase_ascii(std::string s)
+{
+    for (char &ch : s) {
+        if (ch >= 'A' && ch <= 'Z')
+            ch = (char)(ch - 'A' + 'a');
+    }
+    return s;
+}
+
 static bool shell_prompt_seen(const partner_crt &emu)
 {
     const std::string term = emu.dump_terminal_text();
@@ -253,7 +271,7 @@ int main(int argc, char **argv)
     const std::string os_map_path = root + "/partos/build/os.map";
     const std::string shell_map_path = root + "/partos/build/shell_payload.map";
     const std::string app_stem = command_stem(command);
-    const std::string expected_proc_name = uppercase_ascii(app_stem);
+    const std::string expected_proc_name = lowercase_ascii(app_stem);
     const std::string app_xld_map_path =
         root + "/partos/build/" + app_stem + "_xld.map";
     const std::string app_payload_map_path =
@@ -278,9 +296,27 @@ int main(int argc, char **argv)
     const uint16_t pc_write_console = O.at("_partos_write_console");
     const uint16_t pc_svc_query = O.at("_svc_query");
     const uint16_t pc_svc_register = O.at("_svc_register");
+    const uint16_t pc_fat_worker_loop = O.at("fat_worker_loop$");
+    const uint16_t pc_fat_handle_create = O.at("fat_handle_create$");
+    const uint16_t pc_fat_handle_write = O.at("fat_handle_write$");
+    const uint16_t pc_fat_finish_dirent = O.at("fat_finish_dirent$");
+    const uint16_t pc_fat_alloc_chain = O.at("fat_alloc_chain_cluster$");
+    const uint16_t pc_fat_find_free = O.at("fat_find_free_cluster$");
+    const uint16_t pc_fat_set_entry = O.at("fat_set_fat_entry$");
+    const uint16_t pc_fat_cluster_to_sector = O.at("fat_cluster_to_sector$");
+    const uint16_t pc_fat_get_entry = O.at("fat_get_fat_entry$");
+    const uint16_t fat_req_head_addr = O.at("fat_req_head$");
+    const uint16_t fat_req_tail_addr = O.at("fat_req_tail$");
+    const uint16_t fat_queue_event_addr = O.at("fat_queue_event$");
+    const uint16_t fat_io_event_addr = O.at("fat_io_event$");
+    const uint16_t fat_worker_thread_addr = O.at("fat_worker_thread$");
+    const uint16_t fat_init_state_addr = O.at("fat_init_state$");
+    const uint16_t fat_wait_evt_addr = O.at("fat_wait_evt$");
     const uint16_t pc_thread_create = K.at("_thread_create");
     const uint16_t pc_tc_fail0 = K.at("tc_fail0$");
     const uint16_t pc_tc_fail1 = K.at("tc_fail1$");
+    const uint16_t pc_evt_set = K.at("_evt_set");
+    const uint16_t pc_evt_destroy = K.at("_evt_destroy");
 
     partner_crt emu(terminal_profile::vt52,
                     root + "/partos/partos_shadow_nvram.bin");
@@ -373,6 +409,13 @@ int main(int argc, char **argv)
     size_t child_user_pc_trace_len = 0;
     std::array<uint16_t, 64> child_pc_trace{};
     size_t child_pc_trace_len = 0;
+    uint16_t child_wait_sp = 0;
+    uint16_t child_wait_ptr = 0;
+    uint8_t child_wait_num = 0;
+    std::string child_wait_stack;
+    uint16_t child_wait_event = 0;
+    uint8_t child_wait_event_state = 0;
+    std::string child_wait_bytes;
     std::array<uint16_t, 128> current_trace_threads{};
     std::array<uint16_t, 128> current_trace_pcs{};
     std::array<uint64_t, 128> current_trace_ticks{};
@@ -389,6 +432,97 @@ int main(int argc, char **argv)
     uint16_t child_write_hl = 0;
     uint16_t child_write_de = 0;
     std::string child_write_bytes;
+    bool saw_child_path_wrapper = false;
+    uint16_t child_path_wrapper_pc = 0;
+    uint16_t child_path_wrapper_sp = 0;
+    uint16_t child_path_wrapper_hl = 0;
+    uint16_t child_path_wrapper_de = 0;
+    uint16_t child_path_wrapper_bc = 0;
+    std::string child_path_wrapper_stack;
+    bool saw_child_path_precall = false;
+    uint16_t child_path_precall_pc = 0;
+    uint16_t child_path_precall_sp = 0;
+    uint16_t child_path_precall_hl = 0;
+    uint16_t child_path_precall_de = 0;
+    uint16_t child_path_precall_bc = 0;
+    std::string child_path_precall_stack;
+    bool saw_child_path_postcall = false;
+    uint16_t child_path_postcall_pc = 0;
+    uint16_t child_path_postcall_sp = 0;
+    uint16_t child_path_postcall_hl = 0;
+    uint16_t child_path_postcall_de = 0;
+    uint16_t child_path_postcall_bc = 0;
+    std::string child_path_postcall_stack;
+    std::array<uint16_t, 4> child_path_postcall_bcs{};
+    std::array<uint16_t, 4> child_path_postcall_des{};
+    std::array<uint16_t, 4> child_path_postcall_sps{};
+    size_t child_path_postcall_count = 0;
+    bool saw_child_path_return = false;
+    uint16_t child_path_return_pc = 0;
+    uint16_t child_path_return_sp = 0;
+    uint16_t child_path_return_hl = 0;
+    uint16_t child_path_return_de = 0;
+    uint16_t child_path_return_bc = 0;
+    std::string child_path_return_stack;
+    std::array<uint16_t, 4> child_path_return_des{};
+    std::array<uint16_t, 4> child_path_return_bcs{};
+    std::array<uint16_t, 4> child_path_return_sps{};
+    std::array<uint16_t, 4> child_path_return_events{};
+    size_t child_path_return_count = 0;
+    bool saw_child_fat_create = false;
+    uint16_t child_fat_create_pc = 0;
+    uint16_t child_fat_create_ret_pc = 0;
+    uint16_t child_fat_create_caller_ret_pc = 0;
+    uint16_t child_fat_create_sp = 0;
+    uint16_t child_fat_create_hl = 0;
+    uint16_t child_fat_create_de = 0;
+    uint16_t child_fat_create_bc = 0;
+    std::string child_fat_create_stack;
+    std::string child_fat_create_caller_bytes;
+    bool saw_child_fat_create_return = false;
+    uint16_t child_fat_create_return_pc = 0;
+    uint16_t child_fat_create_return_sp = 0;
+    uint16_t child_fat_create_return_hl = 0;
+    uint16_t child_fat_create_return_de = 0;
+    uint16_t child_fat_create_return_bc = 0;
+    uint16_t child_fat_create_return_ix = 0;
+    uint16_t child_fat_create_return_iy = 0;
+    std::string child_fat_create_return_stack;
+    bool saw_child_fat_create_caller = false;
+    uint16_t child_fat_create_caller_pc = 0;
+    uint16_t child_fat_create_caller_sp = 0;
+    uint16_t child_fat_create_caller_hl = 0;
+    uint16_t child_fat_create_caller_de = 0;
+    uint16_t child_fat_create_caller_bc = 0;
+    std::string child_fat_create_caller_stack;
+    uint64_t fat_worker_loop_hits = 0;
+    uint64_t fat_worker_create_hits = 0;
+    uint16_t fat_worker_create_pc = 0;
+    uint16_t fat_worker_create_sp = 0;
+    uint16_t fat_worker_create_req = 0;
+    uint64_t fat_worker_create_tick = 0;
+    std::string fat_worker_create_stack;
+    std::string fat_worker_create_req_bytes;
+    uint64_t fat_finish_hits = 0;
+    uint16_t fat_finish_pc = 0;
+    uint16_t fat_finish_sp = 0;
+    uint16_t fat_finish_status = 0;
+    uint16_t fat_finish_event = 0;
+    uint16_t fat_finish_dirent = 0;
+    uint8_t fat_finish_event_state = 0;
+    std::string fat_finish_stack;
+    std::array<uint16_t, 16> evt_set_events{};
+    std::array<uint8_t, 16> evt_set_args{};
+    std::array<uint8_t, 16> evt_set_states{};
+    std::array<uint64_t, 16> evt_set_ticks{};
+    size_t evt_set_count = 0;
+    std::array<uint8_t, 16> target_evt_set_args{};
+    std::array<uint8_t, 16> target_evt_set_states{};
+    std::array<uint64_t, 16> target_evt_set_ticks{};
+    size_t target_evt_set_count = 0;
+    std::array<uint16_t, 8> evt_destroy_events{};
+    std::array<uint64_t, 8> evt_destroy_ticks{};
+    size_t evt_destroy_count = 0;
     bool saw_child_call_hl = false;
     uint16_t child_call_hl_pc = 0;
     uint16_t child_call_hl_hl = 0;
@@ -437,6 +571,10 @@ int main(int argc, char **argv)
     uint16_t target_process = 0;
     uint16_t target_main_thread = 0;
     std::string target_name;
+    uint16_t child_stack_block = 0;
+    uint16_t child_stack_next_block = 0;
+    std::vector<uint8_t> child_stack_next_hdr;
+    uint32_t child_stack_next_hdr_changes = 0;
     bool captured_child_process_state = false;
     uint16_t child_process_ptr = 0;
     uint16_t child_process_cmd = 0;
@@ -445,6 +583,9 @@ int main(int argc, char **argv)
     std::string child_process_env_bytes;
     uint16_t child_libc_service = 0;
     std::string child_libc_name_bytes;
+    uint16_t child_app_base = 0;
+    uint16_t child_app_top = 0;
+    std::vector<std::string> fat_worker_helper_trace;
 
     for (char ch : command) {
         if (ch == '\n') {
@@ -523,6 +664,79 @@ int main(int argc, char **argv)
         {
             const uint16_t current =
                 rd16(emu.read_debug_memory(K.at("_thread_current"), 2));
+            const uint16_t fat_worker_thread =
+                rd16(emu.read_debug_memory(fat_worker_thread_addr, 2));
+            if (pc == pc_fat_worker_loop)
+                fat_worker_loop_hits++;
+            if (pc == pc_fat_handle_create) {
+                fat_worker_create_hits++;
+                if (fat_worker_create_pc == 0) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    fat_worker_create_pc = pc;
+                    fat_worker_create_sp = st.sp;
+                    fat_worker_create_req = st.de;
+                    fat_worker_create_tick = emu.get_tick_count();
+                    fat_worker_create_stack =
+                        bytes_hex(emu.read_debug_memory(st.sp, 16), 16);
+                    fat_worker_create_req_bytes =
+                        bytes_hex(emu.read_debug_memory(st.de, 18), 18);
+                }
+            }
+            if (pc == pc_fat_finish_dirent &&
+                fat_worker_create_tick != 0 &&
+                emu.get_tick_count() >= fat_worker_create_tick) {
+                fat_finish_hits++;
+                if (fat_finish_pc == 0) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    fat_finish_pc = pc;
+                    fat_finish_sp = st.sp;
+                    fat_finish_status = st.de;
+                    fat_finish_event =
+                        rd16(emu.read_debug_memory(O.at("fat_work_event$"), 2));
+                    fat_finish_dirent =
+                        rd16(emu.read_debug_memory(O.at("fat_lookup_dirent$"), 2));
+                    if (fat_finish_event != 0) {
+                        const auto evt_bytes =
+                            emu.read_debug_memory(fat_finish_event, 5);
+                        if (evt_bytes.size() >= 5)
+                            fat_finish_event_state = evt_bytes[4];
+                    }
+                    fat_finish_stack =
+                        bytes_hex(emu.read_debug_memory(st.sp, 16), 16);
+                }
+            }
+            if (pc == pc_evt_set && evt_set_count < evt_set_events.size()) {
+                const auto st = emu.capture_debug_cpu_state();
+                const auto arg = emu.read_debug_memory((uint16_t)(st.sp + 2), 1);
+                const uint8_t arg0 = arg.empty() ? 0xff : arg[0];
+                const uint8_t state0 =
+                    st.hl == 0
+                        ? 0xff
+                        : emu.read_debug_memory((uint16_t)(st.hl + 4), 1).empty()
+                              ? 0xff
+                              : emu.read_debug_memory((uint16_t)(st.hl + 4), 1)[0];
+                evt_set_events[evt_set_count] = st.hl;
+                evt_set_args[evt_set_count] = arg0;
+                evt_set_ticks[evt_set_count] = emu.get_tick_count();
+                evt_set_states[evt_set_count] = state0;
+                evt_set_count++;
+                if ((child_wait_event != 0) &&
+                    (st.hl == child_wait_event) &&
+                    (target_evt_set_count < target_evt_set_args.size())) {
+                    target_evt_set_args[target_evt_set_count] = arg0;
+                    target_evt_set_states[target_evt_set_count] = state0;
+                    target_evt_set_ticks[target_evt_set_count] =
+                        emu.get_tick_count();
+                    target_evt_set_count++;
+                }
+            }
+            if (pc == pc_evt_destroy &&
+                evt_destroy_count < evt_destroy_events.size()) {
+                const auto st = emu.capture_debug_cpu_state();
+                evt_destroy_events[evt_destroy_count] = st.hl;
+                evt_destroy_ticks[evt_destroy_count] = emu.get_tick_count();
+                evt_destroy_count++;
+            }
             if (current != last_current) {
                 last_current = current;
                 if (current_trace_len < current_trace_threads.size()) {
@@ -530,6 +744,83 @@ int main(int argc, char **argv)
                     current_trace_pcs[current_trace_len] = pc;
                     current_trace_ticks[current_trace_len] = emu.get_tick_count();
                     current_trace_len++;
+                }
+            }
+            if ((target_main_thread != 0) &&
+                (current != 0) &&
+                (current == fat_worker_thread) &&
+                (fat_worker_helper_trace.size() < 256)) {
+                const auto st = emu.capture_debug_cpu_state();
+                char buf[192];
+                auto push_worker_trace = [&](const char *text) {
+                    if (fat_worker_helper_trace.empty() ||
+                        fat_worker_helper_trace.back() != text) {
+                        fat_worker_helper_trace.emplace_back(text);
+                    }
+                };
+
+                if (pc == pc_fat_handle_write) {
+                    const uint8_t op =
+                        emu.read_debug_memory((uint16_t)(st.de + FATREQ_OP_OFF), 1).empty()
+                            ? 0xff
+                            : emu.read_debug_memory((uint16_t)(st.de + FATREQ_OP_OFF), 1)[0];
+                    const uint16_t bytes =
+                        rd16(emu.read_debug_memory((uint16_t)(st.de + FATREQ_BYTES_OFF), 2));
+                    const uint16_t arg =
+                        rd16(emu.read_debug_memory((uint16_t)(st.de + FATREQ_ARG_OFF), 2));
+                    const uint16_t first_cluster =
+                        rd16(emu.read_debug_memory((uint16_t)(arg + FATFILE_FIRST_CLUSTER_OFF), 2));
+                    const uint16_t fs_ptr =
+                        rd16(emu.read_debug_memory((uint16_t)(arg + FATFILE_FS_OFF), 2));
+                    const uint16_t pos_secs =
+                        rd16(emu.read_debug_memory((uint16_t)(arg + FATFILE_POS_OFF + 1), 2));
+                    const uint16_t alloc_hint =
+                        fs_ptr == 0
+                            ? 0
+                            : rd16(emu.read_debug_memory((uint16_t)(fs_ptr + FATFS_ALLOC_HINT_OFF), 2));
+                    std::snprintf(buf, sizeof(buf),
+                                  "tick=%llu handle_write pc=%04X sp=%04X req=%04X op=%02X bytes=%04X arg=%04X file_fc=%04X file_pos=%04X fs=%04X hint=%04X hl=%04X de=%04X bc=%04X",
+                                  (unsigned long long)emu.get_tick_count(),
+                                  pc, st.sp, st.de, (unsigned)op, bytes, arg,
+                                  first_cluster, pos_secs, fs_ptr, alloc_hint,
+                                  st.hl, st.de, st.bc);
+                    push_worker_trace(buf);
+                } else if (pc == pc_fat_alloc_chain) {
+                    std::snprintf(buf, sizeof(buf),
+                                  "tick=%llu alloc_chain pc=%04X sp=%04X prev=%04X hl=%04X de=%04X bc=%04X",
+                                  (unsigned long long)emu.get_tick_count(),
+                                  pc, st.sp, st.de, st.hl, st.de, st.bc);
+                    push_worker_trace(buf);
+                } else if (pc == pc_fat_find_free) {
+                    const uint16_t fs_ptr =
+                        rd16(emu.read_debug_memory(O.at("fat_work_fs$"), 2));
+                    const uint16_t alloc_hint =
+                        fs_ptr == 0
+                            ? 0
+                            : rd16(emu.read_debug_memory((uint16_t)(fs_ptr + FATFS_ALLOC_HINT_OFF), 2));
+                    std::snprintf(buf, sizeof(buf),
+                                  "tick=%llu find_free pc=%04X sp=%04X fs=%04X hint=%04X hl=%04X de=%04X bc=%04X",
+                                  (unsigned long long)emu.get_tick_count(),
+                                  pc, st.sp, fs_ptr, alloc_hint, st.hl, st.de, st.bc);
+                    push_worker_trace(buf);
+                } else if (pc == pc_fat_set_entry) {
+                    std::snprintf(buf, sizeof(buf),
+                                  "tick=%llu set_entry pc=%04X sp=%04X cluster=%04X value=%04X bc=%04X",
+                                  (unsigned long long)emu.get_tick_count(),
+                                  pc, st.sp, st.de, st.hl, st.bc);
+                    push_worker_trace(buf);
+                } else if (pc == pc_fat_get_entry) {
+                    std::snprintf(buf, sizeof(buf),
+                                  "tick=%llu get_entry pc=%04X sp=%04X cluster=%04X hl=%04X bc=%04X",
+                                  (unsigned long long)emu.get_tick_count(),
+                                  pc, st.sp, st.de, st.hl, st.bc);
+                    push_worker_trace(buf);
+                } else if (pc == pc_fat_cluster_to_sector) {
+                    std::snprintf(buf, sizeof(buf),
+                                  "tick=%llu cluster_to_sector pc=%04X sp=%04X cluster=%04X hl=%04X bc=%04X",
+                                  (unsigned long long)emu.get_tick_count(),
+                                  pc, st.sp, st.de, st.hl, st.bc);
+                    push_worker_trace(buf);
                 }
             }
             const uint16_t process0 =
@@ -561,6 +852,27 @@ int main(int argc, char **argv)
                     target_name = name1;
                 }
             }
+            if (target_main_thread != 0 && child_stack_block == 0) {
+                uint16_t block =
+                    rd16(emu.read_debug_memory(K.at("__usr_heap"), 2));
+
+                while (block != 0) {
+                    const auto hdr = emu.read_debug_memory(block, 9);
+                    if (hdr.size() < 9) {
+                        break;
+                    }
+                    if ((rd16(hdr, 2) == target_main_thread) && (hdr[4] == 0x01)) {
+                        child_stack_block = block;
+                        child_stack_next_block = rd16(hdr, 0);
+                        if (child_stack_next_block != 0) {
+                            child_stack_next_hdr =
+                                emu.read_debug_memory(child_stack_next_block, 16);
+                        }
+                        break;
+                    }
+                    block = rd16(hdr, 0);
+                }
+            }
             const uint16_t entry0 =
                 target_main_thread == 0
                     ? 0
@@ -571,6 +883,8 @@ int main(int argc, char **argv)
             if (have_app_map && entry0 >= A.at("_app_crt0_entry")) {
                 child_base = (uint16_t)(entry0 - A.at("_app_crt0_entry"));
                 child_top = (uint16_t)(child_base + A.at("l__CODE"));
+                child_app_base = child_base;
+                child_app_top = child_top;
             }
 
 	            if (target_main_thread != 0 && current == target_main_thread) {
@@ -657,6 +971,7 @@ int main(int argc, char **argv)
 	                    pc == child_base + A.at("_main") + app_symbol_bias) {
 	                    child_main_pc = pc;
 	                    saw_child_main = true;
+                        child_user_pc_trace_len = 0;
 	                }
 	                if (!saw_child_boot_after_init && have_app_map &&
 	                    A.syms.count("_app_bootstrap") != 0 &&
@@ -705,6 +1020,127 @@ int main(int argc, char **argv)
                                   st.de > 24 ? 24 : st.de);
                     saw_child_write_console = true;
                 }
+                if (!saw_child_path_wrapper && have_app_map &&
+                    pc >= (uint16_t)(child_base + 0x0080) &&
+                    pc <= (uint16_t)(child_base + 0x00DE)) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_path_wrapper_pc = pc;
+                    child_path_wrapper_sp = st.sp;
+                    child_path_wrapper_hl = st.hl;
+                    child_path_wrapper_de = st.de;
+                    child_path_wrapper_bc = st.bc;
+                    child_path_wrapper_stack =
+                        bytes_hex(emu.read_debug_memory(st.sp, 16), 16);
+                    saw_child_path_wrapper = true;
+                }
+                if (!saw_child_path_precall && have_app_map &&
+                    pc == (uint16_t)(child_base + 0x00DB)) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_path_precall_pc = pc;
+                    child_path_precall_sp = st.sp;
+                    child_path_precall_hl = st.hl;
+                    child_path_precall_de = st.de;
+                    child_path_precall_bc = st.bc;
+                    child_path_precall_stack =
+                        bytes_hex(emu.read_debug_memory(st.sp, 16), 16);
+                    saw_child_path_precall = true;
+                }
+                if (!saw_child_path_postcall && have_app_map &&
+                    pc == (uint16_t)(child_base + 0x00DE)) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_path_postcall_pc = pc;
+                    child_path_postcall_sp = st.sp;
+                    child_path_postcall_hl = st.hl;
+                    child_path_postcall_de = st.de;
+                    child_path_postcall_bc = st.bc;
+                    child_path_postcall_stack =
+                        bytes_hex(emu.read_debug_memory(st.sp, 16), 16);
+                    saw_child_path_postcall = true;
+                }
+                if (have_app_map &&
+                    pc == (uint16_t)(child_base + 0x00DE) &&
+                    child_path_postcall_count < child_path_postcall_bcs.size()) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_path_postcall_bcs[child_path_postcall_count] = st.bc;
+                    child_path_postcall_des[child_path_postcall_count] = st.de;
+                    child_path_postcall_sps[child_path_postcall_count] = st.sp;
+                    child_path_postcall_count++;
+                }
+                if (!saw_child_path_return && have_app_map &&
+                    pc == (uint16_t)(child_base + 0x00E1)) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_path_return_pc = pc;
+                    child_path_return_sp = st.sp;
+                    child_path_return_hl = st.hl;
+                    child_path_return_de = st.de;
+                    child_path_return_bc = st.bc;
+                    child_path_return_stack =
+                        bytes_hex(emu.read_debug_memory(st.sp, 16), 16);
+                    saw_child_path_return = true;
+                }
+                if (have_app_map &&
+                    pc == (uint16_t)(child_base + 0x00E1) &&
+                    child_path_return_count < child_path_return_des.size()) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_path_return_des[child_path_return_count] = st.de;
+                    child_path_return_bcs[child_path_return_count] = st.bc;
+                    child_path_return_sps[child_path_return_count] = st.sp;
+                    child_path_return_events[child_path_return_count] =
+                        child_base == 0
+                            ? 0
+                            : rd16(emu.read_debug_memory(
+                                      (uint16_t)(child_base + app_symbol_bias +
+                                                 APP_RUNTIME_EVENT_OFF),
+                                      2));
+                    child_path_return_count++;
+                }
+                if (!saw_child_fat_create && pc == O.at("_fat_create")) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_fat_create_pc = pc;
+                    child_fat_create_ret_pc =
+                        rd16(emu.read_debug_memory(st.sp, 2));
+                    child_fat_create_caller_ret_pc =
+                        rd16(emu.read_debug_memory((uint16_t)(st.sp + 6), 2));
+                    child_fat_create_sp = st.sp;
+                    child_fat_create_hl = st.hl;
+                    child_fat_create_de = st.de;
+                    child_fat_create_bc = st.bc;
+                    child_fat_create_stack =
+                        bytes_hex(emu.read_debug_memory(st.sp, 16), 16);
+                    child_fat_create_caller_bytes =
+                        bytes_hex(emu.read_debug_memory(
+                                      (uint16_t)(child_fat_create_caller_ret_pc - 8),
+                                      24),
+                                  24);
+                    saw_child_fat_create = true;
+                }
+                if (saw_child_fat_create && !saw_child_fat_create_return &&
+                    pc == child_fat_create_ret_pc) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_fat_create_return_pc = pc;
+                    child_fat_create_return_sp = st.sp;
+                    child_fat_create_return_hl = st.hl;
+                    child_fat_create_return_de = st.de;
+                    child_fat_create_return_bc = st.bc;
+                    child_fat_create_return_ix = st.ix;
+                    child_fat_create_return_iy = st.iy;
+                    child_fat_create_return_stack =
+                        bytes_hex(emu.read_debug_memory(st.sp, 16), 16);
+                    saw_child_fat_create_return = true;
+                }
+                if (saw_child_fat_create &&
+                    !saw_child_fat_create_caller &&
+                    pc == child_fat_create_caller_ret_pc) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_fat_create_caller_pc = pc;
+                    child_fat_create_caller_sp = st.sp;
+                    child_fat_create_caller_hl = st.hl;
+                    child_fat_create_caller_de = st.de;
+                    child_fat_create_caller_bc = st.bc;
+                    child_fat_create_caller_stack =
+                        bytes_hex(emu.read_debug_memory(st.sp, 16), 16);
+                    saw_child_fat_create_caller = true;
+                }
                 if (!saw_child_svc_query && pc == pc_svc_query) {
                     const auto st = emu.capture_debug_cpu_state();
                     child_svc_query_hl = st.hl;
@@ -734,6 +1170,54 @@ int main(int argc, char **argv)
                     saw_child_svc_found = true;
                 }
             }
+            if (target_main_thread != 0 && child_wait_sp == 0) {
+                const auto thread_bytes =
+                    emu.read_debug_memory(target_main_thread, 32);
+
+                if (thread_bytes.size() >= 20 && thread_bytes[19] == 2) {
+                    child_wait_sp = rd16(thread_bytes, 4);
+                    child_wait_ptr = rd16(thread_bytes, 16);
+                    child_wait_num = thread_bytes[18];
+                    child_wait_stack =
+                        bytes_hex(emu.read_debug_memory(child_wait_sp, 16), 16);
+                    if (child_wait_ptr != 0) {
+                        const auto wait_bytes =
+                            emu.read_debug_memory(child_wait_ptr, 8);
+                        child_wait_bytes = bytes_hex(wait_bytes, 8);
+                        if (wait_bytes.size() >= 2) {
+                            child_wait_event = rd16(wait_bytes, 0);
+                            if (child_wait_event != 0) {
+                                const auto evt_bytes =
+                                    emu.read_debug_memory(child_wait_event, 5);
+                                if (evt_bytes.size() >= 5)
+                                    child_wait_event_state = evt_bytes[4];
+                            }
+                        }
+                    }
+                }
+            }
+            if ((child_stack_next_block != 0) &&
+                !child_stack_next_hdr.empty() &&
+                (child_stack_next_hdr_changes < 8)) {
+                const auto next_hdr_now =
+                    emu.read_debug_memory(child_stack_next_block, child_stack_next_hdr.size());
+                if ((next_hdr_now.size() == child_stack_next_hdr.size()) &&
+                    (next_hdr_now != child_stack_next_hdr)) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    child_stack_next_hdr_changes++;
+                    std::printf(
+                        "trace: child_next_hdr_change #%u pc=%04X sp=%04X cur=%04X block=%04X next=%04X old=%s new=%s\n",
+                        child_stack_next_hdr_changes,
+                        pc,
+                        st.sp,
+                        current,
+                        child_stack_block,
+                        child_stack_next_block,
+                        bytes_hex(child_stack_next_hdr, 16).c_str(),
+                        bytes_hex(next_hdr_now, 16).c_str());
+                    child_stack_next_hdr = next_hdr_now;
+                }
+            }
         }
         if ((n & 0x3FFu) != 0)
             continue;
@@ -752,6 +1236,15 @@ int main(int argc, char **argv)
                 emu.get_current_pc(),
                 (unsigned long long)emu.get_tick_count());
     std::printf("pc.sym=%s\n", O.nearest(emu.get_current_pc()).c_str());
+    {
+        const auto cpu = emu.capture_debug_cpu_state();
+        std::printf("cpu: af=%04X bc=%04X de=%04X hl=%04X ix=%04X iy=%04X sp=%04X iff1=%u halted=%u\n",
+                    cpu.af, cpu.bc, cpu.de, cpu.hl, cpu.ix, cpu.iy, cpu.sp,
+                    cpu.iff1 ? 1U : 0U,
+                    cpu.halted ? 1U : 0U);
+        std::printf("cpu.stack: %s\n",
+                    bytes_hex(emu.read_debug_memory(cpu.sp, 24), 24).c_str());
+    }
     std::printf("trace: run_command_hits=%llu first_run=%llu process_wait_hits=%llu first_wait=%llu\n",
                 (unsigned long long)hits_run_command,
                 (unsigned long long)first_run_command_tick,
@@ -839,6 +1332,8 @@ int main(int argc, char **argv)
         std::printf("trace: current_trace=%s\n", trace.c_str());
     }
     if (have_app_map) {
+        std::printf("trace: child_app_range base=%04X top=%04X bias=%04X\n",
+                    child_app_base, child_app_top, app_symbol_bias);
         std::printf("trace: child_user_hits=%llu first_user=%llu first_user_pc=%04X\n",
                     (unsigned long long)child_user_hits,
                     (unsigned long long)first_child_user_tick,
@@ -855,6 +1350,16 @@ int main(int argc, char **argv)
             }
             std::printf("trace: child_user_pc_trace=%s\n", trace.c_str());
         }
+    }
+    if (child_wait_sp != 0) {
+        std::printf("trace: child_wait sp=%04X wait=%04X num=%u event=%04X state=%02X waitmem=%s stack=%s\n",
+                    child_wait_sp,
+                    child_wait_ptr,
+                    (unsigned)child_wait_num,
+                    child_wait_event,
+                    child_wait_event_state,
+                    child_wait_bytes.c_str(),
+                    child_wait_stack.c_str());
     }
     if (saw_child_call_hl) {
         std::printf("trace: child_call_hl pc=%04X hl=%04X\n",
@@ -874,6 +1379,187 @@ int main(int argc, char **argv)
     if (saw_child_write_console) {
         std::printf("trace: child_write_console hl=%04X de=%04X bytes=%s\n",
                     child_write_hl, child_write_de, child_write_bytes.c_str());
+    }
+    if (saw_child_path_wrapper) {
+        std::printf("trace: child_path_wrapper pc=%04X sp=%04X hl=%04X de=%04X bc=%04X stack=%s\n",
+                    child_path_wrapper_pc,
+                    child_path_wrapper_sp,
+                    child_path_wrapper_hl,
+                    child_path_wrapper_de,
+                    child_path_wrapper_bc,
+                    child_path_wrapper_stack.c_str());
+    }
+    if (saw_child_path_precall) {
+        std::printf("trace: child_path_precall pc=%04X sp=%04X hl=%04X de=%04X bc=%04X stack=%s\n",
+                    child_path_precall_pc,
+                    child_path_precall_sp,
+                    child_path_precall_hl,
+                    child_path_precall_de,
+                    child_path_precall_bc,
+                    child_path_precall_stack.c_str());
+    }
+    if (saw_child_path_postcall) {
+        std::printf("trace: child_path_postcall pc=%04X sp=%04X hl=%04X de=%04X bc=%04X stack=%s\n",
+                    child_path_postcall_pc,
+                    child_path_postcall_sp,
+                    child_path_postcall_hl,
+                    child_path_postcall_de,
+                    child_path_postcall_bc,
+                    child_path_postcall_stack.c_str());
+    }
+    if (saw_child_path_return) {
+        std::printf("trace: child_path_return pc=%04X sp=%04X hl=%04X de=%04X bc=%04X stack=%s\n",
+                    child_path_return_pc,
+                    child_path_return_sp,
+                    child_path_return_hl,
+                    child_path_return_de,
+                    child_path_return_bc,
+                    child_path_return_stack.c_str());
+    }
+    if (child_path_postcall_count != 0) {
+        std::string trace;
+        char buf[48];
+
+        for (size_t i = 0; i < child_path_postcall_count; ++i) {
+            if (!trace.empty())
+                trace += " ";
+            std::snprintf(buf, sizeof(buf), "%zu:%04X/%04X/%04X",
+                          i,
+                          child_path_postcall_bcs[i],
+                          child_path_postcall_des[i],
+                          child_path_postcall_sps[i]);
+            trace += buf;
+        }
+        std::printf("trace: child_path_postcalls=%s\n", trace.c_str());
+    }
+    if (child_path_return_count != 0) {
+        std::string trace;
+        char buf[48];
+
+        for (size_t i = 0; i < child_path_return_count; ++i) {
+            if (!trace.empty())
+                trace += " ";
+            std::snprintf(buf, sizeof(buf), "%zu:%04X/%04X/%04X",
+                          i,
+                          child_path_return_bcs[i],
+                          child_path_return_des[i],
+                          child_path_return_sps[i]);
+            if (child_path_return_events[i] != 0) {
+                char evtbuf[24];
+
+                std::snprintf(evtbuf, sizeof(evtbuf), "@%04X",
+                              child_path_return_events[i]);
+                trace += evtbuf;
+            }
+            trace += buf;
+        }
+        std::printf("trace: child_path_returns=%s\n", trace.c_str());
+    }
+    if (saw_child_fat_create) {
+        std::printf("trace: child_fat_create pc=%04X ret=%04X caller_ret=%04X sp=%04X hl=%04X de=%04X bc=%04X stack=%s\n",
+                    child_fat_create_pc,
+                    child_fat_create_ret_pc,
+                    child_fat_create_caller_ret_pc,
+                    child_fat_create_sp,
+                    child_fat_create_hl,
+                    child_fat_create_de,
+                    child_fat_create_bc,
+                    child_fat_create_stack.c_str());
+        std::printf("trace: child_fat_create_caller_bytes=%s\n",
+                    child_fat_create_caller_bytes.c_str());
+    }
+    if (saw_child_fat_create_return) {
+        std::printf("trace: child_fat_create_return pc=%04X sp=%04X hl=%04X de=%04X bc=%04X ix=%04X iy=%04X stack=%s\n",
+                    child_fat_create_return_pc,
+                    child_fat_create_return_sp,
+                    child_fat_create_return_hl,
+                    child_fat_create_return_de,
+                    child_fat_create_return_bc,
+                    child_fat_create_return_ix,
+                    child_fat_create_return_iy,
+                    child_fat_create_return_stack.c_str());
+    }
+    if (saw_child_fat_create_caller) {
+        std::printf("trace: child_fat_create_caller pc=%04X sp=%04X hl=%04X de=%04X bc=%04X stack=%s\n",
+                    child_fat_create_caller_pc,
+                    child_fat_create_caller_sp,
+                    child_fat_create_caller_hl,
+                    child_fat_create_caller_de,
+                    child_fat_create_caller_bc,
+                    child_fat_create_caller_stack.c_str());
+    }
+    if (fat_worker_loop_hits != 0 || fat_worker_create_hits != 0) {
+        std::printf("trace: fat_worker loop_hits=%llu create_hits=%llu first_create_pc=%04X sp=%04X req=%04X reqbytes=%s stack=%s\n",
+                    (unsigned long long)fat_worker_loop_hits,
+                    (unsigned long long)fat_worker_create_hits,
+                    fat_worker_create_pc,
+                    fat_worker_create_sp,
+                    fat_worker_create_req,
+                    fat_worker_create_req_bytes.c_str(),
+                    fat_worker_create_stack.c_str());
+    }
+    if (fat_finish_hits != 0) {
+        std::printf("trace: fat_finish hits=%llu pc=%04X sp=%04X status=%04X event=%04X event_state=%02X dirent=%04X stack=%s\n",
+                    (unsigned long long)fat_finish_hits,
+                    fat_finish_pc,
+                    fat_finish_sp,
+                    fat_finish_status,
+                    fat_finish_event,
+                    fat_finish_event_state,
+                    fat_finish_dirent,
+                    fat_finish_stack.c_str());
+    }
+    if (!fat_worker_helper_trace.empty()) {
+        std::printf("trace: fat_worker_helpers_begin\n");
+        for (const std::string &line : fat_worker_helper_trace)
+            std::printf("trace: %s\n", line.c_str());
+        std::printf("trace: fat_worker_helpers_end\n");
+    }
+    if (evt_set_count != 0) {
+        std::string trace;
+        char buf[64];
+
+        for (size_t i = 0; i < evt_set_count; ++i) {
+            if (!trace.empty())
+                trace += " ";
+            std::snprintf(buf, sizeof(buf), "%04X/%02X/%02X#%llu",
+                          evt_set_events[i],
+                          (unsigned)evt_set_args[i],
+                          (unsigned)evt_set_states[i],
+                          (unsigned long long)evt_set_ticks[i]);
+            trace += buf;
+        }
+        std::printf("trace: evt_set=%s\n", trace.c_str());
+    }
+    if (evt_destroy_count != 0) {
+        std::string trace;
+        char buf[48];
+
+        for (size_t i = 0; i < evt_destroy_count; ++i) {
+            if (!trace.empty())
+                trace += " ";
+            std::snprintf(buf, sizeof(buf), "%04X#%llu",
+                          evt_destroy_events[i],
+                          (unsigned long long)evt_destroy_ticks[i]);
+            trace += buf;
+        }
+        std::printf("trace: evt_destroy=%s\n", trace.c_str());
+    }
+    if (target_evt_set_count != 0) {
+        std::string trace;
+        char buf[48];
+
+        for (size_t i = 0; i < target_evt_set_count; ++i) {
+            if (!trace.empty())
+                trace += " ";
+            std::snprintf(buf, sizeof(buf), "%02X/%02X#%llu",
+                          (unsigned)target_evt_set_args[i],
+                          (unsigned)target_evt_set_states[i],
+                          (unsigned long long)target_evt_set_ticks[i]);
+            trace += buf;
+        }
+        std::printf("trace: evt_set_target=%04X %s\n",
+                    child_wait_event, trace.c_str());
     }
     if (saw_child_svc_query) {
         std::printf("trace: child_svc_query hl=%04X name='%s'\n",
@@ -974,6 +1660,61 @@ int main(int argc, char **argv)
                     fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 6), 2)),
                     fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 42), 2)),
                     fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 70), 2)));
+        std::printf("syscall.fs: mount_dev=%04X mount=%04X lookup=%04X open=%04X create=%04X read=%04X write=%04X readdir=%04X\n",
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 72), 2)),
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 74), 2)),
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 76), 2)),
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 78), 2)),
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 80), 2)),
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 82), 2)),
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 84), 2)),
+                    fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 86), 2)));
+        {
+            const uint16_t fat_req_head =
+                rd16(emu.read_debug_memory(fat_req_head_addr, 2));
+            const uint16_t fat_req_tail =
+                rd16(emu.read_debug_memory(fat_req_tail_addr, 2));
+            const uint16_t fat_queue_event =
+                rd16(emu.read_debug_memory(fat_queue_event_addr, 2));
+            const uint16_t fat_io_event =
+                rd16(emu.read_debug_memory(fat_io_event_addr, 2));
+            const uint16_t fat_worker_thread =
+                rd16(emu.read_debug_memory(fat_worker_thread_addr, 2));
+            const auto fat_init_state_bytes =
+                emu.read_debug_memory(fat_init_state_addr, 1);
+            const uint8_t fat_init_state =
+                fat_init_state_bytes.empty() ? 0 : fat_init_state_bytes[0];
+            const uint16_t fat_wait_evt =
+                rd16(emu.read_debug_memory(fat_wait_evt_addr, 2));
+            const auto fat_queue_evt_bytes =
+                fat_queue_event == 0
+                    ? std::vector<uint8_t>()
+                    : emu.read_debug_memory(fat_queue_event, 5);
+            const auto fat_io_evt_bytes =
+                fat_io_event == 0
+                    ? std::vector<uint8_t>()
+                    : emu.read_debug_memory(fat_io_event, 5);
+
+            std::printf("fat.state: req_head=%04X req_tail=%04X queue_evt=%04X io_evt=%04X worker=%04X init=%02X wait_evt=%04X\n",
+                        fat_req_head,
+                        fat_req_tail,
+                        fat_queue_event,
+                        fat_io_event,
+                        fat_worker_thread,
+                        (unsigned)fat_init_state,
+                        fat_wait_evt);
+            std::printf("fat.event.bytes: queue=%s io=%s\n",
+                        bytes_hex(fat_queue_evt_bytes, 5).c_str(),
+                        bytes_hex(fat_io_evt_bytes, 5).c_str());
+            if (fat_req_head != 0) {
+                std::printf("fat.req_head.bytes: %s\n",
+                            bytes_hex(emu.read_debug_memory(fat_req_head, 18), 18).c_str());
+            }
+            if (fat_req_tail != 0 && fat_req_tail != fat_req_head) {
+                std::printf("fat.req_tail.bytes: %s\n",
+                            bytes_hex(emu.read_debug_memory(fat_req_tail, 18), 18).c_str());
+            }
+        }
         const uint16_t svc_head = rd16(emu.read_debug_memory(O.at("__svc_first"), 2));
         const uint16_t svc_next =
             svc_head == 0 ? 0 : rd16(emu.read_debug_memory(svc_head, 2));
@@ -1041,6 +1782,28 @@ int main(int argc, char **argv)
                             rd16(t, 22),
                             t.size() > 24 ? (unsigned)t[24] : 0U,
                             rd16(t, 7));
+                std::printf("process[0].main.stack: %s\n",
+                            bytes_hex(emu.read_debug_memory(rd16(t, 4), 16), 16)
+                                .c_str());
+                if (read_cstr_bounded(emu, (uint16_t)(process0 + 5), 8) == "ls") {
+                    const uint16_t entry = rd16(t, 7);
+                    const uint16_t base = (uint16_t)(entry - 0x0005);
+                    const uint16_t data_base = (uint16_t)(base + 0x11C6);
+                    const uint16_t ls_data = (uint16_t)(data_base + 0x0128);
+                    const uint16_t ls_dirinfo = (uint16_t)(ls_data + 0x0040);
+                    const uint16_t ls_dirinfo_name = (uint16_t)(ls_dirinfo + 0x000E);
+                    const uint16_t ls_name = (uint16_t)(ls_data + 0x005B);
+                    std::printf("process[0].ls.data: base=%04X data=%04X ls_data=%04X\n",
+                                base, data_base, ls_data);
+                    std::printf("process[0].ls.path: %s\n",
+                                bytes_hex(emu.read_debug_memory(ls_data, 64), 64).c_str());
+                    std::printf("process[0].ls.dirinfo: %s\n",
+                                bytes_hex(emu.read_debug_memory(ls_dirinfo, 25), 25).c_str());
+                    std::printf("process[0].ls.dirinfo.name: %s\n",
+                                bytes_hex(emu.read_debug_memory(ls_dirinfo_name, 11), 11).c_str());
+                    std::printf("process[0].ls.name: %s\n",
+                                bytes_hex(emu.read_debug_memory(ls_name, 14), 14).c_str());
+                }
                 if (have_app_map && rd16(t, 7) >= A.at("_app_crt0_entry")) {
                     const uint16_t base =
                         (uint16_t)(rd16(t, 7) - A.at("_app_crt0_entry"));

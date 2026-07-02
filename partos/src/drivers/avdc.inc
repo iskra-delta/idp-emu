@@ -41,6 +41,8 @@
             .equ    AVDC_COLS,              132
             .equ    AVDC_TEXT_BASE,         0x0100
             .equ    AVDC_CLEAR_END,         0x1fff
+            .equ    AVDC_TEXT_CTL_80,       0x6d
+            .equ    AVDC_TEXT_CTL_132,      0xed
 
             .equ    AVDC_ATTR_NORMAL,       0x00
             .equ    AVDC_ATTR_UNDERLINE,    0x02
@@ -102,6 +104,8 @@
             .equ    GDP_COLS,               AVDC_COLS
             .equ    GDP_TEXT_BASE,          AVDC_TEXT_BASE
             .equ    GDP_CLEAR_END,          AVDC_CLEAR_END
+            .equ    GDP_TEXT_CTL_80,        AVDC_TEXT_CTL_80
+            .equ    GDP_TEXT_CTL_132,       AVDC_TEXT_CTL_132
 
             .equ    GDP_ATTR_NORMAL,        AVDC_ATTR_NORMAL
             .equ    GDP_ATTR_UNDERLINE,     AVDC_ATTR_UNDERLINE

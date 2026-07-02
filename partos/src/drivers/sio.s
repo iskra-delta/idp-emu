@@ -303,6 +303,16 @@ sio_ioctl::
             jp      z,drv_lock_ix
             cp      #SIO_IOCTL_UNLOCK
             jp      z,drv_unlock_ix
+            ;; ownerless polled console ioctls (see sio.inc): no owner guard,
+            ;; ix already points at the channel state.
+            cp      #SIO_IOCTL_PUTC
+            jp      z,sio_putc$
+            cp      #SIO_IOCTL_PEEK
+            jp      z,sio_peek$
+            cp      #SIO_IOCTL_GETC
+            jp      z,sio_getc$
+            cp      #SIO_IOCTL_TTYINIT
+            jp      z,sio_ttyinit$
             call    drv_owner_guard_ix
             jp      c,drv_err
             ld      a,c
@@ -329,6 +339,73 @@ sio_initline$:
             call    sio_program_line$
 sio_initline_done$:
             call    _ir_enable
+            ld      hl,#DRV_OK
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; synchronous polled console ioctls (ix = channel state)
+            ;; ----------------------------------------------------------------
+            ;; these carry the exact port sequences the OS console used to run
+            ;; inline; they now live behind the driver so console.s never pokes
+            ;; the SIO ports itself. keyboard polling stays preemptible (ei) so a
+            ;; blocked console reader cannot starve other runnable threads.
+            ;; ----------------------------------------------------------------
+
+            ;; NOTE: these polled console ioctls target the primary serial
+            ;; channel (SIO0A) directly. that is the OS console channel in this
+            ;; machine model -- the keyboard is always on SIO0A and the default
+            ;; terminal output is too. they intentionally do NOT go through the
+            ;; async driver's per-device state (sio_init's dev.data population is
+            ;; not currently exercised/working for these devs), so the port pair
+            ;; is fixed here. the important property for the OS console is that it
+            ;; never pokes the SIO ports itself -- it asks the driver, and the
+            ;; driver owns the hardware access.
+
+            ;; sio_putc$(e = char) -> hl = DRV_OK ; blocking polled transmit
+sio_putc$:
+            ld      b,e                 ; b = char (safe across the wait loop)
+sio_putc_wait$:
+            in      a,(SIO0A_CTRL_PORT)
+            and     #SIO_RR0_TX_EMPTY
+            jr      z,sio_putc_wait$
+            ld      a,b
+            out     (SIO0A_DATA_PORT),a
+            ld      hl,#DRV_OK
+            ret
+
+            ;; sio_peek$() -> hl = char / 0xffff ; non-blocking receive
+sio_peek$:
+            ei
+            in      a,(SIO0A_CTRL_PORT)
+            and     #SIO_RR0_RX_AVAIL
+            jr      nz,sio_peek_have$
+            ld      hl,#0xffff
+            ret
+sio_peek_have$:
+            in      a,(SIO0A_DATA_PORT)
+            ld      l,a
+            ld      h,#0
+            ret
+
+            ;; sio_getc$() -> hl = char ; blocking receive
+sio_getc$:
+            ei
+            in      a,(SIO0A_CTRL_PORT)
+            and     #SIO_RR0_RX_AVAIL
+            jr      z,sio_getc$
+            in      a,(SIO0A_DATA_PORT)
+            ld      l,a
+            ld      h,#0
+            ret
+
+            ;; sio_ttyinit$() -> hl = DRV_OK ; program the console channel for
+            ;; polled tty (identical byte sequence to the old console_sio_init$:
+            ;; reset, WR4=0x44, WR3=0xc1, WR5=0x68, WR1=0x00 -> interrupts OFF).
+sio_ttyinit$:
+            ld      c,#SIO0A_CTRL_PORT
+            ld      hl,#sio_tty_init_seq$
+            ld      b,#9
+            otir
             ld      hl,#DRV_OK
             ret
 
@@ -645,6 +722,12 @@ sio_dev3$:
             .db     0x00
             .ds     DEV_DATA_SIZE
             .dw     sio_dev_drv
+
+            ;; polled-tty channel programming (see sio_ttyinit$). kept in _CODE
+            ;; so the immediate `#sio_tty_init_seq$` resolves to a live absolute
+            ;; address for otir.
+sio_tty_init_seq$:
+            .db     0x18,0x04,0x44,0x03,0xc1,0x05,0x68,0x01,0x00
 
             ;; uninitialized driver scratch belongs in _SYSVARS (BSS); a .ds in
             ;; _INITIALIZED reserves space the linker does not account for against

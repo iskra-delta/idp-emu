@@ -156,7 +156,9 @@ fhc_zero_entry$:
 fhc_fail_hl$:
             ex      de,hl
             ld      hl,(fat_lookup_dirent$)
+            push    de                  ; preserve the real failure status
             call    fat_prepare_dirent_busy$
+            pop     de
 
 fhc_finish$:
             jp      fat_finish_dirent$

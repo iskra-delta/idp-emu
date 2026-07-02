@@ -3,24 +3,6 @@
 static char app_resolve_input[APP_PATH_CAP];
 static char app_resolve_cwd[APP_PATH_CAP];
 
-extern int16_t pa_clear_screen(void);
-extern int16_t pa_write_buffer(const void *buf, uint16_t len);
-extern void *pa_query_service(const char *name);
-extern sys_info_t *pa_get_sys_info(void);
-extern fat_fs_t *pa_get_boot_fs(void);
-extern char *pa_get_current_dir(void);
-extern int16_t pa_set_text_attr(uint8_t attr);
-extern int16_t pa_mount_fs(fat_fs_t *fs, const char *dev_name);
-extern int16_t pa_lookup_path(fat_fs_t *fs, const char *path, fat_dirent_t *entry);
-extern int16_t pa_open_file(fat_fs_t *fs, const char *path, fat_file_t *file);
-extern int16_t pa_create_file(fat_fs_t *fs, const char *path, fat_file_t *file);
-extern int16_t pa_read_file(fat_file_t *file, void *buf, uint16_t bytes);
-extern int16_t pa_write_file(fat_file_t *file, const void *buf, uint16_t bytes);
-extern int16_t pa_readdir(fat_fs_t *fs, const char *path, fat_dirinfo_t *info);
-extern int16_t pa_unlink_path(fat_fs_t *fs, const char *path, fat_dirent_t *result);
-extern int16_t pa_mkdir_path(fat_fs_t *fs, const char *path, fat_dirent_t *result);
-extern int16_t pa_rmdir_path(fat_fs_t *fs, const char *path, fat_dirent_t *result);
-
 static char app_hex_nibble(uint8_t value)
 {
     value &= 0x0fu;
@@ -58,32 +40,59 @@ static uint8_t app_cstr_len(const char *s)
     return len;
 }
 
+/* ---- service-table wrappers (call the live partos_t through app_partos) ---- */
+
 sys_info_t *app_sys_info(void)
 {
-    return pa_get_sys_info();
+    partos_t *partos = app_partos();
+
+    if ((partos == 0) || (partos->get_sys_info == 0)) {
+        return 0;
+    }
+    return partos->get_sys_info();
 }
 
 fat_fs_t *app_boot_filesystem(void)
 {
-    return pa_get_boot_fs();
+    partos_t *partos = app_partos();
+
+    if ((partos == 0) || (partos->get_boot_filesystem == 0)) {
+        return 0;
+    }
+    return partos->get_boot_filesystem();
 }
 
 char *app_current_dir(void)
 {
-    return pa_get_current_dir();
+    partos_t *partos = app_partos();
+
+    if ((partos == 0) || (partos->get_current_dir == 0)) {
+        return 0;
+    }
+    return partos->get_current_dir();
 }
 
 int16_t app_clear_screen(void)
 {
-    return pa_clear_screen();
+    partos_t *partos = app_partos();
+
+    if ((partos == 0) || (partos->clear_screen == 0)) {
+        return 0;
+    }
+    return partos->clear_screen();
 }
 
 int16_t app_write_buffer(const void *buf, uint16_t len)
 {
+    partos_t *partos = app_partos();
+
     if ((buf == 0) || (len == 0u)) {
         return 0;
     }
-    return pa_write_buffer(buf, len);
+    if ((partos == 0) || (partos->write_console == 0)) {
+        return 0;
+    }
+    return partos->write_console(buf, len);
 }
 
 void app_write_cstr(const char *s)
@@ -110,7 +119,11 @@ void app_write_newline(void)
 
 void app_set_text_attr(uint8_t attr)
 {
-    (void)pa_set_text_attr(attr);
+    partos_t *partos = app_partos();
+
+    if ((partos != 0) && (partos->set_text_attr != 0)) {
+        (void)partos->set_text_attr(attr);
+    }
 }
 
 void app_write_hex16(uint16_t value)
@@ -158,85 +171,7 @@ void app_write_u16(void *base, uint8_t offset, uint16_t value)
     p[offset + 1u] = (uint8_t)(value >> 8);
 }
 
-int16_t app_mount_fs(fat_fs_t *fs, const char *dev_name)
-{
-    if ((fs == 0) || (dev_name == 0) || (app_open_event() == 0)) {
-        return FAT_EINVAL;
-    }
-    return pa_mount_fs(fs, dev_name);
-}
-
-int16_t app_lookup_path(fat_fs_t *fs, const char *path, fat_dirent_t *entry)
-{
-    if ((fs == 0) || (path == 0) || (entry == 0) || (app_open_event() == 0)) {
-        return FAT_EINVAL;
-    }
-    return pa_lookup_path(fs, path, entry);
-}
-
-int16_t app_open_file(fat_fs_t *fs, const char *path, fat_file_t *file)
-{
-    if ((fs == 0) || (path == 0) || (file == 0) || (app_open_event() == 0)) {
-        return FAT_EINVAL;
-    }
-    return pa_open_file(fs, path, file);
-}
-
-int16_t app_create_file(fat_fs_t *fs, const char *path, fat_file_t *file)
-{
-    if ((fs == 0) || (path == 0) || (file == 0) || (app_open_event() == 0)) {
-        return FAT_EINVAL;
-    }
-    return pa_create_file(fs, path, file);
-}
-
-int16_t app_read_file(fat_file_t *file, void *buf, uint16_t bytes)
-{
-    if ((file == 0) || (buf == 0) || (bytes == 0u) || (app_open_event() == 0)) {
-        return FAT_EINVAL;
-    }
-    return pa_read_file(file, buf, bytes);
-}
-
-int16_t app_write_file(fat_file_t *file, const void *buf, uint16_t bytes)
-{
-    if ((file == 0) || (buf == 0) || (bytes == 0u) || (app_open_event() == 0)) {
-        return FAT_EINVAL;
-    }
-    return pa_write_file(file, buf, bytes);
-}
-
-int16_t app_read_directory(fat_fs_t *fs, const char *path, fat_dirinfo_t *info)
-{
-    if ((fs == 0) || (path == 0) || (info == 0) || (app_open_event() == 0)) {
-        return FAT_EINVAL;
-    }
-    return pa_readdir(fs, path, info);
-}
-
-int16_t app_unlink_path(fat_fs_t *fs, const char *path, fat_dirent_t *result)
-{
-    if ((fs == 0) || (path == 0) || (result == 0) || (app_open_event() == 0)) {
-        return FAT_EINVAL;
-    }
-    return pa_unlink_path(fs, path, result);
-}
-
-int16_t app_mkdir_path(fat_fs_t *fs, const char *path, fat_dirent_t *result)
-{
-    if ((fs == 0) || (path == 0) || (result == 0) || (app_open_event() == 0)) {
-        return FAT_EINVAL;
-    }
-    return pa_mkdir_path(fs, path, result);
-}
-
-int16_t app_rmdir_path(fat_fs_t *fs, const char *path, fat_dirent_t *result)
-{
-    if ((fs == 0) || (path == 0) || (result == 0) || (app_open_event() == 0)) {
-        return FAT_EINVAL;
-    }
-    return pa_rmdir_path(fs, path, result);
-}
+/* ---- pure command-line / path helpers -------------------------------------- */
 
 char *app_skip_spaces(char *s)
 {
@@ -292,15 +227,31 @@ uint8_t app_require_eol(const char *cursor)
 
 int16_t app_wait_status(volatile int16_t *status)
 {
-    event_t *evt = app_event();
+    int16_t s;
+    int16_t s2;
 
-    if (evt != 0) {
-        pa_wait_one();
-    }
     if (status == 0) {
         return FAT_EINVAL;
     }
-    return *status;
+
+    /* The async FAT worker writes *status exactly once (FAT_EBUSY -> final),
+     * from interrupt/worker context. xcc reads this 16-bit volatile as two
+     * byte loads, so a single read can straddle that write and yield a torn
+     * value (e.g. low byte of EBUSY + high byte of OK = 0x00FD) that is
+     * neither FAT_EBUSY nor the real result -- causing a spurious '?' even
+     * though the operation succeeded. Guard with a double-read: since the
+     * worker writes only once, at most one of two consecutive reads can be
+     * torn, so we only trust a value that reads back identically. */
+    for (;;) {
+        s = *status;
+        s2 = *status;
+        if (s == s2) {
+            if (s != FAT_EBUSY) {
+                return s;
+            }
+            app_wait_one();
+        }
+    }
 }
 
 uint8_t app_resolve_path(char *dst, uint8_t cap, const char *path)
@@ -323,9 +274,6 @@ uint8_t app_resolve_path(char *dst, uint8_t cap, const char *path)
         cursor = app_resolve_input;
     } else {
         cwd = app_current_dir();
-        if (cwd == 0) {
-            cwd = "/";
-        }
         if ((cwd == 0) || (cwd[0] != '/')) {
             cwd = "/";
         }
@@ -358,9 +306,12 @@ uint8_t app_resolve_path(char *dst, uint8_t cap, const char *path)
             cursor++;
         }
 
-        if ((seg_len == 1u) && (segment[0] == '.')) {
-            continue;
-        }
+        /* NOTE: ".." is tested before ".". xcc (<= 1.9.3) miscompiles the
+         * (seg_len == 1u) comparison in the "." test into (seg_len != 0u),
+         * which would otherwise swallow the ".." segment (seg_len == 2) and
+         * break "cd ..". Testing ".." first lets its correct seg_len == 2
+         * branch pop the path before the buggy "." test can match. See
+         * tools/xcc/XCC_BUGS.md (BUG: seg_len==1 folded to seg_len!=0). */
         if ((seg_len == 2u) && (segment[0] == '.') && (segment[1] == '.')) {
             while ((len > 1u) && (dst[len - 1u] != '/')) {
                 len--;
@@ -369,6 +320,9 @@ uint8_t app_resolve_path(char *dst, uint8_t cap, const char *path)
                 len--;
             }
             dst[len] = 0;
+            continue;
+        }
+        if ((seg_len == 1u) && (segment[0] == '.')) {
             continue;
         }
 

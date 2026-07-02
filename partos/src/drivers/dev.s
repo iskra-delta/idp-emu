@@ -46,6 +46,7 @@
             .globl  __dev_probe_all
             .globl  __drv_register_all
             .globl  __find_dev_drv
+            .globl  dev_find_by_name
             .globl  _dev_first
             .globl  _drv_first
             .globl  __sys_model
@@ -263,6 +264,20 @@ __find_dev_drv::
             call    __find_dev_drv$
             ex      de,hl
             ret
+
+            ;; ----------------------------------------------------------------
+            ;; <hl> *drv, <de> *dev <= dev_find_by_name(<hl> *name)
+            ;; ----------------------------------------------------------------
+            ;; assembly-only helper with the raw register contract preserved:
+            ;;   - de = matching dev_t* (or 0)
+            ;;   - hl = matching dev_drv_t* (or 0)
+            ;;
+            ;; fat_mount.s needs the device pointer in de so it can hand the
+            ;; request straight to fat_mount_common$ without depending on the
+            ;; sdcc-facing wrapper's register reshuffle.
+            ;; ----------------------------------------------------------------
+dev_find_by_name::
+            jp      __find_dev_drv$
 
             .area   _INITIALIZED
 _dev_first::

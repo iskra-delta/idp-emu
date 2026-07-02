@@ -1094,6 +1094,7 @@ fat_handle_readdir$:
             jr      nz,fhrd_finish_hl$
 
             ld      hl,(fat_lookup_dirent$)
+            ld      (fat_readdir_result$),hl
             ld      bc,#FATDIRINFO_INDEX
             add     hl,bc
             ld      e,(hl)
@@ -1109,10 +1110,15 @@ fat_handle_readdir$:
             or      a
             jr      z,fhrd_scan$
 
+            ;; Resolve the directory being listed into private scratch. The
+            ;; caller's fat_dirinfo_t is only for the emitted entry.
+            ld      hl,#fat_readdir_dirent$
+            ld      (fat_lookup_dirent$),hl
+            call    fat_prepare_dirent_busy$
             call    fat_walk_to_leaf$
             ld      a,h
             or      l
-            jr      nz,fhrd_finish_hl$
+            jr      nz,fhrd_finish_restore_hl$
 
             ld      bc,#FATDIRENT_ATTR
             call    fat_dirent_byte$
@@ -1123,6 +1129,8 @@ fat_handle_readdir$:
             ld      hl,(fat_lookup_dirent$)
             call    fat_load_de$
             ld      (fat_lookup_cluster$),de
+            ld      hl,(fat_readdir_result$)
+            ld      (fat_lookup_dirent$),hl
 
 fhrd_scan$:
             ld      a,#FAT_WALK_READDIR
@@ -1132,6 +1140,9 @@ fhrd_scan$:
 
 fhrd_badf$:
             ld      hl,#FAT_EBADF
+fhrd_finish_restore_hl$:
+            ld      de,(fat_readdir_result$)
+            ld      (fat_lookup_dirent$),de
 fhrd_finish_hl$:
             ex      de,hl               ; de = rc
             jp      fat_finish_dirent$
@@ -1176,3 +1187,7 @@ fat_free_off$:
             .ds     1
 fat_readdir_index$:
             .ds     2
+fat_readdir_result$:
+            .ds     2
+fat_readdir_dirent$:
+            .ds     FATDIRENT_SIZEOF

@@ -1,4 +1,4 @@
-#include "../lib/partos.h"
+#include "../lib/libc.h"
 
 static uint16_t mem_used;
 static uint16_t mem_free;
@@ -12,6 +12,11 @@ static const char mem_sys_text[] = "SYS used= ";
 static const char mem_usr_text[] = "USR used= ";
 static const char mem_free_text[] = " free= ";
 static const char mem_self_text[] = " self= ";
+
+static void mem_write_text(const char *s)
+{
+    (void)write(s, strlen(s));
+}
 
 static void mem_scan_heap(block_t *block)
 {
@@ -46,7 +51,10 @@ int main(int argc, char **argv)
     process_t *process = 0;
     thread_t *thread = 0;
 
-    (void)argc;
+    if (argc != 1) {
+        puts("usage: mem");
+        return 1;
+    }
     (void)argv;
 
     info = app_sys_info();
@@ -59,12 +67,12 @@ int main(int argc, char **argv)
         mem_skip_owner0 = 0;
         mem_skip_owner1 = 0;
         mem_scan_heap((block_t *)info->system_heap);
-        app_write_cstr(mem_sys_text);
+        mem_write_text(mem_sys_text);
         app_write_hex16(mem_used);
-        app_write_cstr(mem_free_text);
+        mem_write_text(mem_free_text);
         app_write_hex16((uint16_t)(mem_free + mem_self));
         if (mem_self != 0u) {
-            app_write_cstr(mem_self_text);
+            mem_write_text(mem_self_text);
             app_write_hex16(mem_self);
         }
         app_write_newline();
@@ -74,12 +82,12 @@ int main(int argc, char **argv)
         mem_skip_owner0 = process;
         mem_skip_owner1 = thread;
         mem_scan_heap((block_t *)info->user_heap);
-        app_write_cstr(mem_usr_text);
+        mem_write_text(mem_usr_text);
         app_write_hex16(mem_used);
-        app_write_cstr(mem_free_text);
+        mem_write_text(mem_free_text);
         app_write_hex16((uint16_t)(mem_free + mem_self));
         if (mem_self != 0u) {
-            app_write_cstr(mem_self_text);
+            mem_write_text(mem_self_text);
             app_write_hex16(mem_self);
         }
         app_write_newline();

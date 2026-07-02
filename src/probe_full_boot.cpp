@@ -32,6 +32,7 @@
 namespace {
 
 constexpr uint16_t PC_STAGE1_READY = 0x2003;
+constexpr uint16_t PC_BOOT_FD      = 0x2046;
 constexpr uint16_t PC_BOOT_HD      = 0x2052;
 constexpr uint16_t KERNEL_ENTRY    = 0x0000;
 constexpr uint16_t ADDR_MODEL      = 0xDE0E;
@@ -160,6 +161,7 @@ int main(int argc, char **argv)
         return 1;
 
     const std::string rom_path = root + "/partos/bin/partos.rom";
+    const std::string fdd_path = root + "/disks/fdd-dos.img";
     const std::string hdd_path = root + "/disks/hdd-dos.img";
     const std::string kernel_map_path = root + "/partos/build/kernel.map";
     const std::string os_map_path = root + "/partos/build/os.map";
@@ -226,8 +228,15 @@ int main(int argc, char **argv)
         return 1;
     }
 
+    const bool boot_via_fd0 = [] {
+        const char *s = std::getenv("IDP_BOOT_VIA_FD0");
+        return s && s[0] && s[0] != '0';
+    }();
+
     partner_crt emu(terminal_profile::vt52, root + "/partos/partos_shadow_nvram.bin");
     emu.load_rom(rom_path);
+    if (boot_via_fd0)
+        emu.load_disk(0, fdd_path);
     emu.load_hdd(hdd_path);
     emu.reset();
     auto rd16_live = [](const std::vector<uint8_t> &v) -> uint16_t {
@@ -255,7 +264,7 @@ int main(int argc, char **argv)
     auto st = emu.capture_debug_cpu_state();
     st.sp = 0xBFFF;
     emu.apply_debug_cpu_state(st);
-    emu.debug_set_pc(PC_BOOT_HD);
+    emu.debug_set_pc(boot_via_fd0 ? PC_BOOT_FD : PC_BOOT_HD);
 
     bool hit_page0 = false;
     uint32_t page0_hits = 0;

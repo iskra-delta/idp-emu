@@ -8,8 +8,9 @@
             ;; the image in a COM header.
             ;;
             ;; the shell itself talks through the public "partos" service and
-            ;; also registers one lightweight shell-owned "libc" service for
-            ;; process launch metadata and prompt helpers.
+            ;; also registers one shell-owned "libc" service that exposes the
+            ;; process launch metadata plus the tiny standard-style string and
+            ;; console helpers used by the userland tools.
             ;;
             ;; 2026-06-22   tstih
             .module shell
@@ -23,6 +24,7 @@
             .equ    PARTOS_OFF_REGISTER_SERVICE,38
             .equ    PARTOS_OFF_EXIT_PROCESS,    70
             .equ    PARTOS_OFF_GET_BOOT_FS,     88
+            .equ    PARTOS_OFF_GET_CURRENT_DIR, 92
             .equ    PARTOS_OFF_WAIT_PROCESS,    100
             .equ    SVC_NAME,                  4
             .equ    SVC_FNTABLE,               20
@@ -89,6 +91,8 @@
             .globl  __reloc_alias_hd0$
             .globl  __reloc_alias_hd1$
             .globl  __reloc_prompt_dev_write$
+            .globl  __reloc_prompt_cwd$
+            .globl  __reloc_prompt_cwd_write$
             .globl  __reloc_prompt_ptr2$
             .globl  __reloc_prompt_write2$
             .globl  __reloc_nl_ptr$
@@ -122,6 +126,8 @@
             .globl  __reloc_exit_calloff$
             .globl  __reloc_gsi_off$
             .globl  __reloc_gsi_call$
+            .globl  __reloc_gcwd_off$
+            .globl  __reloc_gcwd_call$
             .globl  __reloc_guh_sysinfo$
             .globl  __reloc_gcp_sysinfo$
             .globl  __reloc_gcl_process$
@@ -146,6 +152,27 @@
             .globl  __reloc_libcsvc_getenvvar$
             .globl  __reloc_libcsvc_getdev$
             .globl  __reloc_libcsvc_prompt$
+            .globl  __reloc_libcsvc_strlen$
+            .globl  __reloc_libcsvc_strcmp$
+            .globl  __reloc_libcsvc_strncmp$
+            .globl  __reloc_libcsvc_strcpy$
+            .globl  __reloc_libcsvc_memcpy$
+            .globl  __reloc_libcsvc_memset$
+            .globl  __reloc_libcsvc_write$
+            .globl  __reloc_libcsvc_putchar$
+            .globl  __reloc_libcsvc_puts$
+            .globl  _shell_libc_strlen
+            .globl  _shell_libc_strcmp
+            .globl  _shell_libc_strncmp
+            .globl  _shell_libc_strcpy
+            .globl  _shell_libc_memcpy
+            .globl  _shell_libc_memset
+            .globl  _shell_libc_write
+            .globl  _shell_libc_putchar
+            .globl  _shell_libc_puts
+            .globl  _shell_libc_write_buffer
+            .globl  _shell_libc_write_newline
+            .globl  shell_entry
             .globl  shell_run_command$
             .globl  shell_wait_process$
             .globl  shell_attach_launch$
@@ -741,6 +768,22 @@ __reloc_alias_hd1$:
             .dw     shell_hd1$
             ret
 
+shell_get_current_dir$:
+            ld      bc,#PARTOS_OFF_GET_CURRENT_DIR
+            .db     0xcd
+__reloc_gcwd_off$:
+            .dw     shell_call_offset$
+            ld      a,h
+            or      l
+            jr      z,sgcwd_none$
+            .db     0xcd
+__reloc_gcwd_call$:
+            .dw     shell_call_hl$
+            ret
+sgcwd_none$:
+            ld      de,#0x0000
+            ret
+
 shell_skip_spaces$:
 sss_loop$:
             ld      a,(hl)
@@ -802,7 +845,7 @@ __reloc_norm_trim_store$:
 
 shell_upper$:
             cp      #'a'
-            ret     c
+            .db     0xd8            ; ret c (xas: RET C unsupported)
             cp      #('z' + 1)
             ret     nc
             sub     #0x20
@@ -962,7 +1005,7 @@ shell_write_banner$:
             .db     0x21
 __reloc_banner_ptr$:
             .dw     shell_banner$
-            ld      de,#shell_banner_len
+            ld      de,#(shell_banner_end$ - shell_banner$)
             .db     0xcd
 __reloc_banner_write$:
             .dw     shell_write_buffer$
@@ -974,16 +1017,35 @@ __reloc_prompt_dev$:
             .dw     shell_get_device_alias$
             ld      a,d
             or      e
-            jr      z,swp_suffix$
+            jr      z,swp_cwd$
             ex      de,hl
             .db     0xcd
 __reloc_prompt_dev_write$:
+            .dw     shell_write_cstr$
+swp_cwd$:
+            .db     0xcd
+__reloc_prompt_cwd$:
+            .dw     shell_get_current_dir$
+            ld      a,d
+            or      e
+            jr      z,swp_suffix$
+            ex      de,hl
+            ld      a,(hl)
+            cp      #'/'
+            jr      nz,swp_suffix$
+            inc     hl
+            ld      a,(hl)
+            or      a
+            jr      z,swp_suffix$
+            dec     hl
+            .db     0xcd
+__reloc_prompt_cwd_write$:
             .dw     shell_write_cstr$
 swp_suffix$:
             .db     0x21
 __reloc_prompt_ptr2$:
             .dw     shell_prompt_text$
-            ld      de,#shell_prompt_len
+            ld      de,#(shell_prompt_end$ - shell_prompt_text$)
             .db     0xcd
 __reloc_prompt_write2$:
             .dw     shell_write_buffer$
@@ -1010,17 +1072,23 @@ shell_write_newline$:
             .db     0x21
 __reloc_nl_ptr$:
             .dw     shell_newline$
-            ld      de,#shell_newline_len
+            ld      de,#(shell_newline_end$ - shell_newline$)
             .db     0xcd
 __reloc_nl_write$:
             .dw     shell_write_buffer$
             ret
 
+_shell_libc_write_buffer::
+            jp      shell_write_buffer$
+
+_shell_libc_write_newline::
+            jp      shell_write_newline$
+
 shell_write_erase$:
             .db     0x21
 __reloc_erase_ptr$:
             .dw     shell_erase_seq$
-            ld      de,#shell_erase_seq_len
+            ld      de,#(shell_erase_seq_end$ - shell_erase_seq$)
             .db     0xcd
 __reloc_erase_write$:
             .dw     shell_write_buffer$
@@ -1030,7 +1098,7 @@ shell_write_error$:
             .db     0x21
 __reloc_err_ptr$:
             .dw     shell_error$
-            ld      de,#shell_error_len
+            ld      de,#(shell_error_end$ - shell_error$)
             .db     0xcd
 __reloc_err_write2$:
             .dw     shell_write_buffer$
@@ -1053,14 +1121,32 @@ __reloc_libcsvc_getdev$:
             .dw     shell_get_device_alias$
 __reloc_libcsvc_prompt$:
             .dw     shell_write_prompt$
+__reloc_libcsvc_strlen$:
+            .dw     _shell_libc_strlen
+__reloc_libcsvc_strcmp$:
+            .dw     _shell_libc_strcmp
+__reloc_libcsvc_strncmp$:
+            .dw     _shell_libc_strncmp
+__reloc_libcsvc_strcpy$:
+            .dw     _shell_libc_strcpy
+__reloc_libcsvc_memcpy$:
+            .dw     _shell_libc_memcpy
+__reloc_libcsvc_memset$:
+            .dw     _shell_libc_memset
+__reloc_libcsvc_write$:
+            .dw     _shell_libc_write
+__reloc_libcsvc_putchar$:
+            .dw     _shell_libc_putchar
+__reloc_libcsvc_puts$:
+            .dw     _shell_libc_puts
 
 shell_banner$:
             .db     'P','A','R','T','O','S',' ','s','h','e','l','l',0x0d,0x0a
-shell_banner_len == . - shell_banner$
+shell_banner_end$:
 
 shell_prompt_text$:
             .db     '>',' '
-shell_prompt_len == . - shell_prompt_text$
+shell_prompt_end$:
 
 shell_hd0$:
             .db     'h','d','0',0
@@ -1070,15 +1156,15 @@ shell_hd1$:
 
 shell_newline$:
             .db     0x0d,0x0a
-shell_newline_len == . - shell_newline$
+shell_newline_end$:
 
 shell_erase_seq$:
             .db     0x08,' ',0x08
-shell_erase_seq_len == . - shell_erase_seq$
+shell_erase_seq_end$:
 
 shell_error$:
             .db     '?',0x0d,0x0a
-shell_error_len == . - shell_error$
+shell_error_end$:
 
 shell_empty_env$:
             .db     0x00,0x00

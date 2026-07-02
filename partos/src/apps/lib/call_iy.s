@@ -15,4 +15,5 @@
 
 ___sdcc_call_iy:
 __sdcc_call_iy:
-            jp      (iy)
+            push    iy
+            ret

@@ -956,12 +956,34 @@ fat_queue_push$:
             ld      (hl),a              ; req->next = 0
             pop     de                  ; de = req
 
-            ld      hl,(fat_req_tail$)
+            ld      hl,(fat_req_head$)
             ld      a,h
             or      l
             jr      z,fqp_empty$
+
+            ;; A dying owner can leave a stale head behind; reject anything that
+            ;; does not look like one of our request nodes before linking to it.
+            push    de                  ; keep req while validating old head
+            ld      bc,#FATREQ_OP
+            add     hl,bc
+            ld      a,(hl)
+            cp      #FATREQ_OP_MOUNT
+            jr      c,fqp_bad_head$
+            cp      #FATREQ_OP_RMDIR + 1
+            jr      nc,fqp_bad_head$
+            pop     de
+
+            ld      hl,(fat_req_tail$)
+            ld      a,h
+            or      l
+            jr      nz,fqp_have_tail$
+            ld      hl,(fat_req_head$)
+
+fqp_have_tail$:
             call    fat_store_de$       ; old_tail->next = req
             jr      fqp_linked$
+fqp_bad_head$:
+            pop     de
 fqp_empty$:
             ld      (fat_req_head$),de
 fqp_linked$:
@@ -977,7 +999,29 @@ fat_queue_pop$:
             ld      de,(fat_req_head$)
             ld      a,d
             or      e
-            jr      nz,fqpop_have$
+            jr      z,fqpop_empty$
+
+            push    de
+            ld      h,d
+            ld      l,e
+            ld      bc,#FATREQ_OP
+            add     hl,bc
+            ld      a,(hl)
+            cp      #FATREQ_OP_MOUNT
+            jr      c,fqpop_bad_head$
+            cp      #FATREQ_OP_RMDIR + 1
+            jr      nc,fqpop_bad_head$
+            pop     de
+            jr      fqpop_have$
+
+fqpop_bad_head$:
+            pop     de
+            ld      hl,#0x0000
+            ld      (fat_req_head$),hl
+            ld      (fat_req_tail$),hl
+            jr      fqpop_empty$
+
+fqpop_empty$:
             ld      hl,(fat_queue_event$)
             ld      a,#FAT_NONSIGNALED
             call    fat_evt_state$
@@ -986,24 +1030,25 @@ fat_queue_pop$:
             ret
 
 fqpop_have$:
+            ld      (fat_pop_req$),de
             push    de
             ex      de,hl               ; hl = req
             call    fat_load_de$        ; de = req->next
             ld      (fat_req_head$),de
-            pop     de                  ; de = req (return value)
+            pop     de                  ; drop saved req
             ld      hl,(fat_req_head$)
             ld      a,h
             or      l
             jr      nz,fqpop_done$
             ld      hl,#0x0000
             ld      (fat_req_tail$),hl
-            push    de                  ; preserve the popped request handle
             ld      hl,(fat_queue_event$)
             ld      a,#FAT_NONSIGNALED
             call    fat_evt_state$
-            pop     de
 fqpop_done$:
+            ld      de,(fat_pop_req$)
             call    _ir_enable
+            ld      de,(fat_pop_req$)
             ret
 
             ;; ----------------------------------------------------------------
@@ -1101,7 +1146,9 @@ fw_loop$:
             jr      fw_loop$
 
 fw_dispatch$:
-            push    de                  ; keep req for the common free path
+            ;; Handler paths are deep and can use the stack heavily; keep the
+            ;; request pointer in scratch so the common free path is stable.
+            ld      (fat_current_req$),de
             ld      h,d
             ld      l,e
             ld      bc,#FATREQ_OP
@@ -1170,11 +1217,11 @@ fw_rmdir$:
             call    fat_handle_rmdir$
 
 fw_after$:
-            pop     de
+            ld      de,(fat_current_req$)
 fw_free$:
             ld      hl,#__usr_heap
             call    _mem_free
-            jr      fw_loop$
+            jp      fw_loop$
 
             ;; ----------------------------------------------------------------
             ;; <de> <= _fat_init()
@@ -1285,6 +1332,8 @@ fat_init_state$:
             .db     FAT_INIT_NONE
 fat_wait_evt$:
             .dw     0x0000
+fat_pop_req$:
+            .dw     0x0000
 
             .area   _SYSVARS
 
@@ -1295,6 +1344,8 @@ fat_work_fs$:
 fat_work_dev$:
             .ds     2
 fat_work_event$:
+            .ds     2
+fat_current_req$:
             .ds     2
 fat_submit_frame$:
             .ds     10

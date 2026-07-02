@@ -9,8 +9,8 @@
 #
 # Layout (both images, no MBR partition table -- BPB lives at LBA 0):
 #   sector 0          : boot sector (jump + BPB + optional 0x55AA at 254..255)
-#   sectors 1..8      : reserved micro-kernel image  -> 0x0000
-#   sectors 9..72     : reserved OS payload image    -> 0xC000
+#   sectors 1..16     : reserved micro-kernel image  -> 0x0000
+#   sectors 17..80    : reserved OS payload image    -> 0xC000
 #   reserved region   : boot sector + split OS images (BPB.reserved_sectors)
 #   FAT region        : num_fats copies
 #   root directory    : fixed-size FAT12/16 root
@@ -43,17 +43,16 @@ DEFAULT_MV = os.path.join(ROOT_DIR, "partos", "bin", "mv.com")
 DEFAULT_CLEAR = os.path.join(ROOT_DIR, "partos", "bin", "clear.com")
 DEFAULT_ECHO = os.path.join(ROOT_DIR, "partos", "bin", "echo.com")
 DEFAULT_HELP = os.path.join(ROOT_DIR, "partos", "bin", "help.com")
-DEFAULT_TOUCH = os.path.join(ROOT_DIR, "partos", "bin", "touch.com")
 
 # Legacy 8 KiB staging window used by --shelldisk (direct-kernel fixture).
 LEGACY_OS_STAGING_SECTORS = 32
 
 # Split load map (must match partos.inc): the ROM loads two reserved regions.
-#   lba 1..8   2 KB  -> 0x0000  micro-kernel (mirrored into both banks)
-#   lba 9..72  16 KB -> 0xc000  shared services + os data
-UKERNEL_SECTORS = 8               # 2 KB
+#   lba 1..16  4 KB  -> 0x0000  micro-kernel (mirrored into both banks)
+#   lba 17..80 16 KB -> 0xc000  shared services + os data
+UKERNEL_SECTORS = 16              # 4 KB
 SERVICES_SECTORS = 64             # 16 KB
-SPLIT_RESERVED = 1 + UKERNEL_SECTORS + SERVICES_SECTORS   # boot + 2 KB + 16 KB
+SPLIT_RESERVED = 1 + UKERNEL_SECTORS + SERVICES_SECTORS   # boot + 4 KB + 16 KB
 
 
 def read_inc_equ(name, path=PARTOS_INC):
@@ -76,8 +75,8 @@ def read_image(path):
 
 def pack_split(img, ukernel_bytes, services_bytes):
     """Lay out the split reserved region the ROM loader expects:
-         lba 1..8   (2 KB)  <- ukernel_bytes   -> 0x0000
-         lba 9..72  (16 KB) <- services_bytes  -> 0xc000
+         lba 1..16  (4 KB)  <- ukernel_bytes   -> 0x0000
+         lba 17..80 (16 KB) <- services_bytes  -> 0xc000
     Each region must fit its sector window; unused tail sectors stay zero."""
     if len(ukernel_bytes) > UKERNEL_SECTORS * SECTOR:
         raise RuntimeError(
@@ -248,7 +247,6 @@ def main():
         clear_path = os.environ.get("PARTOS_CLEAR", DEFAULT_CLEAR)
         echo_path = os.environ.get("PARTOS_ECHO", DEFAULT_ECHO)
         help_path = os.environ.get("PARTOS_HELP", DEFAULT_HELP)
-        touch_path = os.environ.get("PARTOS_TOUCH", DEFAULT_TOUCH)
         if not os.path.isfile(shell_path):
             print(f"error: shell image not found at {shell_path} (build partos first)", file=sys.stderr)
             sys.exit(1)
@@ -270,7 +268,6 @@ def main():
             ("clear", clear_path),
             ("echo", echo_path),
             ("help", help_path),
-            ("touch", touch_path),
         ):
             if not os.path.isfile(path):
                 print(f"error: {label} image not found at {path} (build partos first)", file=sys.stderr)
@@ -289,7 +286,6 @@ def main():
         clear_cmd = read_image(clear_path)
         echo_cmd = read_image(echo_path)
         help_cmd = read_image(help_path)
-        touch_cmd = read_image(touch_path)
         build_image(path, total_sectors=80 * 2 * 18, spc=1, root_entries=112,
                     media=0xF9, spt=18, heads=2, fat_bits=12,
                     drive_num=0x00, label="FDD DOS    ",
@@ -300,8 +296,7 @@ def main():
                            ("MKDIR   COM", mkdir_cmd), ("RMDIR   COM", rmdir_cmd),
                            ("DEL     COM", del_cmd), ("CP      COM", cp_cmd),
                            ("MV      COM", mv_cmd), ("CLEAR   COM", clear_cmd),
-                           ("ECHO    COM", echo_cmd), ("HELP    COM", help_cmd),
-                           ("TOUCH   COM", touch_cmd)],
+                           ("ECHO    COM", echo_cmd), ("HELP    COM", help_cmd)],
                     bootable=True)
         print(f"{path}: FAT12 floppy with shell/tools payload set")
         return
@@ -322,7 +317,6 @@ def main():
     clear_path = os.environ.get("PARTOS_CLEAR", DEFAULT_CLEAR)
     echo_path = os.environ.get("PARTOS_ECHO", DEFAULT_ECHO)
     help_path = os.environ.get("PARTOS_HELP", DEFAULT_HELP)
-    touch_path = os.environ.get("PARTOS_TOUCH", DEFAULT_TOUCH)
     if not os.path.isfile(ukernel_path):
         print(f"error: micro-kernel not found at {ukernel_path} (build partos first)", file=sys.stderr)
         sys.exit(1)
@@ -350,7 +344,6 @@ def main():
         ("clear", clear_path),
         ("echo", echo_path),
         ("help", help_path),
-        ("touch", touch_path),
     ):
         if not os.path.isfile(path):
             print(f"error: {label} image not found at {path} (build partos first)", file=sys.stderr)
@@ -372,7 +365,6 @@ def main():
     clear_cmd = read_image(clear_path)
     echo_cmd = read_image(echo_path)
     help_cmd = read_image(help_path)
-    touch_cmd = read_image(touch_path)
     print(f"split images: ukernel {len(ukernel_bytes)} B "
           f"(lba 1..{UKERNEL_SECTORS}) + services {len(services_bytes)} B "
           f"(lba {1 + UKERNEL_SECTORS}..{UKERNEL_SECTORS + SERVICES_SECTORS}), "
@@ -402,8 +394,7 @@ def main():
                        ("MKDIR   COM", mkdir_cmd), ("RMDIR   COM", rmdir_cmd),
                        ("DEL     COM", del_cmd), ("CP      COM", cp_cmd),
                        ("MV      COM", mv_cmd), ("CLEAR   COM", clear_cmd),
-                       ("ECHO    COM", echo_cmd), ("HELP    COM", help_cmd),
-                       ("TOUCH   COM", touch_cmd)],
+                       ("ECHO    COM", echo_cmd), ("HELP    COM", help_cmd)],
                 split_bytes=(ukernel_bytes, services_bytes), bootable=True)
 
 

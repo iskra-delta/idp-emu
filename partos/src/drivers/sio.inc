@@ -34,6 +34,21 @@
             .equ    SIO_IOCTL_UNLOCK,    0x22
             .equ    SIO_IOCTL_INITLINE,  0x23
 
+            ;; --- synchronous polled console ioctls --------------------------
+            ;; these let the OS console drive a channel by POLLING (interrupts
+            ;; off) WITHOUT going through the async buffered read/write path.
+            ;; they exist so console.s never touches the SIO ports directly --
+            ;; it asks the driver instead. they are ownerless (the OS console
+            ;; does not lock/own the channel) and independent of the rx/tx rings.
+            ;;   PUTC    : e = char           -> blocking polled transmit
+            ;;   PEEK    : (none)             -> hl = char / 0xffff (non-blocking)
+            ;;   GETC    : (none)             -> hl = char (blocking receive)
+            ;;   TTYINIT : (none)             -> program channel for polled tty
+            .equ    SIO_IOCTL_PUTC,      0x24
+            .equ    SIO_IOCTL_PEEK,      0x25
+            .equ    SIO_IOCTL_GETC,      0x26
+            .equ    SIO_IOCTL_TTYINIT,   0x27
+
             .equ    SIO_PARITY_NONE,     0
             .equ    SIO_PARITY_EVEN,     1
             .equ    SIO_PARITY_ODD,      2

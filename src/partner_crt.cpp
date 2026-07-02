@@ -117,7 +117,7 @@ uint8_t partner_crt::io_read(uint16_t port)
 
 void partner_crt::io_write(uint16_t port, uint8_t data)
 {
-    // CRT text output is consumed in tick() from whichever Partner SIO
-    // channels the BIOS has routed TERMINAL traffic through.
+    // The built-in CRT screen is fed only from the fixed internal SIO channel;
+    // other serial ports remain off-screen attachable peripherals.
     partner::io_write(port, data);
 }

@@ -1,5 +1,10 @@
 #include "partos.h"
 
+/* Service-table primitives provided by the app-side asm bridges. */
+extern partos_t *app_bind_partos_service(void);   /* bootstrap.s */
+extern void app_exit_process(void);               /* svccall.s   */
+extern void app_dead(void);                        /* bootstrap.s */
+
 static partos_t *app_partos_ptr;
 static libc_t *app_libc_ptr;
 static event_t *app_event_ptr;
@@ -12,7 +17,7 @@ static const char *app_env_ptr = app_empty_env;
 
 extern int main(int argc, char **argv);
 
-static uint8_t app_copy_cstr_bounded(char *dst, uint8_t cap, const char *src)
+static uint8_t app_copy_cstr_bounded_rt(char *dst, uint8_t cap, const char *src)
 {
     uint8_t len = 0;
 
@@ -121,9 +126,13 @@ char **app_argv(void)
 
 process_t *app_current_process(void)
 {
+    partos_t *partos = app_partos_ptr;
     sys_info_t *info;
 
-    info = pa_get_sys_info();
+    if ((partos == 0) || (partos->get_sys_info == 0)) {
+        return 0;
+    }
+    info = partos->get_sys_info();
     if ((info == 0) || (info->current_thread == 0)) {
         return 0;
     }
@@ -132,10 +141,15 @@ process_t *app_current_process(void)
 
 event_t *app_open_event(void)
 {
+    partos_t *partos = app_partos_ptr;
+
     if (app_event_ptr != 0) {
         return app_event_ptr;
     }
-    app_event_ptr = pa_create_event();
+    if ((partos == 0) || (partos->create_event == 0)) {
+        return 0;
+    }
+    app_event_ptr = partos->create_event((void *)app_current_process());
     return app_event_ptr;
 }
 
@@ -146,20 +160,38 @@ event_t *app_event(void)
 
 void app_close_event(void)
 {
+    partos_t *partos = app_partos_ptr;
+
     if (app_event_ptr == 0) {
         return;
     }
-    pa_destroy_event();
+    if ((partos != 0) && (partos->destroy_event != 0)) {
+        partos->destroy_event(app_event_ptr);
+    }
     app_event_ptr = 0;
+}
+
+void app_wait_one(void)
+{
+    partos_t *partos = app_partos_ptr;
+    event_t *evt = app_event_ptr;
+
+    if ((evt == 0) || (partos == 0) || (partos->wait_for_events == 0)) {
+        return;
+    }
+    if (partos->enable_interrupts != 0) {
+        partos->enable_interrupts();
+    }
+    partos->wait_for_events(&evt, 1u);
 }
 
 void app_exit(void)
 {
     app_close_event();
     if (app_partos_ptr != 0) {
-        pa_exit_process();
+        app_exit_process();
     }
-    pa_dead();
+    app_dead();
 }
 
 void app_bootstrap(void)
@@ -169,11 +201,13 @@ void app_bootstrap(void)
     const char *env;
     int rc;
 
-    app_partos_ptr = (partos_t *)pa_init();
+    app_partos_ptr = app_bind_partos_service();
     if (app_partos_ptr == 0) {
-        pa_dead();
+        app_dead();
     }
-    app_libc_ptr = (libc_t *)pa_query_service(LIBC_SERVICE_NAME);
+    if (app_partos_ptr->query_service != 0) {
+        app_libc_ptr = (libc_t *)app_partos_ptr->query_service(LIBC_SERVICE_NAME);
+    }
 
     process = app_current_process();
     line = 0;
@@ -186,8 +220,8 @@ void app_bootstrap(void)
         (app_libc_ptr->get_command_line != 0)) {
         line = app_libc_ptr->get_command_line();
     }
-    if (line == 0) {
-        line = pa_get_command_line();
+    if ((line == 0) && (app_partos_ptr->get_command_line != 0)) {
+        line = app_partos_ptr->get_command_line();
     }
     if (line == 0) {
         line = "";
@@ -200,10 +234,11 @@ void app_bootstrap(void)
         env = app_empty_env;
     }
     app_env_ptr = env;
-    if (!app_copy_cstr_bounded(app_cmdline_raw, APP_CMDLINE_CAP, line)) {
+    if (!app_copy_cstr_bounded_rt(app_cmdline_raw, APP_CMDLINE_CAP, line)) {
         app_cmdline_raw[0] = 0;
     }
-    if (!app_copy_cstr_bounded(app_cmdline_parse, APP_CMDLINE_CAP, app_cmdline_raw)) {
+    if (!app_copy_cstr_bounded_rt(app_cmdline_parse, APP_CMDLINE_CAP,
+                                  app_cmdline_raw)) {
         app_cmdline_parse[0] = 0;
     }
     app_parse_argv();

@@ -24,6 +24,8 @@ namespace {
 constexpr const char *DEFAULT_PARTOS_ROM = "partos/bin/partos.rom";
 constexpr const char *DEFAULT_PARTOS_NVRAM = "partos/partos_shadow_nvram.bin";
 constexpr const char *DEFAULT_LEGACY_CRT_ROM = "roms/partner_crt.rom";
+constexpr const char *DEFAULT_PARTOS_FD0 = "disks/fdd-dos.img";
+constexpr const char *DEFAULT_PARTOS_HDD = "disks/hdd-dos.img";
 
 bool is_boot_prompt_wait(uint16_t pc)
 {
@@ -57,6 +59,14 @@ void step_one_instruction(partner &emu)
     }
 }
 
+bool is_partos_rom_path(const std::string &path)
+{
+    std::string low = std::filesystem::path(path).filename().string();
+    for (char &c : low)
+        c = (char)std::tolower((unsigned char)c);
+    return low == "partos.rom";
+}
+
 } // namespace
 
 void print_usage(const char *prog)
@@ -65,10 +75,10 @@ void print_usage(const char *prog)
     std::cerr << "Options:\n";
     std::cerr << "  --help           Show this help\n";
     std::cerr << "  --rom FILE       ROM file (default: " << DEFAULT_PARTOS_ROM << ")\n";
-    std::cerr << "  --fd0 FILE       Floppy drive 0 image (default: disks/fdd-partner-p.img)\n";
+    std::cerr << "  --fd0 FILE       Floppy drive 0 image\n";
     std::cerr << "  --fd1 FILE       Floppy drive 1 image\n";
     std::cerr << "  --hdd FILE       Hard disk image for Xebec/SASI controller\n";
-    std::cerr << "                   (not loaded unless explicitly requested)\n";
+    std::cerr << "                   (auto-attached for the default PartOS ROM)\n";
     std::cerr << "  --nvram FILE     Shadow MM58167 NVRAM backing file (default: " << DEFAULT_PARTOS_NVRAM << ")\n";
     std::cerr << "  --terminal TYPE  Terminal profile: vt52|vt100\n";
     std::cerr << "  --model TYPE     Machine model: crt|gdp|auto (default: auto)\n";
@@ -293,6 +303,8 @@ int main(int argc, char **argv)
         auto pick_disk_for_model = [&](bool want_gdp) -> std::string {
             if (fd0_explicit)
                 return fd0_file;
+            if (is_partos_rom_path(rom_file))
+                return resolve_existing_path(DEFAULT_PARTOS_FD0);
             const std::string preferred = resolve_existing_path(
                 want_gdp ? "disks/fdd-partner-g.img" : "disks/fdd-partner-p.img");
             const std::string fallback = resolve_existing_path(
@@ -310,12 +322,16 @@ int main(int argc, char **argv)
             const std::string selected_rom = pick_rom_for_model(want_gdp);
             const std::string selected_fd0 = pick_disk_for_model(want_gdp);
             const std::string selected_fd1 = fd1_explicit ? fd1_file : std::string{};
-            const bool auto_insert_floppy = hdd_file.empty() || fd0_explicit;
+            const std::string selected_hdd =
+                !hdd_file.empty() ? hdd_file :
+                (is_partos_rom_path(selected_rom) ? resolve_existing_path(DEFAULT_PARTOS_HDD)
+                                                  : std::string{});
+            const bool auto_insert_floppy = selected_hdd.empty() || fd0_explicit || is_partos_rom_path(selected_rom);
             std::cout << "[info] model=" << (want_gdp ? "gdp" : "crt")
                       << " rom=" << selected_rom
                       << " fd0=" << (auto_insert_floppy ? selected_fd0 : std::string("(none)"))
                       << " fd1=" << (selected_fd1.empty() ? std::string("(none)") : selected_fd1)
-                      << (hdd_file.empty() ? "" : (" hdd=" + hdd_file))
+                      << (selected_hdd.empty() ? "" : (" hdd=" + selected_hdd))
                       << " nvram=" << nvram_file
                       << "\n";
 
@@ -328,8 +344,8 @@ int main(int argc, char **argv)
                     gdp->load_disk(0, selected_fd0);
                 if (!selected_fd1.empty())
                     gdp->load_disk(1, selected_fd1);
-                if (!hdd_file.empty())
-                    gdp->load_hdd(hdd_file);
+                if (!selected_hdd.empty())
+                    gdp->load_hdd(selected_hdd);
                 gdp->reset();
                 created = std::move(gdp);
             }
@@ -341,8 +357,8 @@ int main(int argc, char **argv)
                     crt->load_disk(0, selected_fd0);
                 if (!selected_fd1.empty())
                     crt->load_disk(1, selected_fd1);
-                if (!hdd_file.empty())
-                    crt->load_hdd(hdd_file);
+                if (!selected_hdd.empty())
+                    crt->load_hdd(selected_hdd);
                 crt->reset();
                 created = std::move(crt);
             }

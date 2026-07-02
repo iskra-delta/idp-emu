@@ -5,10 +5,10 @@
             ;; in lock-step. the OS reaches the table at a fixed address (pinned
             ;; when the two images link) and calls through it.
             ;;
-            ;; most entries point straight at the public kernel function (the
-            ;; convention already matches: 1st arg HL, 2nd DE, rest stack, ret
-            ;; HL). only the few that transform a native-ABI result keep a small
-            ;; function below: get_sys_vars, is_signalled, acquire/test_lock.
+            ;; most entries point straight at the public kernel function. only
+            ;; the few that need ABI/result shaping keep a small wrapper below:
+            ;; get_sys_vars, is_signalled, acquire/test_lock, bcd_to_bin and
+            ;; bin_to_bcd.
             ;;
             ;; 2026-06-21   tstih
             .module kernel
@@ -40,6 +40,27 @@
             .globl  lock_acquire
             .globl  lock_release
             .globl  lock_test
+            .globl  _svc_register
+            .globl  _svc_unregister
+            .globl  _svc_query
+            .globl  _tmr_install
+            .globl  _tmr_uninstall
+            .globl  __tmr_chain
+            .globl  _process_start
+            .globl  _process_load_image
+            .globl  _process_load_com
+            .globl  _process_wait
+            .globl  _process_exit
+            .globl  bcd_to_bin
+            .globl  bin_to_bcd
+            .globl  delay_1ms
+            ;; appended entries (see end of _kernel_table): give the OS the last
+            ;; few primitives it reaches so nothing needs a link-time address.
+            .globl  _ir_disable
+            .globl  _ir_enable
+            .globl  _ir_set
+            .globl  _list_append
+            .globl  _mem_init
 
             ;; --- sysvars sources ---------------------------------------------
             .globl  __sys_heap
@@ -100,10 +121,10 @@ kfn_test_lock$:
             ;; __kernel_api : rst 0x08 handler -> hl = &_kernel_table
             ;; ----------------------------------------------------------------
             ;; the OS (and any bare payload) discovers the kernel ABI by issuing
-            ;; `rst 0x08`, which lands in the low-page dispatch and ends up here;
-            ;; it returns a pointer to the fixed _kernel_table. no named-service
-            ;; registry is involved -- service registration moved to the OS, so
-            ;; the kernel no longer has to register (or even know) itself.
+            ;; `rst 0x08`, which lands in the low-page dispatch and ends up here.
+            ;; it returns a pointer to the fixed _kernel_table, which now covers
+            ;; the kernel-owned service, timer, process, bcd and delay helpers in
+            ;; addition to the older scheduler/memory/vector primitives.
             ;; ----------------------------------------------------------------
 __kernel_api::
             ld      hl,#_kernel_table
@@ -141,16 +162,41 @@ _kernel_table::
             .dw     __so_destroy            ; destroy_object
             .dw     _set_cleanup            ; set_cleanup
             .dw     _owner_cleanup_register ; register_owner_cleanup
-            ;; (named services moved to the OS -- discover the kernel via rst 0x08)
             ;; vectors
             .dw     _vector_set             ; set_vector
             .dw     _vector_get             ; get_vector
-            ;; (soft timers moved to the OS: it wires CTC -> __tmr_chain via
-            ;;  set_vector(VECTOR_TICK, __tmr_chain) -- not a kernel ABI entry)
             ;; locks
             .dw     kfn_acquire_lock$       ; acquire_lock
             .dw     lock_release            ; release_lock
             .dw     kfn_test_lock$          ; test_lock
+            ;; appended to preserve the older ABI offsets above
+            ;; services
+            .dw     _svc_register           ; register_service
+            .dw     _svc_unregister         ; unregister_service
+            .dw     _svc_query              ; query_service
+            ;; timers
+            .dw     _tmr_install            ; install_timer
+            .dw     _tmr_uninstall          ; uninstall_timer
+            .dw     __tmr_chain             ; chain_timers
+            ;; processes
+            .dw     _process_start          ; start_process
+            .dw     _process_load_image     ; load_process_image
+            .dw     _process_load_com       ; load_process_com
+            .dw     _process_wait           ; wait_process
+            .dw     _process_exit           ; exit_process
+            ;; misc helpers
+            .dw     kfn_bcd_to_bin$         ; bcd_to_bin
+            .dw     kfn_bin_to_bcd$         ; bin_to_bcd
+            .dw     delay_1ms               ; delay_1ms
+            ;; appended -- MUST stay last so the offsets above never shift. these
+            ;; complete the OS's kernel surface (interrupt enable/disable, IM2
+            ;; device-vector install, list append, heap init) so the OS reaches
+            ;; the kernel entirely through rst 0x08.
+            .dw     _ir_disable             ; disable_interrupts
+            .dw     _ir_enable              ; enable_interrupts
+            .dw     _ir_set                 ; set_irq_vector
+            .dw     _list_append            ; append_list
+            .dw     _mem_init               ; initialize_memory
 
             ;; ----------------------------------------------------------------
             ;; sysvars_t : kernel publishes heaps, IM2 table, and the base of its
@@ -164,8 +210,26 @@ _kernel_table::
             ;; directly, and the full all-lists view lives in the OS __sys_info).
             ;; ----------------------------------------------------------------
 sysvars$:
-            .dw     __sys_heap                  ; sys_heap (0xfa00, top reserve)
-            .dw     __usr_heap                  ; bank1_heap (arena 0x0800)
+            .dw     __sys_heap                  ; sys_heap (shared top reserve)
+            .dw     __usr_heap                  ; bank1_heap (process arena)
             .dw     __usr_heap                  ; bank2_heap (same window, bank 2)
             .dw     KERNEL_IM2_BASE             ; im2_table
             .dw     _thread_current             ; list_heads: base of the 6-word block
+
+            ;; ----------------------------------------------------------------
+            ;; uint8_t bcd_to_bin(uint8_t bcd)   <a>/<hl> -> <a>/<hl>
+            ;; ----------------------------------------------------------------
+kfn_bcd_to_bin$:
+            call    bcd_to_bin
+            ld      l,a
+            ld      h,#0
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; uint8_t bin_to_bcd(uint8_t value)   <a>/<hl> -> <a>/<hl>
+            ;; ----------------------------------------------------------------
+kfn_bin_to_bcd$:
+            call    bin_to_bcd
+            ld      l,a
+            ld      h,#0
+            ret

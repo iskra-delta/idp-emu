@@ -8,16 +8,6 @@
 #define APP_ARGV_MAX              8u
 #define APP_PATH_CAP              64u
 
-/*
- * Compatibility aliases for the older helper layer. New code should prefer the
- * public PartOS names directly, but keeping these aliases makes the migration
- * less disruptive while we move the apps over to normal C entry points.
- */
-typedef fat_fs_t pa_fs_t;
-typedef fat_file_t pa_file_t;
-typedef fat_dirent_t pa_dirent_t;
-typedef fat_dirinfo_t pa_dirinfo_t;
-
 partos_t *app_partos(void);
 libc_t *app_libc(void);
 shell_t *app_shell(void);
@@ -43,7 +33,6 @@ void app_write_cstr(const char *s);
 void app_write_newline(void);
 void app_set_text_attr(uint8_t attr);
 void app_write_hex16(uint16_t value);
-uint8_t app_format_dir_line(const fat_dirinfo_t *info, char *line);
 uint8_t app_read_u8(const void *base, uint8_t offset);
 uint16_t app_read_u16(const void *base, uint8_t offset);
 void app_write_u16(void *base, uint8_t offset, uint16_t value);
@@ -67,25 +56,6 @@ uint8_t app_resolve_path(char *dst, uint8_t cap, const char *path);
 
 #define BLOCK_NEXT_OFF             0u
 #define PROCESS_NEXT_OFF           0u
-
-/*
- * Low-level bridge retained for the shared runtime/bootstrap layer.
- */
-void *pa_init(void);
-void pa_dead(void);
-int16_t pa_clear_screen(void);
-int16_t pa_write_buffer(const void *buf, uint16_t len);
-void *pa_query_service(const char *name);
-void pa_bind_event(event_t *event);
-event_t *pa_create_event(void);
-event_t *pa_destroy_event(void);
-void pa_wait_one(void);
-sys_info_t *pa_get_sys_info(void);
-fat_fs_t *pa_get_boot_fs(void);
-const char *pa_get_command_line(void);
-char *pa_get_current_dir(void);
-void pa_exit_process(void);
-int16_t pa_set_text_attr(uint8_t attr);
 
 static uint8_t app_file_is_256_aligned(const fat_file_t *file)
 {

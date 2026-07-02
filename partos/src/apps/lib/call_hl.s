@@ -16,4 +16,5 @@
 
 ___sdcc_call_hl:
 __sdcc_call_hl:
-            jp      (hl)
+            push    hl
+            ret

@@ -105,7 +105,7 @@ typedef struct com_header_s {
 #endif
 
 /*
- * Process object. Layout must match src/os/process.inc:
+ * Process object. Layout must match src/kernel/process.inc:
  *   +0 next / +2 owner (sysobj), +4 pflags, +5 pname[8],
  *   +13 main_thread, +15 cmdline, +17 environment.
  */

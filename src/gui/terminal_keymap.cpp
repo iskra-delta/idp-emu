@@ -76,11 +76,13 @@ bool map_terminal_key(SDL_Keycode key, std::vector<uint8_t>& out, bool allow_dec
         push_byte(out, 'D');
         return true;
     case SDLK_DELETE:
+        push_byte(out, 0x7F);
+        return true;
     case SDLK_PAUSE:
     case SDLK_F12:
         // PartOS BIOS waits for raw 0xFE during the early setup window on
-        // both CRT and GDP models. Keep a consistent physical host shortcut
-        // even when the active terminal has no dedicated SET-UP key.
+        // both CRT and GDP models. Keep dedicated host shortcuts for setup
+        // while leaving the normal Delete key available for shell editing.
         push_byte(out, 0xFE);
         return true;
     case SDLK_F1:

@@ -26,6 +26,7 @@
 
             .globl  __os_entry
 
+            .globl  _kcall_init
             .globl  _ir_disable
             .globl  _ir_enable
             .globl  _ir_set
@@ -64,6 +65,10 @@
             ;; driver state are coherent.
             ;; ----------------------------------------------------------------
 __os_entry::
+            ;; discover the kernel ABI table (rst 0x08) and patch the OS->kernel
+            ;; trampolines FIRST -- every kernel call below (starting with the
+            ;; very next _ir_disable) is now routed through those trampolines.
+            call    _kcall_init
             call    _ir_disable
 
             ;; os.sys now ships code + initialized data only; clear the shared

@@ -77,7 +77,7 @@ avdco_init$:
             out     (AVDC_PORT_PIO_CTRL_B),a
             ld      a,#0x18
             out     (AVDC_PORT_PIO_COMMON),a
-            ld      a,#0x6d
+            ld      a,#AVDC_TEXT_CTL_132
             out     (AVDC_PORT_PIO_TEXT),a
 
             ;; hard reset the AVDC side of the board.
@@ -246,6 +246,10 @@ avdcw_loop$:
             jr      z,avdcw_cr$
             cp      #0x0a
             jr      z,avdcw_lf$
+            cp      #0x08
+            jr      z,avdcw_bs$
+            cp      #0x7f
+            jr      z,avdcw_bs$
 
             ld      (avdc_tmp_ch$),a
             ld      a,(avdc_tmp_attr$)
@@ -261,6 +265,10 @@ avdcw_cr$:
 
 avdcw_lf$:
             call    avdc_newline$
+            jr      avdcw_next$
+
+avdcw_bs$:
+            call    avdc_backspace$
 
 avdcw_next$:
             dec     bc
@@ -361,6 +369,28 @@ avdc_carriage_return$:
             pop     de
             ret
 
+avdc_backspace$:
+            push    de
+            push    bc
+            push    hl
+            ld      hl,(avdc_tmp_dev$)
+            ld      de,#DEV_DATA + AVDC_DATA_CUR_X
+            add     hl,de
+            ld      a,(hl)
+            or      a
+            jr      z,avdcb_done$
+            dec     (hl)
+            ld      b,(hl)
+            inc     hl
+            ld      c,(hl)
+            ld      hl,(avdc_tmp_dev$)
+            call    avdc_apply_xy$
+avdcb_done$:
+            pop     hl
+            pop     bc
+            pop     de
+            ret
+
 avdc_newline$:
             push    de
             push    bc
@@ -391,6 +421,7 @@ avdcn_done$:
             ret
 
 avdc_step_write$:
+            push    de
             push    hl
             ld      hl,(avdc_tmp_dev$)
             ld      de,#DEV_DATA + AVDC_DATA_CUR_X
@@ -399,10 +430,14 @@ avdc_step_write$:
             ld      a,(hl)
             pop     hl
             cp      #AVDC_COLS
-            ret     c
-            jr      avdc_newline$
+            jr      c,avdcsw_done$
+            call    avdc_newline$
+avdcsw_done$:
+            pop     de
+            ret
 
 avdc_step_read$:
+            push    de
             push    hl
             ld      hl,(avdc_tmp_dev$)
             ld      de,#DEV_DATA + AVDC_DATA_CUR_X
@@ -423,6 +458,7 @@ avdcsr_store_y$:
             ld      (hl),a
 avdcsr_done$:
             pop     hl
+            pop     de
             ret
 
             ;; ----------------------------------------------------------------
@@ -451,9 +487,11 @@ avdc_fill_cursor_to_ptr$:
             ret
 
 avdc_clear_row_ptr$:
+            push    af
             call    avdc_set_cursor$
             ld      de,#(AVDC_COLS - 1)
             add     hl,de
+            pop     af
             call    avdc_fill_cursor_to_ptr$
             ret
 

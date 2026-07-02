@@ -78,6 +78,7 @@ private:
     std::array<uint64_t, 256> avdc_char_hist_{};
     uint8_t gdp_scroll_ = 0; // external GDP scroll latch (port 0x36 write)
     bool avdc_takeover_ = false;
+    bool avdc_mem_acc_phase_ = false;
     uint16_t avdc_rowtbl_base_cache_ = 0;
     bool avdc_rowtbl_base_cache_valid_ = false;
     bool avdc_rowtbl_be_cache_ = false;

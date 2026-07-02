@@ -129,6 +129,7 @@
 #include <stdbool.h>
 #include <string.h>
 #include <time.h>
+#include <stdlib.h>
 
 #ifdef __cplusplus
 extern "C"
@@ -209,6 +210,13 @@ void mm58167a_reset(mm58167a_t *chip)
 void mm58167a_sync_time(mm58167a_t *chip)
 {
     time_t now = time(NULL);
+    /* Deterministic-clock override for reproducible tests: when IDP_FIXED_RTC
+     * is set, use that fixed epoch instead of the host wall clock. */
+    {
+        const char *fixed = getenv("IDP_FIXED_RTC");
+        if (fixed != NULL && *fixed != '\0')
+            now = (time_t)strtol(fixed, NULL, 10);
+    }
     if (now == chip->last_sync_time)
         return;
     chip->last_sync_time = now;

@@ -3,8 +3,8 @@
             ;; early kernel entry.
             ;;
             ;; the ROM now loads the split images directly:
-            ;;   sectors 1..8   -> 0x0000  micro-kernel
-            ;;   sectors 9..72  -> 0xc000  OS payload
+            ;;   sectors 1..16  -> 0x0000  micro-kernel
+            ;;   sectors 17..80 -> 0xc000  OS payload
             ;; then jumps to 0x0000, whose rst 0x00 slot is `di ; jp __sys_kernel`.
             ;; from here the kernel mirrors its low page into both banks, brings
             ;; the scheduler online and starts the first payload thread at 0xc000.
@@ -75,8 +75,8 @@ __sys_kernel::
             call    __ir_init
             ;; preconfigure the heaps (the stack pointer was set above). the
             ;; system heap lives in the top reserve (small kernel + OS objects);
-            ;; the process arena (0x0d00..0xbfff) is the per-bank heap for thread
-            ;; stacks and process images; 0x0c00..0x0cff is reserved for the
+            ;; the process arena (0x1500..0xbfff) is the per-bank heap for thread
+            ;; stacks and process images; 0x1400..0x14ff is reserved for the
             ;; driver ISR stack in each bank. bank 2's own RAM is initialised
             ;; when banking is brought up.
             ld      hl,#__usr_heap            ; process arena (bank 1)
@@ -94,12 +94,12 @@ __sys_kernel::
             ld      de,#KERNEL_EXEC_SPACE
             ld      bc,#__bank_copy_size
             ldir
-            ;; 2. mirror the 2 KB micro-kernel low page into bank B (src==dst here,
+            ;; 2. mirror the low micro-kernel window into bank B (src==dst here,
             ;;    same address in both banks). a=0 selects the current A -> B
             ;;    direction; run from shared exec space so it survives the flips.
             ld      hl,#UKERNEL_LOAD_BASE        ; src 0x0000 (bank A)
             ld      de,#UKERNEL_LOAD_BASE        ; dst 0x0000 (bank B)
-            ld      bc,#(UKERNEL_SECTORS * 256)  ; 2 KB
+            ld      bc,#(UKERNEL_SECTORS * 256)
             xor     a                           ; dir = 0 -> A -> B
             call    KERNEL_EXEC_SPACE
             ;; 3. initialise bank B's process arena by replicating the block-0
@@ -111,7 +111,8 @@ __sys_kernel::
             call    KERNEL_EXEC_SPACE
 
             ;; the kernel ABI table needs no registration: the OS discovers it
-            ;; with `rst 0x08` (-> hl = &_kernel_table). service moved to the OS.
+            ;; with `rst 0x08` (-> hl = &_kernel_table). named services, timers,
+            ;; process helpers and misc utility calls are now included there too.
             ;; the scheduler tick is the rst 0x18 vector (page0.s -> __thread_robin);
             ;; the kernel installs NO timer of its own. with no tick source the
             ;; system is cooperative (single-tasking); preemption begins only when

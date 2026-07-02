@@ -66,7 +66,6 @@
             .globl  fat_file_shift$
             .globl  fat_file_is_write$
             .globl  fat_file_at_boundary$
-
             .globl  fat_handle_read$
             .globl  fat_handle_write$
 
@@ -572,13 +571,14 @@ fhio_shift_ok$:
             or      a
             jr      z,fhio_locate$
             ld      hl,(fat_file_pos_secs$)
+            ld      a,h
+            or      l
+            jr      z,fhio_locate$
+            ld      hl,(fat_file_pos_secs$)
             ld      de,(fat_file_size_secs$)
             or      a
             sbc     hl,de
             jr      nz,fhio_locate$
-            ld      a,h
-            or      l
-            jr      z,fhio_locate$
             ld      hl,(fat_file_pos_secs$)
             ld      a,(fat_file_spc$)
             dec     a
@@ -626,6 +626,18 @@ fhio_loop$:
             ld      a,(fat_file_is_write$)
             or      a
             jr      z,fhio_need_next$
+            ld      a,(fat_file_at_boundary$)
+            or      a
+            jr      z,fhio_need_write_link$
+            xor     a
+            ld      (fat_file_at_boundary$),a
+            ld      de,(fat_file_cluster$)
+            call    fat_alloc_chain_cluster$
+            ld      a,h
+            or      l
+            jr      nz,fhio_fail_hl$
+            jr      fhio_step_set$
+fhio_need_write_link$:
             call    fat_get_fat_entry$
             ld      a,h
             or      l
@@ -702,22 +714,24 @@ fhio_have_cluster$:
             ld      a,(fat_file_is_write$)
             or      a
             jr      z,fhio_read_sector$
+            push    de                  ; keep the target sector across ldir
             ld      hl,(fat_file_buf$)
             ld      de,#fat_sector$
             ld      bc,#FAT_SECTOR_SIZE
             ldir
             ld      (fat_file_buf$),hl
+            pop     de                  ; restore the target sector for the write
             call    fat_write_volume_sector$
             ld      a,h
             or      l
-            jr      nz,fhio_finish_hl$
+            jp      nz,fhio_finish_hl$
             jr      fhio_after_sector$
 
 fhio_read_sector$:
             call    fat_read_volume_sector$
             ld      a,h
             or      l
-            jr      nz,fhio_finish_hl$
+            jp      nz,fhio_finish_hl$
             ld      de,(fat_file_buf$)
             ld      hl,#fat_sector$
             ld      bc,#FAT_SECTOR_SIZE

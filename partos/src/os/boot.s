@@ -148,6 +148,17 @@ boot_ascii_upper$:
             ret
 
             ;; ----------------------------------------------------------------
+            ;; <a> <= boot_ascii_lower$(<a> ch)
+            ;; ----------------------------------------------------------------
+boot_ascii_lower$:
+            cp      #'A'
+            ret     c
+            cp      #('Z' + 1)
+            ret     nc
+            add     a,#0x20
+            ret
+
+            ;; ----------------------------------------------------------------
             ;; boot_skip_spaces$(<hl> text) -> <hl> first_non_space
             ;; ----------------------------------------------------------------
 boot_skip_spaces$:
@@ -194,7 +205,8 @@ boot_unlock_loader$:
             ;; ----------------------------------------------------------------
             ;; copies one user command line into boot_cmdline_buf$, trims
             ;; leading/trailing spaces, then extracts argv0 into boot_cmd_name$
-            ;; so boot_build_command_path$ can resolve `/NAME.COM`.
+            ;; so boot_build_command_path$ can resolve `name.com` against the
+            ;; current working directory.
             ;; ----------------------------------------------------------------
 boot_prepare_command$:
             call    boot_skip_spaces$
@@ -251,7 +263,7 @@ bpc_tok_loop$:
             cp      #' '
             jr      z,bpc_tok_done$
             ld      a,b
-            cp      #12
+            cp      #63
             jr      nc,bpc_fail$
             ld      a,(hl)
             ld      (de),a
@@ -276,114 +288,553 @@ bpc_fail$:
             ;; ----------------------------------------------------------------
             ;; boot_build_command_path$(<hl> name) -> cf=1 invalid
             ;; ----------------------------------------------------------------
-            ;; normalizes one simple command name into:
-            ;;   boot_cmd_path$  = "/NAME.COM"
-            ;;   boot_pname_buf$ = "NAME"
+            ;; resolves one command token into:
+            ;;   boot_cmd_path$  = "/path/to/name[.com]"
+            ;;   boot_cmd_name$  = "name"
+            ;;   boot_pname_buf$ = "name"
             ;; accepted input:
-            ;;   - 1..8 alpha/digit chars
+            ;;   - relative or absolute paths
+            ;;   - "." and ".." path segments for navigation
+            ;;   - final segment 1..8 alpha/digit chars
             ;;   - optional ".com" suffix (case-insensitive)
             ;; process names are truncated to 7 chars + NUL because process_t
             ;; only carries MAX_PNAME_LEN = 8 including the terminator.
             ;; ----------------------------------------------------------------
 boot_build_command_path$:
-            ld      de,#boot_cmd_path$ + 1
-            ld      ix,#boot_pname_buf$
-            ld      b,#0                ; command length (max 8)
-            ld      c,#0                ; pname bytes stored (max 7)
+            push    hl
+            call    boot_resolve_command_path$
+            pop     hl
+            jr      c,bbcp_fail$
+            call    boot_build_command_leaf$
+            jr      c,bbcp_fail$
+            ld      a,(boot_cmd_has_ext$)
+            or      a
+            ret     nz
+            call    boot_append_command_ext$
+            jr      c,bbcp_fail$
+            ret
+bbcp_fail$:
+            xor     a
+            ld      (boot_cmd_path$),a
+            ld      (boot_cmd_name$),a
+            ld      (boot_pname_buf$),a
+            scf
+            ret
 
-bbcp_loop$:
+            ;; ----------------------------------------------------------------
+            ;; boot_resolve_command_path$(<hl> token) -> cf=1 invalid
+            ;; ----------------------------------------------------------------
+            ;; resolves one relative or absolute command path into the mounted
+            ;; boot-volume namespace, normalizing duplicate slashes plus "." and
+            ;; ".." segments on the way. the final ".com" suffix is handled by
+            ;; boot_append_command_ext$ after the last path segment is checked.
+            ;; ----------------------------------------------------------------
+boot_resolve_command_path$:
+            push    hl
+            ld      de,#boot_cmd_path$
+            ld      a,(hl)
+            cp      #'/'
+            jr      z,brcp_root$
+
+            ld      hl,#boot_cwd$
+            ld      b,#0
+
+brcp_copy_cwd$:
             ld      a,(hl)
             or      a
-            jr      z,bbcp_done_base$
+            jr      z,brcp_cwd_done$
+            ld      c,a
+            ld      a,b
+            cp      #63
+            jr      nc,brcp_fail_pop$
+            ld      a,c
+            ld      (de),a
+            inc     de
+            inc     hl
+            inc     b
+            jr      brcp_copy_cwd$
+
+brcp_cwd_done$:
+            ld      a,b
+            or      a
+            jr      nz,brcp_base_ready$
+
+brcp_root$:
+            ld      a,#'/'
+            ld      (boot_cmd_path$),a
+            ld      b,#1
+            ld      de,#boot_cmd_path$ + 1
+
+brcp_base_ready$:
+            xor     a
+            ld      (de),a
+            ld      a,b
+            ld      (boot_path_len$),a
+            pop     hl
+
+brcp_skip_slashes$:
+            ld      a,(hl)
+            cp      #'/'
+            jr      nz,brcp_segment$
+            inc     hl
+            jr      brcp_skip_slashes$
+
+brcp_segment$:
+            ld      a,(hl)
+            or      a
+            jr      z,brcp_done$
+            ld      (boot_seg_ptr$),hl
+            ld      b,#0
+
+brcp_measure$:
+            ld      a,(hl)
+            or      a
+            jr      z,brcp_have_segment$
+            cp      #'/'
+            jr      z,brcp_have_segment$
+            inc     hl
+            inc     b
+            jr      brcp_measure$
+
+brcp_have_segment$:
+            ld      a,b
+            or      a
+            jr      z,brcp_skip_slashes$
+            push    hl
+            ld      hl,(boot_seg_ptr$)
+            ld      a,b
+            cp      #1
+            jr      nz,brcp_check_up$
+            ld      a,(hl)
             cp      #'.'
-            jr      z,bbcp_ext$
+            jr      z,brcp_segment_done$
+
+brcp_check_up$:
+            ld      a,b
+            cp      #2
+            jr      nz,brcp_append$
+            ld      a,(hl)
+            cp      #'.'
+            jr      nz,brcp_append$
+            inc     hl
+            ld      a,(hl)
+            cp      #'.'
+            jr      nz,brcp_append$
+            call    boot_pop_path_segment$
+            jr      brcp_segment_done$
+
+brcp_append$:
+            call    boot_append_resolved_segment$
+
+brcp_segment_done$:
+            pop     hl
+            jr      c,brcp_fail$
+            jr      brcp_skip_slashes$
+
+brcp_done$:
+            or      a
+            ret
+
+brcp_fail_pop$:
+            pop     hl
+brcp_fail$:
+            scf
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; boot_append_resolved_segment$(<hl> src, <b> len) -> cf=1 invalid
+            ;; ----------------------------------------------------------------
+            ;; appends one non-special path segment to boot_cmd_path$ and keeps
+            ;; boot_path_len$ in sync with the normalized absolute path.
+            ;; ----------------------------------------------------------------
+boot_append_resolved_segment$:
+            ld      a,b
+            ld      (boot_cmd_chr$),a
+            push    hl
+            ld      a,(boot_path_len$)
+            ld      c,a
+            ld      b,#0
+            ld      hl,#boot_cmd_path$
+            add     hl,bc
+            ld      d,h
+            ld      e,l
+            ld      a,c
+            cp      #1
+            jr      z,bars_copy$
+            dec     hl
+            ld      a,(hl)
+            inc     hl
+            cp      #'/'
+            jr      z,bars_copy$
+            ld      a,c
+            cp      #63
+            jr      nc,bars_fail_pop$
+            ld      a,#'/'
+            ld      (de),a
+            inc     de
+            inc     c
+
+bars_copy$:
+            pop     hl
+            ld      a,(boot_cmd_chr$)
+            add     a,c
+            cp      #64
+            jr      nc,bars_fail$
+            ld      c,a
+            ld      a,(boot_cmd_chr$)
+            ld      b,a
+
+bars_copy_loop$:
+            ld      a,b
+            or      a
+            jr      z,bars_done$
+            ld      a,(hl)
+            ld      (de),a
+            inc     hl
+            inc     de
+            djnz    bars_copy_loop$
+
+bars_done$:
+            xor     a
+            ld      (de),a
+            ld      a,c
+            ld      (boot_path_len$),a
+            or      a
+            ret
+
+bars_fail_pop$:
+            pop     hl
+bars_fail$:
+            scf
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; boot_pop_path_segment$()
+            ;; ----------------------------------------------------------------
+            ;; removes the last segment from the normalized boot_cmd_path$
+            ;; buffer, but never climbs above the boot-volume root.
+            ;; ----------------------------------------------------------------
+boot_pop_path_segment$:
+            ld      a,(boot_path_len$)
+
+bpps_scan$:
+            cp      #1
+            jr      z,bpps_trim_done$
+            ld      c,a
+            ld      b,#0
+            ld      hl,#boot_cmd_path$
+            add     hl,bc
+            dec     hl
+            ld      a,(hl)
+            cp      #'/'
+            jr      z,bpps_found_slash$
+            ld      a,c
+            dec     a
+            jr      bpps_scan$
+
+bpps_found_slash$:
+            ld      a,c
+
+bpps_trim_done$:
+            cp      #1
+            jr      z,bpps_store$
+            dec     a
+
+bpps_store$:
+            ld      c,a
+            ld      b,#0
+            ld      hl,#boot_cmd_path$
+            add     hl,bc
+            xor     a
+            ld      (hl),a
+            ld      a,c
+            ld      (boot_path_len$),a
+            or      a
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; boot_build_command_leaf$(<hl> token) -> cf=1 invalid
+            ;; ----------------------------------------------------------------
+            ;; locates the final syntactic path segment in the original command
+            ;; token, validates it as one executable leaf name, then fills:
+            ;;   boot_cmd_name$    = "name"
+            ;;   boot_pname_buf$   = "name"
+            ;;   boot_cmd_has_ext$ = 0/1 for an explicit ".com" suffix
+            ;; ----------------------------------------------------------------
+boot_build_command_leaf$:
+bbcl_seek$:
+            ld      a,(hl)
+            or      a
+            jp      z,bbcl_fail$
+            cp      #'/'
+            jr      nz,bbcl_segment$
+            inc     hl
+            jr      bbcl_seek$
+
+bbcl_segment$:
+            push    hl
+
+bbcl_scan$:
+            ld      a,(hl)
+            or      a
+            jr      z,bbcl_final$
+            cp      #'/'
+            jr      z,bbcl_after_segment$
+            inc     hl
+            jr      bbcl_scan$
+
+bbcl_after_segment$:
+            pop     de
+
+bbcl_skip$:
+            ld      a,(hl)
+            cp      #'/'
+            jr      nz,bbcl_skip_done$
+            inc     hl
+            jr      bbcl_skip$
+
+bbcl_skip_done$:
+            ld      a,(hl)
+            or      a
+            jp      z,bbcl_fail$
+            jr      bbcl_segment$
+
+bbcl_final$:
+            pop     hl
+            ld      de,#boot_cmd_name$
+            ld      ix,#boot_pname_buf$
+            ld      b,#0
+            ld      c,#0
+            xor     a
+            ld      (boot_cmd_has_ext$),a
+
+bbcl_name_loop$:
+            ld      a,(hl)
+            or      a
+            jr      z,bbcl_name_done$
+            cp      #'.'
+            jr      z,bbcl_ext$
             call    boot_ascii_upper$
             cp      #'A'
-            jr      c,bbcp_digit$
+            jr      c,bbcl_digit$
             cp      #('Z' + 1)
-            jr      nc,bbcp_fail$
-            jr      bbcp_store$
-bbcp_digit$:
-            cp      #'0'
-            jr      c,bbcp_fail$
-            cp      #('9' + 1)
-            jr      nc,bbcp_fail$
+            jr      nc,bbcl_fail$
+            jr      bbcl_store$
 
-bbcp_store$:
+bbcl_digit$:
+            cp      #'0'
+            jr      c,bbcl_fail$
+            cp      #('9' + 1)
+            jr      nc,bbcl_fail$
+
+bbcl_store$:
+            call    boot_ascii_lower$
             ld      (boot_cmd_chr$),a
             ld      a,b
             cp      #8
-            jr      nc,bbcp_fail$
+            jr      nc,bbcl_fail$
             inc     b
             ld      a,(boot_cmd_chr$)
             ld      (de),a
             inc     de
             ld      a,c
             cp      #7
-            jr      nc,bbcp_next$
+            jr      nc,bbcl_next$
             ld      a,(boot_cmd_chr$)
             ld      0(ix),a
             inc     ix
             inc     c
-bbcp_next$:
-            inc     hl
-            jr      bbcp_loop$
-bbcp_fail$:
-            xor     a
-            ld      (boot_cmd_path$),a
-            ld      (boot_pname_buf$),a
-            scf
-            ret
 
-bbcp_ext$:
+bbcl_next$:
+            inc     hl
+            jr      bbcl_name_loop$
+
+bbcl_ext$:
             inc     hl
             ld      a,(hl)
             call    boot_ascii_upper$
             cp      #'C'
-            jr      nz,bbcp_fail$
+            jr      nz,bbcl_fail$
             inc     hl
             ld      a,(hl)
             call    boot_ascii_upper$
             cp      #'O'
-            jr      nz,bbcp_fail$
+            jr      nz,bbcl_fail$
             inc     hl
             ld      a,(hl)
             call    boot_ascii_upper$
             cp      #'M'
-            jr      nz,bbcp_fail$
+            jr      nz,bbcl_fail$
             inc     hl
             ld      a,(hl)
             or      a
-            jr      nz,bbcp_fail$
+            jr      nz,bbcl_fail$
+            ld      a,#1
+            ld      (boot_cmd_has_ext$),a
 
-bbcp_done_base$:
+bbcl_name_done$:
             ld      a,b
             or      a
-            jr      z,bbcp_fail$
-            ld      a,#'/'
-            ld      (boot_cmd_path$),a
-            ld      a,#'.'
-            ld      (de),a
-            inc     de
-            ld      a,#'C'
-            ld      (de),a
-            inc     de
-            ld      a,#'O'
-            ld      (de),a
-            inc     de
-            ld      a,#'M'
-            ld      (de),a
-            inc     de
+            jr      z,bbcl_fail$
             xor     a
             ld      (de),a
             ld      0(ix),a
             or      a
+            ret
+
+bbcl_fail$:
+            scf
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; boot_append_command_ext$() -> cf=1 invalid
+            ;; ----------------------------------------------------------------
+            ;; appends ".com" to the normalized boot_cmd_path$ when the caller
+            ;; omitted the executable suffix on the final token segment.
+            ;; ----------------------------------------------------------------
+boot_append_command_ext$:
+            ld      a,(boot_path_len$)
+            cp      #60
+            jr      nc,bace_fail$
+            ld      c,a
+            ld      b,#0
+            ld      hl,#boot_cmd_path$
+            add     hl,bc
+            ld      a,#'.'
+            ld      (hl),a
+            inc     hl
+            ld      a,#'c'
+            ld      (hl),a
+            inc     hl
+            ld      a,#'o'
+            ld      (hl),a
+            inc     hl
+            ld      a,#'m'
+            ld      (hl),a
+            inc     hl
+            xor     a
+            ld      (hl),a
+            ld      a,c
+            add     a,#4
+            ld      (boot_path_len$),a
+            or      a
+            ret
+
+bace_fail$:
+            scf
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; boot_build_root_command_path$() -> cf=1 invalid
+            ;; ----------------------------------------------------------------
+            ;; composes one rooted fallback path in boot_cmd_path$ from the
+            ;; normalized command leaf stored in boot_cmd_name$.
+            ;; ----------------------------------------------------------------
+boot_build_root_command_path$:
+            ld      a,#'/'
+            ld      (boot_cmd_path$),a
+            xor     a
+            ld      (boot_cmd_path$ + 1),a
+            ld      a,#1
+            ld      (boot_path_len$),a
+            ld      hl,#boot_cmd_name$
+            ld      b,#0
+
+bbrcp_len$:
+            ld      a,(hl)
+            or      a
+            jr      z,bbrcp_append$
+            inc     hl
+            inc     b
+            jr      bbrcp_len$
+
+bbrcp_append$:
+            ld      hl,#boot_cmd_name$
+            call    boot_append_resolved_segment$
+            ret     c
+            jp      boot_append_command_ext$
+
+            ;; ----------------------------------------------------------------
+            ;; boot_cstr_eq$(<hl> lhs, <de> rhs) -> Z equal / NZ different
+            ;; ----------------------------------------------------------------
+boot_cstr_eq$:
+bce_loop$:
+            ld      a,(de)
+            cp      (hl)
+            ret     nz
+            or      a
+            ret     z
+            inc     de
+            inc     hl
+            jr      bce_loop$
+
+            ;; ----------------------------------------------------------------
+            ;; <a> <= boot_command_is_global$()
+            ;; ----------------------------------------------------------------
+            ;; shell-facing root fallback stays enabled for a small command set
+            ;; so filesystem tools remain available after `cd`, while ordinary
+            ;; app names resolve strictly from cwd unless a path is spelled out.
+            ;; ----------------------------------------------------------------
+boot_command_is_global$:
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_ls$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_cd$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_ps$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_cat$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_mkdir$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_rmdir$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_del$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_cp$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_mv$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_clear$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_echo$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            ld      hl,#boot_cmd_name$
+            ld      de,#boot_global_help$
+            call    boot_cstr_eq$
+            jr      z,bcg_yes$
+            xor     a
+            ret
+
+bcg_yes$:
+            ld      a,#1
             ret
 
             ;; ----------------------------------------------------------------
             ;; boot_try_path$(<hl> path, <de> pname) -> <de> process | 0
             ;; ----------------------------------------------------------------
-            ;; opens one root-path candidate on the already mounted volume,
+            ;; opens one absolute-path candidate on the already mounted volume,
             ;; reads the whole COM image into a temporary heap buffer, then
             ;; starts it as one process. only 256-byte-aligned files fit the
             ;; current FAT block-I/O contract.
@@ -391,6 +842,10 @@ bbcp_done_base$:
 boot_try_path$:
             ld      a,#0x30
             ld      (_boot_debug_stage),a
+            push    hl
+            ld      hl,#FAT_EINVAL
+            ld      (boot_try_status$),hl
+            pop     hl
             ld      (boot_pname_ptr$),de
             ex      de,hl               ; de = path
             ld      bc,#boot_file$
@@ -402,7 +857,9 @@ boot_try_path$:
             ld      (_boot_debug_rc),de
             ld      a,d
             or      e
-            jp      nz,btp_fail_zero$
+            jr      z,btp_open_wait$
+            ld      (boot_try_status$),de
+            jp      btp_fail_zero$
 
 btp_open_wait$:
             ld      hl,(boot_event$)
@@ -417,31 +874,50 @@ btp_open_wait$:
             add     hl,de               ; undo sbc: hl = status again
             ld      a,h
             or      l
-            jp      nz,btp_fail_zero$
+            jr      z,btp_size_check$
+            ld      (boot_try_status$),hl
+            jp      btp_fail_zero$
 
             ;; validate a 16-bit, 256-byte-aligned image size:
             ;;   size[0] must be 0 (block aligned)
             ;;   size[2..3] must be 0 (fits the 16-bit loader contract)
+btp_size_check$:
             ld      hl,#boot_file$
             ld      bc,#FATFILE_SIZE
             add     hl,bc
             ld      e,(hl)              ; raw size low byte
             ld      a,e
             or      a
-            jp      nz,btp_fail_zero$
+            jr      z,btp_size_hi$
+            ld      hl,#FAT_EINVAL
+            ld      (boot_try_status$),hl
+            jp      btp_fail_zero$
+btp_size_hi$:
             inc     hl
             ld      d,(hl)              ; raw size high byte
             inc     hl
             ld      a,(hl)
             or      a
-            jp      nz,btp_fail_zero$
+            jr      z,btp_size_hi2$
+            ld      hl,#FAT_EINVAL
+            ld      (boot_try_status$),hl
+            jp      btp_fail_zero$
+btp_size_hi2$:
             inc     hl
             ld      a,(hl)
             or      a
-            jp      nz,btp_fail_zero$
+            jr      z,btp_size_nonzero$
+            ld      hl,#FAT_EINVAL
+            ld      (boot_try_status$),hl
+            jp      btp_fail_zero$
+btp_size_nonzero$:
             ld      a,d
             or      a
-            jp      z,btp_fail_zero$
+            jr      nz,btp_have_size$
+            ld      hl,#FAT_EINVAL
+            ld      (boot_try_status$),hl
+            jp      btp_fail_zero$
+btp_have_size$:
             ld      (boot_img_size$),de
 
             ;; allocate one temporary image buffer from the user heap, owned by
@@ -458,7 +934,11 @@ btp_open_wait$:
             pop     bc                  ; drop owner
             ld      a,d
             or      e
-            jr      z,btp_fail_zero$
+            jr      nz,btp_have_image$
+            ld      hl,#FAT_ENOMEM
+            ld      (boot_try_status$),hl
+            jr      btp_fail_zero$
+btp_have_image$:
             ld      (boot_image$),de
 
             ;; read the whole aligned image into the heap buffer.
@@ -472,8 +952,11 @@ btp_open_wait$:
             ld      (_boot_debug_rc),de
             ld      a,d
             or      e
-            jr      nz,btp_fail_free$
+            jr      z,btp_read_wait$
+            ld      (boot_try_status$),de
+            jr      btp_fail_free$
 
+btp_read_wait$:
             ld      hl,(boot_event$)
             call    boot_wait_one$
             ld      hl,#boot_file$
@@ -481,11 +964,14 @@ btp_open_wait$:
             call    boot_status_at$
             ld      a,h
             or      l
-            jr      nz,btp_fail_free$
+            jr      z,btp_process_load$
+            ld      (boot_try_status$),hl
+            jr      btp_fail_free$
 
             ;; FAT no longer needs the loader event once the COM image is fully
             ;; in RAM. Free it before process/thread startup so the child and
             ;; its own app event can use the shared heap slots instead.
+btp_process_load$:
             call    boot_destroy_event$
 
             ;; the loaded file is a COM header wrapping one embedded XL image.
@@ -497,8 +983,14 @@ btp_open_wait$:
             ld      (_boot_debug_rc),de
             ld      a,d
             or      e
-            jr      z,btp_fail_free$
+            jr      nz,btp_success$
+            ld      hl,#FAT_EINVAL
+            ld      (boot_try_status$),hl
+            jr      btp_fail_free$
 
+btp_success$:
+            ld      hl,#FAT_OK
+            ld      (boot_try_status$),hl
             xor     a
             ld      (boot_image$),a
             ld      (boot_image$ + 1),a
@@ -555,8 +1047,8 @@ btd_fail_zero$:
             ;; ----------------------------------------------------------------
             ;; <de> <= _partos_run_command(<hl> name)
             ;; ----------------------------------------------------------------
-            ;; resolve `name` to `/NAME.COM` on the boot volume and launch it.
-            ;; returns the new process object or 0 on failure.
+            ;; resolve `name` to `<cwd>/name.com` on the boot volume and launch
+            ;; it. returns the new process object or 0 on failure.
             ;; ----------------------------------------------------------------
 _partos_run_command::
             call    boot_lock_loader$
@@ -573,6 +1065,32 @@ _partos_run_command::
             ld      hl,#boot_cmd_path$
             ld      de,#boot_pname_buf$
             call    boot_try_path$
+            ld      a,d
+            or      e
+            jr      nz,brc_done$
+            ;; boot_try_path$ failed. every branch below is a launch failure,
+            ;; so it must fall through with de=0 -- otherwise the ENOENT compare
+            ;; (which clobbers de) or the is_global/build_root helpers leave
+            ;; garbage in de and the shell mistakes it for a live process,
+            ;; swallowing the "command not found" error instead of printing it.
+            ld      hl,(boot_try_status$)
+            ld      de,#FAT_ENOENT
+            or      a
+            sbc     hl,de
+            jr      nz,brc_zero$
+            call    boot_command_is_global$
+            or      a
+            jr      z,brc_zero$
+            call    boot_build_root_command_path$
+            jr      c,brc_zero$
+            ld      hl,#boot_cmd_path$
+            ld      de,#boot_pname_buf$
+            call    boot_try_path$
+            jr      brc_done$
+
+brc_zero$:
+            ld      de,#0x0000
+brc_done$:
             push    de
             call    boot_cleanup_loader$
             call    boot_unlock_loader$
@@ -712,9 +1230,33 @@ boot_dev_fd0$:
 boot_dev_sda$:
             .db     's','d','a',0
 boot_shell_com$:
-            .db     '/','S','H','E','L','L','.','C','O','M',0
+            .db     '/','s','h','e','l','l','.','c','o','m',0
 boot_shell_pname$:
             .db     's','h','e','l','l',0
+boot_global_ls$:
+            .db     'l','s',0
+boot_global_cd$:
+            .db     'c','d',0
+boot_global_ps$:
+            .db     'p','s',0
+boot_global_cat$:
+            .db     'c','a','t',0
+boot_global_mkdir$:
+            .db     'm','k','d','i','r',0
+boot_global_rmdir$:
+            .db     'r','m','d','i','r',0
+boot_global_del$:
+            .db     'd','e','l',0
+boot_global_cp$:
+            .db     'c','p',0
+boot_global_mv$:
+            .db     'm','v',0
+boot_global_clear$:
+            .db     'c','l','e','a','r',0
+boot_global_echo$:
+            .db     'e','c','h','o',0
+boot_global_help$:
+            .db     'h','e','l','p',0
 boot_loader_busy$:
             .db     0
 
@@ -732,12 +1274,20 @@ boot_fs_ready$:
             .ds     1
 boot_cmd_chr$:
             .ds     1
+boot_cmd_has_ext$:
+            .ds     1
+boot_path_len$:
+            .ds     1
 boot_cmd_path$:
-            .ds     16
+            .ds     64
 boot_cmd_name$:
-            .ds     13
+            .ds     64
 boot_cmdline_len$:
             .ds     1
+boot_try_status$:
+            .ds     2
+boot_seg_ptr$:
+            .ds     2
 _boot_debug_rc::
             .ds     2
 _boot_debug_stage::

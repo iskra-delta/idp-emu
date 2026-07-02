@@ -1,37 +1,29 @@
-#include "../lib/partos.h"
+#include "../lib/libc.h"
 
 static char mv_src_path[APP_PATH_CAP];
 static char mv_dst_path[APP_PATH_CAP];
-static pa_file_t mv_src_file;
-static pa_file_t mv_dst_file;
-static pa_dirent_t mv_result;
+static fat_file_t mv_src_file;
+static fat_file_t mv_dst_file;
+static fat_dirent_t mv_result;
 static uint8_t mv_buf[256];
 
-static const char mv_usage_text[] = "usage: mv SRC DST\r\n";
-static const char mv_align_text[] = "only 256-byte aligned files\r\n";
-static const char mv_error_text[] = "?\r\n";
+static const char mv_usage_text[] = "usage: mv SRC DST";
+static const char mv_align_text[] = "only 256-byte aligned files";
+static const char mv_error_text[] = "?";
 
 int main(int argc, char **argv)
 {
     fat_fs_t *fs;
-    char *cursor;
     uint16_t secs;
-
-    (void)argc;
-    (void)argv;
 
     fs = app_boot_filesystem();
     if ((fs == 0) || (app_open_event() == 0)) {
-        app_write_cstr(mv_error_text);
+        puts(mv_error_text);
         return 1;
     }
-
-    cursor = app_arg_start();
-    if (!app_copy_token(&cursor, mv_src_path, APP_PATH_CAP) ||
-        !app_copy_token(&cursor, mv_dst_path, APP_PATH_CAP) ||
-        !app_require_eol(cursor) ||
-        !app_resolve_path(mv_src_path, APP_PATH_CAP, mv_src_path) ||
-        !app_resolve_path(mv_dst_path, APP_PATH_CAP, mv_dst_path)) {
+    if ((argc != 3) ||
+        !app_resolve_path(mv_src_path, APP_PATH_CAP, argv[1]) ||
+        !app_resolve_path(mv_dst_path, APP_PATH_CAP, argv[2])) {
         goto mv_usage;
     }
 
@@ -78,14 +70,14 @@ int main(int argc, char **argv)
     return 0;
 
 mv_usage:
-    app_write_cstr(mv_usage_text);
+    puts(mv_usage_text);
     return 1;
 
 mv_align:
-    app_write_cstr(mv_align_text);
+    puts(mv_align_text);
     return 1;
 
 mv_error:
-    app_write_cstr(mv_error_text);
+    puts(mv_error_text);
     return 1;
 }

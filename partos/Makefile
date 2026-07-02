@@ -14,16 +14,43 @@
 
 AS      := sdasz80
 CC      := sdcc
-CCFLAGS := -mz80 --disable-warning 323
+CCFLAGS := -mz80 --sdcccall 1 --disable-warning 323
 LD      := sdldz80
 OBJCOPY := objcopy
 ZX0     := ../tools/zx0/bin/zx0
 MAKECOM := ../tools/makecom.py
-XLD     ?= /home/tstih/data/retro-vault/xyz/bin/x/bin/xld
+
+# x compiler suite (docker-wrapped, runs as the current user; uses ONLY the
+# wischner/xcc-z80 image). Userland (src/apps/**) is compiled/assembled/linked
+# with these; the ROM/kernel/OS asm still use the sdcc tools above for now.
+XBIN     := $(abspath ../tools/xcc)
+XCC      := $(XBIN)/xcc
+XAS      := $(XBIN)/xas
+XLD      := $(XBIN)/xld
+# xcc lowers some ops (e.g. 16-bit multiply) to runtime helpers; pull them from
+# the suite's runtime lib. `-nostdlib` keeps crt0/libc/platform libs out.
+XRUNTIME := -L/opt/x/z80/lib -lruntime
 
 BUILD := build
 BIN   := bin
 ROM   := $(BIN)/partos.rom
+
+# Route only the userland object builds through the x suite (per-pattern
+# overrides of the generic .rel rules below). Kernel/OS/ROM keep the sdcc tools.
+$(BUILD)/apps/%.rel: AS      := $(XAS)
+$(BUILD)/apps/%.rel: CC      := $(XCC)
+# xcc 1.9.3 fixed the -O2+/-Os digit-drop optimizer bug (was 1.9.2) AND the
+# sdcccall(1) stack-arg cleanup ABI bug (was BUG 2). cp/mv now work and -Os is
+# usable.
+# NOTE: the userland is NOT non-deterministic. Verified: two clean -Os builds
+# produce byte-for-byte identical .rel/.com, and the same binary yields the same
+# ctest result on every run. The earlier "16/19 then 12/19" flapping was the
+# GOLDEN SUITE, not the build: several tests (e.g. gdp_shell_edit) boot the
+# SHARED disks/*.img + NVRAM shadow in place (no per-test copy), and PartOS boots
+# mutate them -- so results are RUN-ORDER dependent (a test can pass alone and
+# fail mid-suite from the identical binary). Fix belongs in the tests (copy
+# fixtures per test, like test_partos_cd_return does), not in the optimizer.
+$(BUILD)/apps/%.rel: CCFLAGS := -Os
 ASM_DEPS := $(shell find src -name '*.inc' | sort)
 C_DEPS   := $(shell find include src/apps -name '*.h' | sort)
 
@@ -65,9 +92,10 @@ BOOTSTRAP_MAP := $(BUILD)/bootstrap.map
 STAGE1_MAP := $(BUILD)/stage1.map
 
 # --- split images (micro-kernel low / OS payload high) ---------------------
-# kernel.sys: src/kernel/*.s linked at 0x0000. page0.s is the low page and MUST
-# link FIRST so the rst/nmi dispatch lands on its fixed addresses. _HEAP/_IM2
-# are reserved high (not emitted); the disk image spans _CODE.._SYSVARS.
+# kernel.sys: src/kernel/*.s linked at 0x0000.
+# page0.s is the low page and MUST link FIRST so the rst/nmi dispatch lands on
+# its fixed addresses. _HEAP/_IM2 are reserved high (not emitted); the disk
+# image spans _CODE.._INITIALIZED.
 KSYS_LOWPAGE  := src/kernel/page0.s
 KSYS_REST     := $(filter-out $(KSYS_LOWPAGE),$(sort $(wildcard src/kernel/*.s)))
 KSYS_SRC      := $(KSYS_LOWPAGE) $(KSYS_REST)
@@ -124,11 +152,14 @@ PS_COM         := $(BIN)/ps.com
 PS_STACK       := 1024
 
 # shared support module for the newer syscall-only tools
-APP_SUPPORT_ASM_SRC := src/apps/lib/call_hl.s src/apps/lib/call_iy.s src/apps/lib/crt0.s src/apps/lib/partos.s src/apps/lib/partos_abi.s
+APP_SUPPORT_ASM_SRC := src/apps/lib/call_hl.s src/apps/lib/call_iy.s src/apps/lib/crt0.s src/apps/lib/bootstrap.s src/apps/lib/cwdcall.s src/apps/lib/fscall.s src/apps/lib/svccall.s
 APP_SUPPORT_ASM_RELS := $(patsubst src/%.s,$(BUILD)/%.rel,$(APP_SUPPORT_ASM_SRC))
-APP_SUPPORT_C_SRC := src/apps/lib/runtime.c src/apps/lib/partos_c.c
+APP_SUPPORT_C_SRC := src/apps/lib/runtime.c src/apps/lib/partos_c.c src/apps/lib/libc.c
 APP_SUPPORT_C_REL := $(patsubst src/%.c,$(BUILD)/%.rel,$(APP_SUPPORT_C_SRC))
 APP_SUPPORT_RELS := $(APP_SUPPORT_ASM_RELS) $(APP_SUPPORT_C_REL)
+
+SHELL_SUPPORT_C_SRC := src/apps/shell/libc.c
+SHELL_SUPPORT_C_REL := $(patsubst src/%.c,$(BUILD)/%.rel,$(SHELL_SUPPORT_C_SRC))
 
 # additional syscall-only tools
 MEM_APP_SRC    := src/apps/mem/mem.c
@@ -197,15 +228,9 @@ HELP_APP_XL     := $(BUILD)/help.xl
 HELP_APP_COM    := $(BIN)/help.com
 HELP_APP_STACK  := 512
 
-TOUCH_APP_SRC   := src/apps/touch/touch.c
-TOUCH_APP_REL   := $(patsubst src/%.c,$(BUILD)/%.rel,$(TOUCH_APP_SRC))
-TOUCH_APP_XL    := $(BUILD)/touch.xl
-TOUCH_APP_COM   := $(BIN)/touch.com
-TOUCH_APP_STACK := 1024
-
 APP_TOOL_COMS := $(MEM_APP_COM) $(CAT_APP_COM) $(CD_APP_COM) $(MKDIR_APP_COM) $(RMDIR_APP_COM) \
                  $(DEL_APP_COM) $(CP_APP_COM) $(MV_APP_COM) $(CLEAR_APP_COM) \
-                 $(ECHO_APP_COM) $(HELP_APP_COM) $(TOUCH_APP_COM)
+                 $(ECHO_APP_COM) $(HELP_APP_COM)
 
 DISKS_DIR := ../disks
 
@@ -241,7 +266,7 @@ $(BUILD)/stage1.ihx: $(STAGE1_RELS)
 # --- kernel.sys: micro-kernel image linked at 0x0000 -----------------------
 # page0.rel links first (low page at 0x0000). _HEAP/_IM2 are reserved at their
 # fixed high addresses (no data emitted); the disk image is the packed low-page
-# code/data plus any separately linked _INITIALIZED bytes (currently zero).
+# code/data plus any separately linked _INITIALIZED bytes.
 # the wide (-w) map keeps full symbol names so the OS import stub can be
 # generated from it. on the same pass we emit kernel_imports.s for the OS link.
 $(KERNEL_SYS): $(KSYS_RELS)
@@ -262,19 +287,27 @@ $(KERNEL_SYS): $(KSYS_RELS)
 	SECT=$$(( ($$IMG + 255) / 256 )); \
 	echo "$@: $$IMG-byte image ($$SECT sectors) = _CODE $$CODE_SZ (mirrored low page) + _INITIALIZED $$INIT_SZ (table/vectors)"; \
 	if [ $$CODE_SZ -gt $$BUDGET ]; then \
-	    echo "  WARNING: mirrored _CODE ($$CODE_SZ) over the 2KB low-page budget ($$BUDGET) by $$(( $$CODE_SZ - $$BUDGET )) bytes."; \
+	    echo "  WARNING: mirrored _CODE ($$CODE_SZ) over the low-page budget ($$BUDGET) by $$(( $$CODE_SZ - $$BUDGET )) bytes."; \
 	else \
-	    echo "  micro-kernel _CODE fits the 2KB low-page budget ($$(( $$BUDGET - $$CODE_SZ )) bytes free)."; \
+	    echo "  micro-kernel _CODE fits the low-page budget ($$(( $$BUDGET - $$CODE_SZ )) bytes free)."; \
 	fi
 	@# generate the absolute-equate import stub the OS links against. every
-	@# kernel global becomes `name == 0xADDR`; OS externals resolve to these.
-	@awk '/^ +[0-9A-Fa-f]{8}  +[A-Za-z_]/ { \
+	@# kernel global becomes `name == 0xADDR`; OS externals resolve to these --
+	@# EXCEPT the kernel primitives the OS now reaches through rst 0x08
+	@# trampolines (src/os/kcall.s). those would clash with kcall.rel at link,
+	@# so exclude exactly the trampoline `::` labels (auto-derived, no list to
+	@# keep in sync). data heads, vector targets and bcd/bin leaf helpers are
+	@# not defined in kcall.s and therefore stay as absolute imports.
+	@SKIP=$$(grep -oE '^[A-Za-z_][A-Za-z0-9_]*::' src/os/kcall.s | sed 's/:://'); \
+	awk -v skip="$$SKIP" 'BEGIN{ ns=split(skip,s," "); for(i=1;i<=ns;i++) sk[s[i]]=1 } \
+	    /^ +[0-9A-Fa-f]{8}  +[A-Za-z_]/ { \
 	        a=$$1; n=$$2; \
 	        if (n ~ /^[sl]__/) next; \
+	        if (n in sk) next; \
 	        if (n in seen) next; seen[n]=1; \
 	        printf "            %s == 0x%s\n", n, a; \
 	    }' $(KERNEL_MAP) > $(KIMPORTS_S)
-	@echo "$(KIMPORTS_S): $$(grep -c '==' $(KIMPORTS_S)) kernel symbols exported to the OS"
+	@echo "$(KIMPORTS_S): $$(grep -c '==' $(KIMPORTS_S)) kernel symbols exported to the OS (kcall.s trampolines excluded)"
 
 # --- os.sys: OS/payload image linked at 0xc000 -----------------------------
 $(KIMPORTS_REL): $(KERNEL_SYS)
@@ -312,10 +345,10 @@ $(PARTOS_LAYOUT_HEADER): $(KERNEL_SYS) $(OS_SYS) ../tools/check_partos_layout.py
 	@echo "$@: generated from kernel/os maps"
 
 # --- shell payload / shell.com ---------------------------------------------
-$(SHELL_PAYLOAD_BIN): $(SHELL_PAYLOAD_REL)
+$(SHELL_PAYLOAD_BIN): $(SHELL_PAYLOAD_REL) $(SHELL_SUPPORT_C_REL)
 	$(LD) -n -m -w -i $(abspath $(SHELL_PAYLOAD_IHX)) \
 	      -b _CODE=0x0000 \
-	      $(SHELL_PAYLOAD_REL)
+	      $(SHELL_PAYLOAD_REL) $(SHELL_SUPPORT_C_REL)
 	@CODE_SZ=$$(printf '%d' 0x$$(awk '$$1=="_CODE"{print $$3; exit}' $(SHELL_PAYLOAD_MAP))); \
 	$(OBJCOPY) -I ihex -O binary $(SHELL_PAYLOAD_IHX) $@; \
 	truncate -s $$CODE_SZ $@; \
@@ -324,13 +357,13 @@ $(SHELL_PAYLOAD_BIN): $(SHELL_PAYLOAD_REL)
 $(SHELL_PAYLOAD_MAP): $(SHELL_PAYLOAD_BIN)
 	@:
 
-$(SHELL_XL): $(SHELL_PAYLOAD_REL) Makefile
+$(SHELL_XL): $(SHELL_PAYLOAD_REL) $(SHELL_SUPPORT_C_REL) Makefile
 	@mkdir -p $(BUILD)
 	$(XLD) --mode=sdcc -nostdlib --no-default-runtime \
 	      -Ttext=0x0000 \
 	      -e shell_entry \
 	      -o $@ \
-	      $(SHELL_PAYLOAD_REL)
+	      $(SHELL_PAYLOAD_REL) $(SHELL_SUPPORT_C_REL) $(XRUNTIME)
 	@echo "$@: $$(stat -c%s $@) bytes (relocatable XL via xld)"
 
 $(SHELL_COM): $(SHELL_XL) $(SHELL_PAYLOAD_MAP) $(MAKECOM) Makefile
@@ -360,7 +393,7 @@ $(LS_XL): $(APP_SUPPORT_RELS) $(LS_PAYLOAD_REL) Makefile
 	      -Ttext=0x0000 \
 	      -e _app_crt0_entry \
 	      -o $@ \
-	      $(APP_SUPPORT_RELS) $(LS_PAYLOAD_REL)
+	      $(APP_SUPPORT_RELS) $(LS_PAYLOAD_REL) $(XRUNTIME)
 	@echo "$@: $$(stat -c%s $@) bytes (relocatable XL via xld)"
 
 $(LS_COM): $(LS_XL) $(MAKECOM) Makefile
@@ -390,7 +423,7 @@ $(PS_XL): $(APP_SUPPORT_RELS) $(PS_PAYLOAD_REL) Makefile
 	      -Ttext=0x0000 \
 	      -e _app_crt0_entry \
 	      -o $@ \
-	      $(APP_SUPPORT_RELS) $(PS_PAYLOAD_REL)
+	      $(APP_SUPPORT_RELS) $(PS_PAYLOAD_REL) $(XRUNTIME)
 	@echo "$@: $$(stat -c%s $@) bytes (relocatable XL via xld)"
 
 $(PS_COM): $(PS_XL) $(MAKECOM) Makefile
@@ -408,7 +441,7 @@ $($(1)_XL): $(APP_SUPPORT_RELS) $$($(1)_REL) Makefile
 	      -Ttext=0x0000 \
 	      -e _app_crt0_entry \
 	      -o $$@ \
-	      $(APP_SUPPORT_RELS) $$($(1)_REL)
+	      $(APP_SUPPORT_RELS) $$($(1)_REL) $(XRUNTIME)
 	@echo "$$@: $$(stat -c%s $$@) bytes (relocatable XL via xld)"
 
 $($(1)_COM): $$($(1)_XL) $(MAKECOM) Makefile
@@ -431,7 +464,6 @@ $(eval $(call APP_TOOL_template,MV_APP,mv))
 $(eval $(call APP_TOOL_template,CLEAR_APP,clear))
 $(eval $(call APP_TOOL_template,ECHO_APP,echo))
 $(eval $(call APP_TOOL_template,HELP_APP,help))
-$(eval $(call APP_TOOL_template,TOUCH_APP,touch))
 
 $(ZX0):
 	$(MAKE) -C ../tools/zx0 -s

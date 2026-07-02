@@ -69,14 +69,34 @@ typedef struct event_s {
 #endif
 
 /*
- * Soft timers and named services are OS facilities, not kernel ones. Both
- * registries live in the OS image (src/os/timer.s, src/os/service.s + their
- * headers), built on the kernel's list/object primitives. The OS drives the
- * timer chain by wiring the CTC tick to it explicitly --
- * set_vector(VECTOR_TICK, __tmr_chain) -- the kernel never does this
- * automatically. The kernel itself is discovered via `rst 0x08` (returns
- * &kernel_table), so it never registers a service for itself.
+ * Named services and soft timers now live in the shared kernel reserve.
+ * Higher-level OS code still wires the RST 0x10 bridge and drives the timer
+ * chain from its interrupt path, but the registries themselves are kernel
+ * facilities and are exported through kernel_t below.
  */
+
+/* --- named service (service.h) --- */
+#ifndef SERVICE_H
+#define SERVICE_H
+#define MAX_SVC_NAME_LEN 16
+typedef struct service_s {
+    sysobj_t hdr;                           /* service is a system object */
+    char     name[MAX_SVC_NAME_LEN];        /* service name */
+    void    *fntable;                       /* syscall function table */
+} service_t;
+#endif
+
+/* --- soft timer (timer.h) --- */
+#ifndef TIMER_H
+#define TIMER_H
+#define EVERYTIME 0
+typedef struct timer_s {
+    sysobj_t hdr;                           /* timer is a system object */
+    void   (*hook)(void);                   /* hook routine */
+    uint16_t ticks;                         /* reload value (fires every ticks+1) */
+    uint16_t _tick_count;                   /* internal countdown */
+} timer_t;
+#endif
 
 /* --- thread (thread.h) --- */
 #ifndef THREAD_H
@@ -98,7 +118,76 @@ typedef struct thread_s {
     void    *thread_data;                   /* OS-opaque pointer the kernel only
                                                stores (typically the process) */
     uint8_t  bank;                          /* RAM bank the thread runs in */
+    event_t *wait_inline;                   /* shared one-event wait mirror */
 } thread_t;
+#endif
+
+/* --- process (process.h) --- */
+#ifndef PROCESS_H
+#define PROCESS_H
+#define MAX_PNAME_LEN               8
+#define PROCESS_INTERNAL            0x01
+#define XL_HDR_SIZE                 12
+#define XL_RELOC_SIZE               4
+#define XL_OFF_MAGIC0               0
+#define XL_OFF_MAGIC1               1
+#define XL_OFF_VERSION              2
+#define XL_OFF_FLAGS                3
+#define XL_OFF_ENTRY                4
+#define XL_OFF_CODE_SIZE            6
+#define XL_OFF_RELOC_CNT            8
+#ifndef PARTOS_XL_HEADER_DEFINED
+#define PARTOS_XL_HEADER_DEFINED
+typedef struct xl_header_s {
+    char     magic[2];
+    uint8_t  version;
+    uint8_t  flags;
+    uint16_t entry;
+    uint16_t code_size;
+    uint16_t reloc_count;
+    uint16_t reserved;
+} xl_header_t;
+#endif
+#define PROCESS_LOAD_OK             0
+#define PROCESS_LOAD_ERR_NOT_FOUND  1
+#define PROCESS_LOAD_ERR_ALLOC      2
+#define PROCESS_LOAD_ERR_READ       3
+#define PROCESS_LOAD_ERR_XL_INVALID 4
+#define PROCESS_LOAD_ERR_XL_START   5
+#define PROCESS_LOAD_ERR_COM_INVALID 6
+#define COM_HDR_SIZE                16
+#define COM_OFF_MAGIC0              0
+#define COM_OFF_MAGIC1              1
+#define COM_OFF_VERSION             2
+#define COM_OFF_FLAGS               3
+#define COM_OFF_STACK_SIZE          4
+#define COM_OFF_ENTRY_HINT          6
+#define COM_OFF_XL_OFFSET           8
+#define COM_OFF_XL_SIZE             10
+#define COM_OFF_RESERVED0           12
+#define COM_OFF_RESERVED1           14
+#ifndef PARTOS_COM_HEADER_DEFINED
+#define PARTOS_COM_HEADER_DEFINED
+typedef struct com_header_s {
+    char     magic[2];
+    uint8_t  version;
+    uint8_t  flags;
+    uint16_t stack_size;
+    uint16_t entry_hint;
+    uint16_t xl_offset;
+    uint16_t xl_size;
+    uint16_t reserved0;
+    uint16_t reserved1;
+} com_header_t;
+#endif
+typedef struct process_s {
+    sysobj_t hdr;                           /* process is a system object */
+    uint8_t  pflags;                        /* PROCESS_* flags */
+    char     pname[MAX_PNAME_LEN];          /* name, max 7 chars + NUL */
+    thread_t *main_thread;                  /* bootstrap/main thread, or NULL */
+    const char *cmdline;                    /* original launch command line, or "" */
+    const char *environment;                /* NUL-separated NAME=VALUE block */
+} process_t;
 #endif
 
 /*
@@ -143,16 +232,14 @@ typedef struct sysvars_s {
     void       *bank2_heap;        /* bank 2 process-arena heap base            */
     void       *im2_table;         /* IM2 interrupt vector table base           */
     void       *list_heads;        /* base of the kernel list-head block; index */
-                                   /* with SYSVAR_LH_* below (each a thread_t**/ */
+                                   /* with SYSVAR_LH_* below (each a thread_t   */
                                    /* event_t**), e.g. *(thread_t**)((char*)     */
                                    /* sv->list_heads + SYSVAR_LH_THREAD_RUNNING) */
 } sysvars_t;
 
-/* byte offsets into sysvars.list_heads -- the kernel's OWN live list heads. these
- * are every list the kernel keeps (threads + events are its only system-object
- * lists); a thread-level `ps` walks the thread lists and reads each thread's
- * thread_data (its process), and `memview` walks the heaps from the bases above.
- * process/dev/drv/svc/tmr lists belong to the OS image, not the kernel. */
+/* byte offsets into sysvars.list_heads -- the kernel's live thread/event head
+ * block. service, timer and process registries also live in the kernel now,
+ * but they are kept as separate globals rather than packed into this one block. */
 #define SYSVAR_LH_THREAD_CURRENT     0
 #define SYSVAR_LH_THREAD_SUSPENDED   2
 #define SYSVAR_LH_THREAD_RUNNING     4
@@ -212,6 +299,45 @@ typedef struct kernel_s {
     uint8_t (*acquire_lock)(void *lock);    /* 1 = acquired, 0 = busy */
     void    (*release_lock)(void *lock);
     uint8_t (*test_lock)(void *lock);       /* 1 = held, 0 = free */
+
+    /* appended to preserve every older offset above */
+    /* named services */
+    service_t *(*register_service)(const char *name, void *fntable);
+    service_t *(*unregister_service)(service_t *s);
+    void      *(*query_service)(const char *name);
+
+    /* soft timers */
+    timer_t *(*install_timer)(void (*hook)(void), uint16_t ticks, void *owner);
+    timer_t *(*uninstall_timer)(timer_t *t);
+    void     (*chain_timers)(void);
+
+    /* processes */
+    process_t *(*start_process)(const char *pname,
+                                void (*entry_point)(void),
+                                uint16_t stack_size);
+    process_t *(*load_process_image)(const char *pname,
+                                     uint8_t *img,
+                                     uint16_t img_size,
+                                     uint16_t stack_size);
+    process_t *(*load_process_com)(const char *pname,
+                                   uint8_t *img,
+                                   uint16_t img_size);
+    int16_t    (*wait_process)(process_t *p);
+    void       (*exit_process)(void);
+
+    /* small utility helpers */
+    uint8_t (*bcd_to_bin)(uint8_t bcd);
+    uint8_t (*bin_to_bcd)(uint8_t value);
+    void    (*delay_1ms)(void);
+
+    /* appended (keep at the very end -- offsets above must never move) so the
+     * OS can reach EVERY kernel primitive it needs through this one table
+     * (rst 0x08), rather than by any link-time absolute address. */
+    void  (*disable_interrupts)(void);                        /* ir_disable */
+    void  (*enable_interrupts)(void);                         /* ir_enable  */
+    void *(*set_irq_vector)(uint8_t vector, void *handler);   /* ir_set     */
+    list_item_t *(*append_list)(list_item_t **first, list_item_t *chain);
+    void  (*initialize_memory)(void *heap, uint16_t size);    /* mem_init   */
 } kernel_t;
 
 /*

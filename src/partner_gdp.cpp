@@ -190,6 +190,7 @@ void partner_gdp::reset()
     avdc_char_hist_.fill(0);
     gdp_scroll_ = 0;
     avdc_takeover_ = false;
+    avdc_mem_acc_phase_ = false;
     avdc_rowtbl_base_cache_ = 0;
     avdc_rowtbl_base_cache_valid_ = false;
     avdc_rowtbl_be_cache_ = false;
@@ -257,11 +258,13 @@ void partner_gdp::tick()
         const bool cur_vb  = (avdc_.irq_live & 0x10u) != 0u;
         avdc_vb_edge_ = cur_vb && !prev_vb;
         // On each VB rising edge hold Z80_INT for 64 ticks. BIOS stage uses
-        // I=0xFA and waits for ≥1 non-space AVDC write (past cold-boot fill).
-        // After handoff the kernel IM2 page is I=0xFD and still needs VBL ticks
-        // for the round-robin scheduler and async FAT worker.
+        // I=0xFA and waits for >=1 non-space AVDC write (past cold-boot fill).
+        // PartOS then hands off to its kernel IM2 table; recent builds place
+        // that table on page 0xFE (older layouts used 0xFD). Keep VBL-driven
+        // INT alive for either kernel page so the GDP scheduler and async FAT
+        // worker continue to run after the ROM stage.
         if (avdc_vb_edge_) {
-            if (cpu.i == 0xFD ||
+            if (cpu.i == 0xFE || cpu.i == 0xFD ||
                 (cpu.i == 0xFA && avdc_char_nonspace_wr_cnt_ > 0))
                 avdint_hold_ticks_ = 64;
         }
@@ -397,7 +400,8 @@ void partner_gdp::render_to(display &disp)
     // setup/status content, so keep rendering the full physical 26-row space.
     const int avdc_rows = 26;
     const int avdc_cols_raw = std::min(132, std::max(1, (int)avdc_.chars_per_row));
-    const int avdc_cols = std::min(avdc_cols_raw, text_clk_24mhz ? 132 : 80);
+    const bool avdc_wide_mode = text_clk_24mhz || (avdc_cols_raw > 80);
+    const int avdc_cols = std::min(avdc_cols_raw, avdc_wide_mode ? 132 : 80);
     // VRAM stride must match chars_per_row (hardware layout), not the
     // display-capped avdc_cols — they differ when clock mode caps columns at 80.
     const int avdc_stride = std::max(1, (int)avdc_.chars_per_row);
@@ -1084,6 +1088,12 @@ void partner_gdp::gdp_command(uint8_t cmd)
 {
     switch (cmd)
     {
+    case 0x08:
+        if (text_col_ > 0)
+            text_col_--;
+        if (terminal_)
+            terminal_->put_char(cmd);
+        break;
     case 0x04: // CLS
     case 0x06: // CLS + XY=0
     case 0x07: // CLEAR
@@ -1168,7 +1178,13 @@ uint8_t partner_gdp::io_read(uint16_t port)
     }
 
     if (port == 0x36) {
-        return sync_bit4_ ? 0x10 : 0x00;
+        // The GDP AVDC driver polls MEM_ACC as a short handshake pulse:
+        // first wait for bit4 high, then for it to drop low again. Modeling
+        // that as a long tick-based square wave makes every text-cell access
+        // artificially stall for thousands of CPU ticks, so large outputs like
+        // `ls` appear frozen. Keep the handshake edge-based instead.
+        avdc_mem_acc_phase_ = !avdc_mem_acc_phase_;
+        return avdc_mem_acc_phase_ ? 0x10 : 0x00;
     }
 
     if (port >= AVDC_BASE_PORT && port <= AVDC_LAST_PORT)

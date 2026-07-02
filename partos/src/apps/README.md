@@ -23,7 +23,6 @@ Current applications:
 - `partos/src/apps/clear/`
 - `partos/src/apps/echo/`
 - `partos/src/apps/help/`
-- `partos/src/apps/touch/`
 
 Build integration lives in `partos/Makefile`, and `tools/mkdosdisk.py` packs
 the resulting `.COM` images into the boot disk. The current shell launches

@@ -12,7 +12,7 @@
             ;; a thread blocked in thread_wait4events sits on the waiting list
             ;; and is NOT scheduled until one of its events is signaled.
             ;;
-            ;; layout (thread_t, 24 bytes):
+            ;; layout (thread_t, 27 bytes):
             ;;   +0  next        (sysobj)
             ;;   +2  owner       (sysobj)
             ;;   +4  sp          (saved stack pointer)
@@ -22,7 +22,8 @@
             ;;   +19 state       (THREAD_STATE_*)
             ;;   +20 joined      (joined thread list, unused for now)
             ;;   +22 process     (parent process, or 0 for kernel threads)
-            ;;
+            ;;   +24 bank        (RAM bank the thread runs in)
+            ;;   +25 wait_inline (shared one-event wait cell)
             ;; public c entry points use z80 sdcccall(1); pointer results in de.
             ;; ----------------------------------------------------------------
             ;; 2026-06-16   tstih
@@ -73,7 +74,8 @@
             ;; context switch uses it to map the right bank).
             .equ    THREAD_DATA,        22
             .equ    THREAD_BANK,        24
-            .equ    THREAD_SIZE,        25
+            .equ    THREAD_WAIT_INLINE, 25
+            .equ    THREAD_SIZE,        27
             ;; context: af,bc,de,hl,ix,iy,af',bc',de',hl' (20) + ret (2) = 22
             .equ    CONTEXT_SIZE,       22
 
@@ -169,6 +171,11 @@ _thread_create::
             inc     hl
             ld      a,(tc_bank$)
             ld      (hl),a              ; t->bank
+            inc     hl
+            xor     a
+            ld      (hl),a              ; t->wait_inline lo
+            inc     hl
+            ld      (hl),a              ; t->wait_inline hi
 
             ;; --- t->sp = stack + stack_size - CONTEXT_SIZE ---
             ld      de,(tc_stack$)
@@ -345,14 +352,48 @@ _thread_wait4events::
             ld      hl,#4
             add     hl,sp               ; -> num_events (sp+2 at entry, +2 push)
             ld      a,(hl)
-            pop     de                  ; de = events
             ld      b,a                 ; b = num_events
             ld      hl,(_thread_current)
             ld      a,h
             or      l
-            jr      z,tw_ret$           ; no current thread (shouldn't happen)
-            ;; thread_current->wait = events, num_events = b
-            push    hl                  ; save t
+            jr      z,tw_drop_events$   ; no current thread (shouldn't happen)
+            ld      a,b                 ; a = num_events
+            ld      c,l
+            ld      b,h                 ; bc = current thread
+            pop     hl                  ; hl = caller wait array
+            or      a
+            jr      z,tw_clear_current$ ; zero-event wait is a no-op
+            cp      #1
+            jr      nz,tw_use_caller$   ; multi-event waits still use caller storage
+            ;; single-event waits are mirrored into the shared thread object so
+            ;; the scheduler can inspect them safely regardless of the current
+            ;; user-memory bank.
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)              ; de = caller's sole event pointer
+            ld      h,b
+            ld      l,c                 ; hl = thread
+            push    de
+            ld      de,#THREAD_WAIT_INLINE
+            add     hl,de               ; hl = &t->wait_inline
+            pop     de
+            ld      (hl),e
+            inc     hl
+            ld      (hl),d
+            dec     hl
+            ex      de,hl               ; de = effective wait array, a = count=1
+            ld      a,#1
+            jr      tw_store_ready$
+tw_drop_events$:
+            pop     de                  ; drop saved events
+            jr      tw_ret$
+tw_use_caller$:
+            ex      de,hl               ; de = caller wait array
+tw_store_ready$:
+            ;; thread_current->wait = effective wait array, num_events = a
+            ld      h,b
+            ld      l,c
+            push    af                  ; save count while we store the pointer
             ld      a,#THREAD_WAIT
             add     a,l
             ld      l,a
@@ -361,17 +402,19 @@ _thread_wait4events::
 tw_w$:
             ld      (hl),e
             inc     hl
-            ld      (hl),d              ; t->wait = events
+            ld      (hl),d              ; t->wait = effective wait array
             inc     hl
-            ld      (hl),b              ; t->num_events = num_events
-            pop     hl                  ; hl = t
+            pop     af
+            ld      (hl),a              ; t->num_events = num_events
+            ld      h,b
+            ld      l,c                 ; hl = t
             ;; fast path: if any event is already signaled, do not block at all
             ;; (keeps immediate-completion / fake-async operations cheap).
             push    hl                  ; save t
             call    thread_any_signaled$  ; hl = t -> a
             pop     bc                  ; bc = t
-            or      a
-            jr      nz,tw_ret$          ; already signaled: quick return
+            or      a                   ; already signaled: quick return
+            jr      nz,tw_cleanup$
             ;; move running -> waiting, state = WAITING
             ld      hl,#_thread_first_running
             ld      de,#_thread_first_waiting
@@ -380,6 +423,31 @@ tw_w$:
             rst     0x18                ; yield to the scheduler (tick-independent);
                                         ; resumes here once an event signals
 
+tw_cleanup$:
+            ld      hl,(_thread_current)
+            ld      a,h
+            or      l
+            jr      z,tw_ret$
+tw_clear_current$:
+            ld      hl,(_thread_current)
+            ld      a,h
+            or      l
+            jr      z,tw_ret$
+            ;; returning threads should not keep stale wait metadata around.
+            ;; clear the shared wait pointer and count before we hand control
+            ;; back to the caller.
+            ld      a,#THREAD_WAIT
+            add     a,l
+            ld      l,a
+            jr      nc,tw_clear_wait$
+            inc     h
+tw_clear_wait$:
+            xor     a
+            ld      (hl),a
+            inc     hl
+            ld      (hl),a
+            inc     hl
+            ld      (hl),a
 tw_ret$:
             pop     hl                  ; ret addr
             inc     sp                  ; drop 1-byte num_events arg

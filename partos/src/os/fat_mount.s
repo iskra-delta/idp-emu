@@ -23,7 +23,7 @@
             .globl  _fat_init
             .globl  _fat_mount_dev
             .globl  _fat_mount
-            .globl  __find_dev_drv
+            .globl  dev_find_by_name
 
             .globl  fat_ret_clean2$
             .globl  fat_alloc_req$
@@ -681,8 +681,7 @@ _fat_mount::
             jr      z,fm_invalid_restore$
             push    bc                  ; keep event across the lookup
             push    de                  ; keep fs across the lookup
-            call    __find_dev_drv
-            ex      de,hl               ; de = dev, hl = driver (ignored now)
+            call    dev_find_by_name    ; de = dev, hl = driver (ignored now)
             pop     hl                  ; hl = fs
             pop     bc                  ; bc = event
             ld      a,d

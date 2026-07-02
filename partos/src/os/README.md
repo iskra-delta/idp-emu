@@ -24,7 +24,7 @@ The current user-visible OS stack is no longer hypothetical:
 - the boot volume is FAT-backed,
 - the shell is a relocatable `.COM` program,
 - the current command set includes `ls`, `ps`, `mem`, `cat`, `cp`, `mv`,
-  `del`, `mkdir`/`rmdir`, `touch`, `clear`, `echo`, and `help`,
+  `del`, `mkdir`/`rmdir`, `clear`, `echo`, and `help`,
 - commands are loaded into heap-backed buffers, relocated in place, started as
   processes with their own stacks, and cleaned up on exit.
 

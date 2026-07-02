@@ -6,10 +6,12 @@
 
 namespace {
 
-constexpr uint16_t SIO1A_DATA_PORT = 0xE0;
-constexpr uint16_t SIO1A_CTRL_PORT = 0xE1;
-constexpr uint16_t SIO1B_DATA_PORT = 0xE2;
-constexpr uint16_t SIO1B_CTRL_PORT = 0xE3;
+constexpr uint16_t INTERNAL_DATA_PORT  = 0xD8;
+constexpr uint16_t INTERNAL_CTRL_PORT  = 0xD9;
+constexpr uint16_t SECONDARY_A_DATA_PORT = 0xE0;
+constexpr uint16_t SECONDARY_A_CTRL_PORT = 0xE1;
+constexpr uint16_t SECONDARY_B_DATA_PORT = 0xE2;
+constexpr uint16_t SECONDARY_B_CTRL_PORT = 0xE3;
 
 class partner_crt_test : public partner_crt
 {
@@ -64,51 +66,53 @@ int main()
         partner_crt_test emu(terminal_profile::vt52);
         emu.reset();
 
-        const uint8_t seq_a[] = { 0x1B, 'Y', ' ', '"', 'A' };
-        for (uint8_t ch : seq_a)
-            send_tx_byte(emu, SIO1A_DATA_PORT, ch);
+        const uint8_t seq_internal[] = { 0x1B, 'Y', ' ', '"', 'A' };
+        for (uint8_t ch : seq_internal)
+            send_tx_byte(emu, INTERNAL_DATA_PORT, ch);
 
         const auto lines = split_lines(emu.dump_terminal_text());
-        fails += !expect(!lines.empty(), "secondary SIO A writes reach terminal");
-        fails += !expect(lines[0] == "  A", "secondary SIO A cursor/addressing works");
+        fails += !expect(!lines.empty(), "internal SIO writes reach terminal");
+        fails += !expect(lines[0] == "  A", "internal SIO cursor/addressing works");
 
-        const uint8_t seq_b[] = { 0x1B, 'Y', '!', ' ', 'B' };
-        for (uint8_t ch : seq_b)
-            send_tx_byte(emu, SIO1B_DATA_PORT, ch);
+        const std::string before_secondary = emu.dump_terminal_text();
+        const uint8_t seq_secondary[] = { 0x1B, 'Y', '!', ' ', 'B' };
+        for (uint8_t ch : seq_secondary)
+            send_tx_byte(emu, SECONDARY_B_DATA_PORT, ch);
 
-        const auto lines_b = split_lines(emu.dump_terminal_text());
-        fails += !expect(lines_b.size() > 1, "secondary SIO B writes create second row");
-        fails += !expect(lines_b[1] == "B", "secondary SIO B printable output works");
+        fails += !expect(emu.dump_terminal_text() == before_secondary,
+                         "secondary SIO writes stay off the internal CRT");
 
-        send_tx_byte(emu, SIO1B_DATA_PORT, 0x1B);
-        send_tx_byte(emu, SIO1B_DATA_PORT, 'E');
+        send_tx_byte(emu, INTERNAL_DATA_PORT, 0x1B);
+        send_tx_byte(emu, INTERNAL_DATA_PORT, 'E');
         fails += !expect(emu.dump_terminal_text().find('A') == std::string::npos,
-                         "secondary SIO B clear screen reaches terminal");
+                         "internal SIO clear screen reaches terminal");
         fails += !expect(emu.dump_terminal_text().find('B') == std::string::npos,
-                         "secondary SIO B clear screen removes prior text");
+                         "internal clear screen removes prior text");
     }
 
     {
         partner_crt_test emu(terminal_profile::vt52);
         emu.reset();
-        enable_rx(emu, SIO1A_CTRL_PORT);
-        enable_rx(emu, SIO1B_CTRL_PORT);
+        enable_rx(emu, INTERNAL_CTRL_PORT);
+        enable_rx(emu, SECONDARY_A_CTRL_PORT);
+        enable_rx(emu, SECONDARY_B_CTRL_PORT);
         emu.key_input('K');
         emu.tick();
 
+        const auto &sio = emu.get_sio();
         const auto &sio2 = emu.get_sio2();
-        fails += !expect((sio2.chn[Z80SIO_CHANNEL_A].wr[3] & 0x01u) != 0u,
-                         "secondary SIO A RX is enabled");
+        fails += !expect((sio.chn[Z80SIO_CHANNEL_A].wr[3] & 0x01u) != 0u,
+                         "internal SIO RX is enabled");
         fails += !expect((sio2.chn[Z80SIO_CHANNEL_B].wr[3] & 0x01u) != 0u,
                          "secondary SIO B RX is enabled");
-        fails += !expect(sio2.chn[Z80SIO_CHANNEL_A].rx_ready,
-                         "host key reaches secondary SIO A");
-        fails += !expect(sio2.chn[Z80SIO_CHANNEL_A].rx_data == 'K',
-                         "secondary SIO A receives host key data");
-        fails += !expect(sio2.chn[Z80SIO_CHANNEL_B].rx_ready,
-                         "host key reaches secondary SIO B");
-        fails += !expect(sio2.chn[Z80SIO_CHANNEL_B].rx_data == 'K',
-                         "secondary SIO B receives host key data");
+        fails += !expect(sio.chn[Z80SIO_CHANNEL_A].rx_ready,
+                         "host key reaches internal SIO");
+        fails += !expect(sio.chn[Z80SIO_CHANNEL_A].rx_data == 'K',
+                         "internal SIO receives host key data");
+        fails += !expect(!sio2.chn[Z80SIO_CHANNEL_A].rx_ready,
+                         "host key stays off secondary SIO A");
+        fails += !expect(!sio2.chn[Z80SIO_CHANNEL_B].rx_ready,
+                         "host key stays off secondary SIO B");
     }
 
     if (fails == 0) {

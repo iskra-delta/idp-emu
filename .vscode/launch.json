@@ -8,7 +8,7 @@
       "program": "${workspaceFolder}/bin/idp-emu",
       "args": [
         "--model",
-        "crt",
+        "gdp",
         "--rom",
         "${workspaceFolder}/partos/bin/partos.rom",
         "--nvram",
@@ -16,7 +16,9 @@
         "--disk",
         "${workspaceFolder}/disks/fdd-dos.img",
         "--hdd",
-        "${workspaceFolder}/disks/hdd-dos.img"
+        "${workspaceFolder}/disks/hdd-dos.img",
+        "--terminal",
+        "vt100"
       ],
       "cwd": "${workspaceFolder}",
       "stopAtEntry": false,
@@ -59,7 +61,7 @@
       "program": "${workspaceFolder}/bin/idp-emu",
       "args": [
         "--model",
-        "crt",
+        "gdp",
         "--rom",
         "${workspaceFolder}/partos/bin/partos.rom",
         "--nvram",
@@ -67,7 +69,9 @@
         "--disk",
         "${workspaceFolder}/disks/fdd-dos.img",
         "--hdd",
-        "${workspaceFolder}/disks/hdd-dos.img"
+        "${workspaceFolder}/disks/hdd-dos.img",
+        "--terminal",
+        "vt100"
       ],
       "cwd": "${workspaceFolder}",
       "stopAtEntry": false,
