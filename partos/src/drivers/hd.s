@@ -29,6 +29,7 @@
             .globl  drv_isr_enter
             .globl  drv_isr_exit
             .globl  _ir_set
+            .globl  sched_wake_now$
             .globl  _ir_disable
             .globl  _ir_enable
             .globl  ir_refcnt
@@ -508,6 +509,12 @@ hdi_signal$:
             jp      z,hdi_spurious$
             ld      ix,(hd_io_event$)
             call    drv_signal_done
+            ;; bulk transfer: resume the blocked FAT worker immediately on this
+            ;; ISR exit instead of a VBL frame later (HD throughput). Keyboard/SIO
+            ;; completions deliberately do NOT set this, so console timing is
+            ;; unchanged. Consumed by __thread_select_next.
+            ld      a,#1
+            ld      (sched_wake_now$),a
             jp      drv_isr_exit
 hdi_spurious$:
             jp      drv_isr_exit

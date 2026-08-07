@@ -1,4 +1,5 @@
 #include "partner_gdp.hpp"
+#include "partos_layout.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -15,8 +16,6 @@ namespace {
 constexpr uint64_t BOOT_TICK_LIMIT = 80'000'000ULL;
 constexpr uint64_t COMMAND_TICK_LIMIT = 20'000'000ULL;
 constexpr uint64_t KEY_TICKS = 5'000ULL;
-constexpr uint16_t SYS_NVRAM_CACHE = 0xF614;
-
 bool build_all(const std::filesystem::path &root)
 {
     const std::string build_cmd =
@@ -106,7 +105,7 @@ void dump_rows(const std::vector<std::string> &rows)
 void dump_debug_state(partner_gdp &emu)
 {
     const auto cpu = emu.capture_debug_cpu_state();
-    const auto nvram = emu.read_debug_memory(SYS_NVRAM_CACHE, 8);
+    const auto nvram = emu.read_debug_memory(partos_layout::sys_nvram_cache, 8);
 
     std::printf("pc=%04X sp=%04X nvram=", cpu.pc, cpu.sp);
     for (size_t i = 0; i < nvram.size(); ++i) {

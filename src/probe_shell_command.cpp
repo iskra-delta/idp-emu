@@ -38,6 +38,11 @@ constexpr uint16_t FATFS_ALLOC_HINT_OFF = 22;
 constexpr uint16_t FATFILE_FIRST_CLUSTER_OFF = 0;
 constexpr uint16_t FATFILE_FS_OFF = 12;
 constexpr uint16_t FATFILE_POS_OFF = 14;
+constexpr uint16_t FATDIRINFO_STATUS_OFF = 10;
+constexpr uint16_t FATDIRINFO_INDEX_OFF = 12;
+constexpr uint16_t FATDIRINFO_NAME_OFF = 14;
+constexpr uint16_t FATDIRINFO_SIZE = 25;
+constexpr uint16_t FAT_EBUSY_VALUE = 0xfffd;
 constexpr uint16_t FATREQ_OP_OFF = 4;
 constexpr uint16_t FATREQ_BYTES_OFF = 14;
 constexpr uint16_t FATREQ_ARG_OFF = 16;
@@ -184,6 +189,8 @@ static uint64_t env_u64_or(const char *name, uint64_t fallback)
     return parsed == 0ULL ? fallback : (uint64_t)parsed;
 }
 
+static std::string lowercase_ascii(std::string s);
+
 static std::string command_stem(const std::string &command)
 {
     std::string out;
@@ -197,6 +204,31 @@ static std::string command_stem(const std::string &command)
             out.push_back(ch);
     }
     return out;
+}
+
+static std::string command_target_stem(const std::string &command)
+{
+    const char *env = std::getenv("IDP_APP_STEM");
+
+    if (env != nullptr && *env != '\0')
+        return lowercase_ascii(env);
+
+    std::string stem;
+    std::string line;
+    for (char ch : command) {
+        if (ch == '\r' || ch == '\n') {
+            const std::string candidate = command_stem(line);
+            if (!candidate.empty())
+                stem = candidate;
+            line.clear();
+            continue;
+        }
+        line.push_back(ch);
+    }
+    const std::string candidate = command_stem(line);
+    if (!candidate.empty())
+        stem = candidate;
+    return stem.empty() ? command_stem(command) : stem;
 }
 
 static std::string uppercase_ascii(std::string s)
@@ -228,11 +260,26 @@ static bool shell_prompt_seen(const partner_crt &emu)
            raw.find("> ") != std::string::npos;
 }
 
+static bool text_ends_at_prompt(const std::string &text)
+{
+    if (text.size() < 2 || text.compare(text.size() - 2, 2, "> ") != 0)
+        return false;
+
+    const size_t nl = text.rfind('\n');
+    const size_t line_start = (nl == std::string::npos) ? 0 : nl + 1;
+
+    for (size_t i = line_start; i + 2 < text.size(); ++i) {
+        if (text[i] == ' ')
+            return false;
+    }
+    return true;
+}
+
 static bool prompt_returned(const std::string &term, const std::string &raw)
 {
-    if (term.size() >= 2 && term.compare(term.size() - 2, 2, "> ") == 0)
+    if (text_ends_at_prompt(raw))
         return true;
-    return raw.size() >= 2 && raw.compare(raw.size() - 2, 2, "> ") == 0;
+    return text_ends_at_prompt(term);
 }
 
 static bool build_all(const std::string &root)
@@ -247,6 +294,69 @@ static bool build_all(const std::string &root)
     }
     return true;
 }
+
+struct console_write_sample {
+    uint64_t tick = 0;
+    uint16_t thread = 0;
+    uint16_t process = 0;
+    uint16_t ret = 0;
+    uint16_t sp = 0;
+    uint16_t hl = 0;
+    uint16_t de = 0;
+    std::string pname;
+    std::string bytes;
+    std::string stack;
+};
+
+struct fat_write_call_sample {
+    uint64_t tick = 0;
+    uint16_t pc = 0;
+    uint16_t file = 0;
+    uint16_t buf = 0;
+    uint16_t first_cluster = 0;
+    uint16_t size_lo = 0;
+    uint16_t size_hi = 0;
+    uint8_t attr = 0;
+    uint16_t status = 0;
+    uint16_t fs = 0;
+    uint16_t pos_lo = 0;
+    uint16_t pos_hi = 0;
+    std::string file_bytes;
+};
+
+struct readdir_sample {
+    uint64_t tick = 0;
+    uint16_t call_pc = 0;
+    uint16_t info = 0;
+    uint16_t path = 0;
+    uint16_t first_cluster = 0;
+    uint16_t size_lo = 0;
+    uint16_t size_hi = 0;
+    uint16_t status = 0;
+    uint16_t index = 0;
+    uint8_t attr = 0;
+    std::string path_text;
+    std::string info_bytes;
+    std::string name_bytes;
+};
+
+struct ls_name_sample {
+    uint64_t tick = 0;
+    uint16_t pc = 0;
+    uint16_t path = 0;
+    uint16_t name = 0;
+    uint16_t dirinfo = 0;
+    uint16_t ret = 0;
+    uint16_t sp = 0;
+    uint16_t index = 0;
+    uint16_t first_cluster = 0;
+    uint16_t size_lo = 0;
+    uint16_t size_hi = 0;
+    uint8_t attr = 0;
+    std::string name_bytes;
+    std::string after_bytes;
+    std::string dirinfo_bytes;
+};
 
 } // namespace
 
@@ -270,7 +380,7 @@ int main(int argc, char **argv)
     const std::string kernel_map_path = root + "/partos/build/kernel.map";
     const std::string os_map_path = root + "/partos/build/os.map";
     const std::string shell_map_path = root + "/partos/build/shell_payload.map";
-    const std::string app_stem = command_stem(command);
+    const std::string app_stem = command_target_stem(command);
     const std::string expected_proc_name = lowercase_ascii(app_stem);
     const std::string app_xld_map_path =
         root + "/partos/build/" + app_stem + "_xld.map";
@@ -297,6 +407,7 @@ int main(int argc, char **argv)
     const uint16_t pc_svc_query = O.at("_svc_query");
     const uint16_t pc_svc_register = O.at("_svc_register");
     const uint16_t pc_fat_worker_loop = O.at("fat_worker_loop$");
+    const uint16_t pc_fat_write_call = O.at("_fat_write");
     const uint16_t pc_fat_handle_create = O.at("fat_handle_create$");
     const uint16_t pc_fat_handle_write = O.at("fat_handle_write$");
     const uint16_t pc_fat_finish_dirent = O.at("fat_finish_dirent$");
@@ -305,13 +416,25 @@ int main(int argc, char **argv)
     const uint16_t pc_fat_set_entry = O.at("fat_set_fat_entry$");
     const uint16_t pc_fat_cluster_to_sector = O.at("fat_cluster_to_sector$");
     const uint16_t pc_fat_get_entry = O.at("fat_get_fat_entry$");
-    const uint16_t fat_req_head_addr = O.at("fat_req_head$");
-    const uint16_t fat_req_tail_addr = O.at("fat_req_tail$");
-    const uint16_t fat_queue_event_addr = O.at("fat_queue_event$");
-    const uint16_t fat_io_event_addr = O.at("fat_io_event$");
-    const uint16_t fat_worker_thread_addr = O.at("fat_worker_thread$");
-    const uint16_t fat_init_state_addr = O.at("fat_init_state$");
-    const uint16_t fat_wait_evt_addr = O.at("fat_wait_evt$");
+    const uint16_t pc_app_read_directory =
+        (have_app_map && A.syms.count("_app_read_directory") != 0)
+            ? A.at("_app_read_directory")
+            : 0;
+    const uint16_t pc_ls_write_name =
+        (have_app_map && A.syms.count("_ls_write_name") != 0)
+            ? A.at("_ls_write_name")
+            : 0;
+    auto optional_os_symbol = [&](const std::string &name) -> uint16_t {
+        auto it = O.syms.find(name);
+        return (it == O.syms.end() || it->second.empty()) ? 0 : it->second[0];
+    };
+    const uint16_t fat_req_head_addr = optional_os_symbol("fat_req_head$");
+    const uint16_t fat_req_tail_addr = optional_os_symbol("fat_req_tail$");
+    const uint16_t fat_queue_event_addr = optional_os_symbol("fat_queue_event$");
+    const uint16_t fat_io_event_addr = optional_os_symbol("fat_io_event$");
+    const uint16_t fat_worker_thread_addr = optional_os_symbol("fat_worker_thread$");
+    const uint16_t fat_init_state_addr = optional_os_symbol("fat_init_state$");
+    const uint16_t fat_wait_evt_addr = optional_os_symbol("fat_wait_evt$");
     const uint16_t pc_thread_create = K.at("_thread_create");
     const uint16_t pc_tc_fail0 = K.at("tc_fail0$");
     const uint16_t pc_tc_fail1 = K.at("tc_fail1$");
@@ -388,6 +511,8 @@ int main(int argc, char **argv)
     const uint64_t key_ticks = env_u64_or("IDP_KEY_TICKS", DEFAULT_KEY_TICKS);
     const uint64_t post_ticks = env_u64_or("IDP_POST_TICKS", DEFAULT_POST_TICKS);
     const bool break_on_prompt = (std::getenv("IDP_KEEP_RUNNING_AFTER_PROMPT") == nullptr);
+    const bool trace_console_writes =
+        (std::getenv("IDP_TRACE_CONSOLE_WRITES") != nullptr);
 
     uint64_t hits_process_wait = 0;
     uint64_t hits_run_command = 0;
@@ -586,11 +711,57 @@ int main(int argc, char **argv)
     uint16_t child_app_base = 0;
     uint16_t child_app_top = 0;
     std::vector<std::string> fat_worker_helper_trace;
+    std::vector<console_write_sample> console_writes;
+    std::vector<fat_write_call_sample> fat_write_calls;
+    std::vector<readdir_sample> readdir_samples;
+    std::vector<ls_name_sample> ls_name_samples;
+    uint16_t pending_readdir_info = 0;
+    uint16_t pending_readdir_path = 0;
+    uint16_t pending_readdir_call_pc = 0;
+    bool pending_readdir_saw_busy = false;
+    uint16_t last_ls_path_ptr = 0;
+    uint16_t last_ls_name_index = 0xffff;
+
+    auto record_console_write = [&]() {
+        if (!trace_console_writes ||
+            emu.get_current_pc() != pc_write_console ||
+            console_writes.size() >= 600) {
+            return;
+        }
+
+        const auto st = emu.capture_debug_cpu_state();
+        const uint16_t current =
+            rd16(emu.read_debug_memory(K.at("_thread_current"), 2));
+        const uint16_t process =
+            current == 0
+                ? 0
+                : rd16(emu.read_debug_memory((uint16_t)(current + 22), 2));
+        if (target_process != 0 && process != target_process) {
+            return;
+        }
+
+        console_write_sample sample;
+        sample.tick = emu.get_tick_count();
+        sample.thread = current;
+        sample.process = process;
+        sample.ret = rd16(emu.read_debug_memory(st.sp, 2));
+        sample.sp = st.sp;
+        sample.hl = st.hl;
+        sample.de = st.de;
+        sample.pname =
+            process == 0 ? "" : read_cstr_bounded(emu, (uint16_t)(process + 5), 8);
+        sample.bytes =
+            bytes_hex(emu.read_debug_memory(st.hl, st.de > 24 ? 24 : st.de),
+                      st.de > 24 ? 24 : st.de);
+        sample.stack = bytes_hex(emu.read_debug_memory(st.sp, 12), 12);
+        console_writes.push_back(sample);
+    };
 
     for (char ch : command) {
         if (ch == '\n') {
             for (uint64_t n = 0; n < post_ticks; ++n) {
                 emu.tick();
+                record_console_write();
                 const std::string term = emu.dump_terminal_text();
                 const std::string raw = emu.dump_raw_serial_text();
                 if (prompt_returned(term, raw))
@@ -599,14 +770,17 @@ int main(int argc, char **argv)
             continue;
         }
         emu.key_input((uint8_t)ch);
-        for (uint64_t n = 0; n < key_ticks; ++n)
+        for (uint64_t n = 0; n < key_ticks; ++n) {
             emu.tick();
+            record_console_write();
+        }
     }
 
     bool returned = false;
     for (uint64_t n = 0; n < post_ticks; ++n) {
         emu.tick();
         const uint16_t pc = emu.get_current_pc();
+        record_console_write();
         if (first_process_wait_tick != 0 && wait_trace_len < wait_pc_trace.size()) {
             wait_pc_trace[wait_trace_len] = pc;
             wait_current_trace[wait_trace_len] =
@@ -665,7 +839,9 @@ int main(int argc, char **argv)
             const uint16_t current =
                 rd16(emu.read_debug_memory(K.at("_thread_current"), 2));
             const uint16_t fat_worker_thread =
-                rd16(emu.read_debug_memory(fat_worker_thread_addr, 2));
+                fat_worker_thread_addr == 0
+                    ? 0
+                    : rd16(emu.read_debug_memory(fat_worker_thread_addr, 2));
             if (pc == pc_fat_worker_loop)
                 fat_worker_loop_hits++;
             if (pc == pc_fat_handle_create) {
@@ -1019,6 +1195,115 @@ int main(int argc, char **argv)
                         bytes_hex(emu.read_debug_memory(st.hl, st.de > 24 ? 24 : st.de),
                                   st.de > 24 ? 24 : st.de);
                     saw_child_write_console = true;
+                }
+                if (have_app_map && pc_app_read_directory != 0 &&
+                    readdir_samples.size() < 32 &&
+                    pc == (uint16_t)(child_base + pc_app_read_directory)) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    pending_readdir_info =
+                        rd16(emu.read_debug_memory((uint16_t)(st.sp + 2), 2));
+                    pending_readdir_path = st.de;
+                    pending_readdir_call_pc = pc;
+                    pending_readdir_saw_busy = false;
+                    if (st.de != 0)
+                        last_ls_path_ptr = st.de;
+                }
+                if (pending_readdir_info != 0 && readdir_samples.size() < 32) {
+                    const auto info =
+                        emu.read_debug_memory(pending_readdir_info,
+                                              FATDIRINFO_SIZE);
+                    if (info.size() >= FATDIRINFO_SIZE) {
+                        const uint16_t status =
+                            rd16(info, FATDIRINFO_STATUS_OFF);
+                        if (status == FAT_EBUSY_VALUE) {
+                            pending_readdir_saw_busy = true;
+                        } else if (pending_readdir_saw_busy) {
+                            readdir_sample sample;
+                            sample.tick = emu.get_tick_count();
+                            sample.call_pc = pending_readdir_call_pc;
+                            sample.info = pending_readdir_info;
+                            sample.path = pending_readdir_path;
+                            sample.first_cluster = rd16(info, 0);
+                            sample.size_lo = rd16(info, 2);
+                            sample.size_hi = rd16(info, 4);
+                            sample.attr =
+                                info.size() > 9 ? info[9] : 0xff;
+                            sample.status = status;
+                            sample.index = rd16(info, FATDIRINFO_INDEX_OFF);
+                            sample.path_text =
+                                pending_readdir_path == 0
+                                    ? ""
+                                    : read_cstr_bounded(
+                                          emu, pending_readdir_path, 64);
+                            sample.info_bytes = bytes_hex(info, info.size());
+                            sample.name_bytes =
+                                bytes_hex(info.size() > FATDIRINFO_NAME_OFF
+                                              ? std::vector<uint8_t>(
+                                                    info.begin() +
+                                                        FATDIRINFO_NAME_OFF,
+                                                    info.end())
+                                              : std::vector<uint8_t>{},
+                                          11);
+                            readdir_samples.push_back(sample);
+                            pending_readdir_info = 0;
+                            pending_readdir_saw_busy = false;
+                        }
+                    }
+                }
+                if (have_app_map && pc_ls_write_name != 0 &&
+                    last_ls_path_ptr != 0 && ls_name_samples.size() < 64 &&
+                    pc == (uint16_t)(child_base + pc_ls_write_name)) {
+                    const uint16_t dirinfo = (uint16_t)(last_ls_path_ptr + 0x0040);
+                    const auto dirinfo_bytes =
+                        emu.read_debug_memory(dirinfo, FATDIRINFO_SIZE);
+                    const uint16_t index =
+                        rd16(dirinfo_bytes, FATDIRINFO_INDEX_OFF);
+                    if (index != last_ls_name_index) {
+                        const auto st = emu.capture_debug_cpu_state();
+                        last_ls_name_index = index;
+                    ls_name_sample sample;
+                    sample.tick = emu.get_tick_count();
+                    sample.pc = pc;
+                    sample.path = last_ls_path_ptr;
+                        sample.dirinfo = dirinfo;
+                    sample.name = (uint16_t)(last_ls_path_ptr + 0x005B);
+                        sample.ret = rd16(emu.read_debug_memory(st.sp, 2));
+                        sample.sp = st.sp;
+                        sample.index = index;
+                        sample.first_cluster = rd16(dirinfo_bytes, 0);
+                        sample.size_lo = rd16(dirinfo_bytes, 2);
+                        sample.size_hi = rd16(dirinfo_bytes, 4);
+                        sample.attr =
+                            dirinfo_bytes.size() > 9 ? dirinfo_bytes[9] : 0xff;
+                    sample.name_bytes =
+                        bytes_hex(emu.read_debug_memory(sample.name, 14), 14);
+                    sample.after_bytes =
+                        bytes_hex(emu.read_debug_memory(sample.name, 64), 64);
+                    sample.dirinfo_bytes =
+                            bytes_hex(dirinfo_bytes,
+                                  FATDIRINFO_SIZE);
+                    ls_name_samples.push_back(sample);
+                    }
+                }
+                if (pc == pc_fat_write_call && fat_write_calls.size() < 8) {
+                    const auto st = emu.capture_debug_cpu_state();
+                    const auto f = emu.read_debug_memory(st.hl, FATFILE_POS_OFF + 4);
+                    fat_write_call_sample sample;
+                    sample.tick = emu.get_tick_count();
+                    sample.pc = pc;
+                    sample.file = st.hl;
+                    sample.buf = st.de;
+                    sample.first_cluster = rd16(f, FATFILE_FIRST_CLUSTER_OFF);
+                    sample.size_lo = rd16(f, 2);
+                    sample.size_hi = rd16(f, 4);
+                    sample.attr =
+                        f.size() > 9 ? f[9] : 0xff;
+                    sample.status = rd16(f, 10);
+                    sample.fs = rd16(f, FATFILE_FS_OFF);
+                    sample.pos_lo = rd16(f, FATFILE_POS_OFF);
+                    sample.pos_hi = rd16(f, (size_t)FATFILE_POS_OFF + 2);
+                    sample.file_bytes = bytes_hex(f, f.size());
+                    fat_write_calls.push_back(sample);
                 }
                 if (!saw_child_path_wrapper && have_app_map &&
                     pc >= (uint16_t)(child_base + 0x0080) &&
@@ -1380,6 +1665,100 @@ int main(int argc, char **argv)
         std::printf("trace: child_write_console hl=%04X de=%04X bytes=%s\n",
                     child_write_hl, child_write_de, child_write_bytes.c_str());
     }
+    if (!fat_write_calls.empty()) {
+        std::printf("trace: fat_write_calls_begin count=%zu\n",
+                    fat_write_calls.size());
+        for (size_t i = 0; i < fat_write_calls.size(); ++i) {
+            const auto &w = fat_write_calls[i];
+            std::printf(
+                "trace: fat_write_call[%zu] tick=%llu pc=%04X file=%04X buf=%04X first=%04X size=%04X:%04X attr=%02X status=%04X fs=%04X pos=%04X:%04X bytes=%s\n",
+                i,
+                (unsigned long long)w.tick,
+                w.pc,
+                w.file,
+                w.buf,
+                w.first_cluster,
+                w.size_hi,
+                w.size_lo,
+                w.attr,
+                w.status,
+                w.fs,
+                w.pos_hi,
+                w.pos_lo,
+                w.file_bytes.c_str());
+        }
+        std::printf("trace: fat_write_calls_end\n");
+    }
+    if (!readdir_samples.empty()) {
+        std::printf("trace: readdir_samples_begin count=%zu\n",
+                    readdir_samples.size());
+        for (size_t i = 0; i < readdir_samples.size(); ++i) {
+            const auto &r = readdir_samples[i];
+            std::printf(
+                "trace: readdir_sample[%zu] tick=%llu call=%04X info=%04X path=%04X path_text='%s' first=%04X size=%04X:%04X attr=%02X status=%04X index=%04X name=%s bytes=%s\n",
+                i,
+                (unsigned long long)r.tick,
+                r.call_pc,
+                r.info,
+                r.path,
+                r.path_text.c_str(),
+                r.first_cluster,
+                r.size_hi,
+                r.size_lo,
+                r.attr,
+                r.status,
+                r.index,
+                r.name_bytes.c_str(),
+                r.info_bytes.c_str());
+        }
+        std::printf("trace: readdir_samples_end\n");
+    }
+    if (!ls_name_samples.empty()) {
+        std::printf("trace: ls_name_samples_begin count=%zu\n",
+                    ls_name_samples.size());
+        for (size_t i = 0; i < ls_name_samples.size(); ++i) {
+            const auto &s = ls_name_samples[i];
+            std::printf(
+                "trace: ls_name_sample[%zu] tick=%llu pc=%04X ret=%04X sp=%04X path=%04X dirinfo=%04X index=%04X first=%04X size=%04X:%04X attr=%02X name=%04X name_bytes=%s after=%s dirinfo=%s\n",
+                i,
+                (unsigned long long)s.tick,
+                s.pc,
+                s.ret,
+                s.sp,
+                s.path,
+                s.dirinfo,
+                s.index,
+                s.first_cluster,
+                s.size_hi,
+                s.size_lo,
+                s.attr,
+                s.name,
+                s.name_bytes.c_str(),
+                s.after_bytes.c_str(),
+                s.dirinfo_bytes.c_str());
+        }
+        std::printf("trace: ls_name_samples_end\n");
+    }
+    if (!console_writes.empty()) {
+        std::printf("trace: console_writes_begin count=%zu\n",
+                    console_writes.size());
+        for (size_t i = 0; i < console_writes.size(); ++i) {
+            const auto &w = console_writes[i];
+            std::printf("trace: console_write[%03zu] tick=%llu thread=%04X process=%04X name='%s' ret=%04X sp=%04X hl=%04X de=%04X bytes=%s stack=%s\n",
+                        i,
+                        (unsigned long long)w.tick,
+                        w.thread,
+                        w.process,
+                        w.pname.c_str(),
+                        w.ret,
+                        w.sp,
+                        w.hl,
+                        w.de,
+                        w.bytes.c_str(),
+                        w.stack.c_str());
+        }
+        std::printf("trace: console_writes_end\n");
+    }
     if (saw_child_path_wrapper) {
         std::printf("trace: child_path_wrapper pc=%04X sp=%04X hl=%04X de=%04X bc=%04X stack=%s\n",
                     child_path_wrapper_pc,
@@ -1671,21 +2050,35 @@ int main(int argc, char **argv)
                     fntable == 0 ? 0 : rd16(emu.read_debug_memory((uint16_t)(fntable + 86), 2)));
         {
             const uint16_t fat_req_head =
-                rd16(emu.read_debug_memory(fat_req_head_addr, 2));
+                fat_req_head_addr == 0
+                    ? 0
+                    : rd16(emu.read_debug_memory(fat_req_head_addr, 2));
             const uint16_t fat_req_tail =
-                rd16(emu.read_debug_memory(fat_req_tail_addr, 2));
+                fat_req_tail_addr == 0
+                    ? 0
+                    : rd16(emu.read_debug_memory(fat_req_tail_addr, 2));
             const uint16_t fat_queue_event =
-                rd16(emu.read_debug_memory(fat_queue_event_addr, 2));
+                fat_queue_event_addr == 0
+                    ? 0
+                    : rd16(emu.read_debug_memory(fat_queue_event_addr, 2));
             const uint16_t fat_io_event =
-                rd16(emu.read_debug_memory(fat_io_event_addr, 2));
+                fat_io_event_addr == 0
+                    ? 0
+                    : rd16(emu.read_debug_memory(fat_io_event_addr, 2));
             const uint16_t fat_worker_thread =
-                rd16(emu.read_debug_memory(fat_worker_thread_addr, 2));
+                fat_worker_thread_addr == 0
+                    ? 0
+                    : rd16(emu.read_debug_memory(fat_worker_thread_addr, 2));
             const auto fat_init_state_bytes =
-                emu.read_debug_memory(fat_init_state_addr, 1);
+                fat_init_state_addr == 0
+                    ? std::vector<uint8_t>()
+                    : emu.read_debug_memory(fat_init_state_addr, 1);
             const uint8_t fat_init_state =
                 fat_init_state_bytes.empty() ? 0 : fat_init_state_bytes[0];
             const uint16_t fat_wait_evt =
-                rd16(emu.read_debug_memory(fat_wait_evt_addr, 2));
+                fat_wait_evt_addr == 0
+                    ? 0
+                    : rd16(emu.read_debug_memory(fat_wait_evt_addr, 2));
             const auto fat_queue_evt_bytes =
                 fat_queue_event == 0
                     ? std::vector<uint8_t>()

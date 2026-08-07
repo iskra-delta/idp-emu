@@ -145,25 +145,14 @@ void *memset(void *dst, int value, size_t n)
 
 int write(const void *buf, size_t len)
 {
-    partos_t *partos = app_partos();
-
-    if ((buf == 0) || (len == 0u)) {
-        return 0;
-    }
-    if ((partos != 0) && (partos->write_console != 0)) {
-        return (int)partos->write_console(buf, len);
-    }
-    return 0;
+    return (int)app_partos()->write_console(buf, len);
 }
 
 int putchar(int ch)
 {
-    partos_t *partos = app_partos();
     char c = (char)ch;
 
-    if ((partos != 0) && (partos->write_console != 0)) {
-        (void)partos->write_console(&c, 1u);
-    }
+    app_partos()->write_console(&c, 1u);
     return (int)((uint8_t)c);
 }
 

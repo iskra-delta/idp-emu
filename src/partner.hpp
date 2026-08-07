@@ -242,11 +242,18 @@ protected:
     bool io_read_latched_ = false;
     uint16_t io_read_latched_addr_ = 0;
     uint8_t io_read_latched_data_ = 0xFF;
+    bool im2_ack_latched_ = false;
+    int im2_ack_latched_vector_ = -1;
 
     uint64_t pins = 0;
     uint64_t tick_count = 0;
 
     std::array<uint8_t, rom_size> rom{};
+    // A boot ROM has been loaded. Gates the NVRAM boot-prep (FD-type masks +
+    // checksum) in reset(): those derive BIOS-visible config from the mounted
+    // hardware and must not run for a bare NVRAM round-trip (no ROM), which
+    // expects the shadow bytes to persist and restore verbatim.
+    bool rom_loaded_ = false;
     std::array<uint8_t, ram_size> ram{};
     std::array<uint8_t, banked_size> ram_bank2_{};
 
@@ -272,6 +279,7 @@ protected:
     uint8_t sasi_data_read_for_bus();
     void service_fdc_daisy(uint64_t &pins, bool cpu_ticked);
     int get_pending_daisy_vector() const;
+    int select_im2_ack_vector();
     bool dma_owns_bus() const;
     bool dma_transfer_pending() const;
     uint8_t peek_ram(uint16_t addr) const;

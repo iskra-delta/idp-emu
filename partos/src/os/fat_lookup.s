@@ -48,7 +48,12 @@
             .globl  fat_fs_de$
             .globl  fat_fs_byte$
             .globl  fat_read_block$
+            .globl  fat_read_block_to$
             .globl  fat_read_volume_sector$
+            .globl  fat_read_volume_sector_to$
+            .globl  fat_cache_fdev$
+            .globl  fat_cache_fsec$
+            .globl  fat_xfer_buf$
             .globl  fat_cluster_valid$
             .globl  fat_cluster_to_sector$
             .globl  fat_fat_offset$
@@ -91,7 +96,6 @@
             .globl  _fat_readdir
 
             .area   _CODE
-
             ;; ----------------------------------------------------------------
             ;; fat_path_next$() -> <hl> rc
             ;; ----------------------------------------------------------------
@@ -221,6 +225,25 @@ fat_read_volume_sector$:
             ex      de,hl               ; de = absolute device block
             ld      hl,(fat_work_dev$)
             call    fat_read_block$
+            ret
+
+            ;; ----------------------------------------------------------------
+            ;; fat_read_volume_sector_to$(<de> rel_sector, <hl> buf) -> <hl> rc
+            ;; ----------------------------------------------------------------
+            ;; like fat_read_volume_sector$ but streams the block straight into
+            ;; the caller's buffer <buf> instead of fat_sector$, so the FAT-sector
+            ;; cache survives file/dir DATA reads (see fat_read_block_to$).
+            ;; ----------------------------------------------------------------
+fat_read_volume_sector_to$:
+            ld      (fat_xfer_buf$),hl  ; destination = caller buffer
+            push    de
+            ld      bc,#FATFS_LBA_BASE
+            call    fat_fs_de$        ; de = lba_base
+            pop     hl
+            add     hl,de
+            ex      de,hl               ; de = absolute device block
+            ld      hl,(fat_work_dev$)
+            call    fat_read_block_to$
             ret
 
             ;; ----------------------------------------------------------------
@@ -377,11 +400,34 @@ fat_get_fat_entry$:
             ld      l,h
             ld      h,#0
             add     hl,de
-            ex      de,hl
+            ex      de,hl               ; de = rel FAT sector
+
+            ;; --- single-sector FAT cache ---
+            ;; skip the disk read when fat_sector$ already holds this (dev,sector).
+            push    de                  ; save rel sector
+            ld      hl,(fat_cache_fsec$)
+            or      a
+            sbc     hl,de
+            jr      nz,fgfe_read$
+            ld      de,(fat_cache_fdev$)
+            ld      hl,(fat_work_dev$)
+            or      a
+            sbc     hl,de               ; nz if dev differs or cache invalid (fdev=0)
+            jr      nz,fgfe_read$
+            pop     de                  ; hit: fat_sector$ already valid
+            jr      fgfe_loaded$
+fgfe_read$:
+            pop     de                  ; de = rel FAT sector
+            push    de
             call    fat_read_volume_sector$
+            pop     de
             ld      a,h
             or      l
-            ret     nz
+            ret     nz                  ; read error (fat_xfer_block$ left cache invalid)
+            ld      (fat_cache_fsec$),de
+            ld      hl,(fat_work_dev$)
+            ld      (fat_cache_fdev$),hl
+fgfe_loaded$:
 
             ld      a,(fat_offset_low$)
             ld      l,a

@@ -42,6 +42,7 @@ __sys_rst_default::
             ret
 
 __sys_rst38_default::
+            ei
             reti
 
 __sys_nmi_default::

@@ -776,54 +776,23 @@ bce_loop$:
             ;; app names resolve strictly from cwd unless a path is spelled out.
             ;; ----------------------------------------------------------------
 boot_command_is_global$:
+            ld      de,#boot_global_names$
+bcg_next$:
+            ld      a,(de)
+            or      a
+            jr      z,bcg_no$
             ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_ls$
+            push    de
             call    boot_cstr_eq$
+            pop     de
             jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_cd$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_ps$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_cat$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_mkdir$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_rmdir$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_del$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_cp$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_mv$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_clear$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_echo$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
-            ld      hl,#boot_cmd_name$
-            ld      de,#boot_global_help$
-            call    boot_cstr_eq$
-            jr      z,bcg_yes$
+bcg_skip$:
+            ld      a,(de)
+            inc     de
+            or      a
+            jr      nz,bcg_skip$
+            jr      bcg_next$
+bcg_no$:
             xor     a
             ret
 
@@ -937,7 +906,7 @@ btp_have_size$:
             jr      nz,btp_have_image$
             ld      hl,#FAT_ENOMEM
             ld      (boot_try_status$),hl
-            jr      btp_fail_zero$
+            jp      btp_fail_zero$
 btp_have_image$:
             ld      (boot_image$),de
 
@@ -975,6 +944,12 @@ btp_process_load$:
             call    boot_destroy_event$
 
             ;; the loaded file is a COM header wrapping one embedded XL image.
+            ;; Hold one outer interrupt guard across process_load_com(): it
+            ;; creates/resumes the child thread internally, but the child must
+            ;; not run until we have attached at least the stable boot command
+            ;; line pointer below. The shell later replaces this with a
+            ;; per-process heap copy.
+            call    _ir_disable
             ld      de,(boot_img_size$)
             push    de                  ; img_size
             ld      de,(boot_image$)
@@ -983,12 +958,23 @@ btp_process_load$:
             ld      (_boot_debug_rc),de
             ld      a,d
             or      e
-            jr      nz,btp_success$
+            jp      nz,btp_success_locked$
+            call    _ir_enable
             ld      hl,#FAT_EINVAL
             ld      (boot_try_status$),hl
             jr      btp_fail_free$
 
-btp_success$:
+btp_success_locked$:
+            push    de                  ; preserve process return value
+            ex      de,hl               ; hl = process
+            ld      bc,#PROCESS_CMDLINE
+            add     hl,bc
+            ld      de,#boot_cmdline_buf$
+            ld      (hl),e
+            inc     hl
+            ld      (hl),d
+            pop     de
+            call    _ir_enable
             ld      hl,#FAT_OK
             ld      (boot_try_status$),hl
             xor     a
@@ -1233,30 +1219,12 @@ boot_shell_com$:
             .db     '/','s','h','e','l','l','.','c','o','m',0
 boot_shell_pname$:
             .db     's','h','e','l','l',0
-boot_global_ls$:
-            .db     'l','s',0
-boot_global_cd$:
-            .db     'c','d',0
-boot_global_ps$:
-            .db     'p','s',0
-boot_global_cat$:
-            .db     'c','a','t',0
-boot_global_mkdir$:
-            .db     'm','k','d','i','r',0
-boot_global_rmdir$:
-            .db     'r','m','d','i','r',0
-boot_global_del$:
-            .db     'd','e','l',0
-boot_global_cp$:
-            .db     'c','p',0
-boot_global_mv$:
-            .db     'm','v',0
-boot_global_clear$:
-            .db     'c','l','e','a','r',0
-boot_global_echo$:
-            .db     'e','c','h','o',0
-boot_global_help$:
-            .db     'h','e','l','p',0
+boot_global_names$:
+            .db     'l','s',0,'c','d',0,'p','s',0,'c','a','t',0
+            .db     'm','k','d','i','r',0,'r','m','d','i','r',0
+            .db     'd','e','l',0,'c','p',0,'m','v',0
+            .db     'c','l','e','a','r',0,'e','c','h','o',0
+            .db     'h','e','l','p',0,0
 boot_loader_busy$:
             .db     0
 

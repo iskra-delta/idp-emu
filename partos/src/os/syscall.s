@@ -117,7 +117,6 @@
             .globl  __usr_heap
 
             .area   _CODE
-
             .equ    SVC_NAME,           4
             .equ    SVC_FNTABLE,       20
 

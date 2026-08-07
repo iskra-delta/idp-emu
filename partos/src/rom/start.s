@@ -39,6 +39,7 @@
             .globl  hd_init_chars
             .globl  boot_fd_path
             .globl  boot_hd_path
+            .globl  boot_main
             .globl  boot_dev$
 
             .area   _BOOT
@@ -110,7 +111,7 @@ sm_wait$:
             ;; ----------------------------------------------------------------
             ;; boot_main: load+launch the OS, floppy first then hard disk
             ;; ----------------------------------------------------------------
-boot_main$:
+boot_main::
             ld      hl,#msg_booting$
             call    print_banner$
 

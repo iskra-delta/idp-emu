@@ -34,6 +34,7 @@
             .globl  bios_main
             .globl  menu_run
             .globl  model
+            .globl  boot_main
             .globl  print_at
             .globl  start_main
             .globl  bios_nvram_cache
@@ -92,12 +93,12 @@ bios_print_model$:
             cp      #MENU_ACT_SAVE
             call    z,bios_save_settings
 
-            ;; soft-restart stage 1 so the configuration takes effect. rom has
-            ;; been disabled since stage 0, so we re-enter the ram-resident
-            ;; entry point rather than the rom reset vector at 0x0000.
-            di
-            ld      sp,#0xbfff
-            jp      start_main
+            ;; continue straight to the boot path. returning through start_main
+            ;; would reopen the timed setup window and make Ctrl+C look stuck.
+            ld      a,(model)
+            or      a
+            call    nz,avdc_set_mode    ; clear GDP before the boot banner
+            jp      boot_main
 
             ;; ----------------------------------------------------------------
             ;; bios_load_settings()

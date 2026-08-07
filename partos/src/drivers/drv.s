@@ -63,10 +63,6 @@
             ;; ----------------------------------------------------------------
 drv_isr_enter::
             di
-            xor     a
-            ld      (drv_need_resched$),a
-            inc     a
-            ld      (drv_in_isr$),a
             ;; switch off the interrupted thread's stack onto the shared
             ;; top-of-common-RAM ISR stack BEFORE saving anything. the thread's
             ;; stack only holds the hardware interrupt frame; all ISR working
@@ -75,6 +71,11 @@ drv_isr_enter::
             ;; `ld sp,nn` touch no registers, so the thread's regs are intact.
             ld      (drv_thread_sp$),sp
             ld      sp,#DRV_ISR_STACK_TOP
+            ;; SAVE the interrupted thread's registers FIRST, before touching any
+            ;; of them. the old `xor a` bookkeeping ran ahead of this push and
+            ;; clobbered the thread's A -> a keystroke ISR that preempted the
+            ;; shell right after it read a character turned that character into
+            ;; 0x00/garbage and its echo/store was dropped.
             push    af
             push    bc
             push    de
@@ -89,6 +90,12 @@ drv_isr_enter::
             push    de
             push    hl
             exx
+            ;; A/flags are now free scratch; reset ISR bookkeeping and hold the
+            ;; interrupt-refcount bracket.
+            xor     a
+            ld      (drv_need_resched$),a
+            inc     a
+            ld      (drv_in_isr$),a
             ld      hl,#ir_refcnt
             inc     (hl)
             ;; recover this call's return address (the ISR body) from the top of
@@ -106,6 +113,8 @@ drv_isr_enter::
 drv_isr_exit::
             ld      hl,#ir_refcnt
             dec     (hl)
+            xor     a
+            ld      (drv_in_isr$),a       ; clear in_isr while A is still scratch
             exx
             pop     hl
             pop     de
@@ -119,20 +128,26 @@ drv_isr_exit::
             pop     hl
             pop     de
             pop     bc
-            pop     af
+            pop     af                    ; restore interrupted thread's AF
             ;; back onto the interrupted thread's stack (now pointing at the
             ;; hardware interrupt frame), then return into the thread.
             ld      sp,(drv_thread_sp$)
-            xor     a
-            ld      (drv_in_isr$),a
+            ;; decide reschedule WITHOUT corrupting the just-restored A/flags:
+            ;; on the reschedule path __thread_robin snapshots the current
+            ;; registers as the interrupted thread's context, so A/F must still
+            ;; hold that thread's values (a stale `xor a; ld a,(need_resched)`
+            ;; here used to zero the interrupted thread's A -> e.g. the shell's
+            ;; just-read keystroke turned into 0x00 and its echo was dropped).
+            push    af
             ld      a,(drv_need_resched$)
             or      a
             jr      z,drv_isr_reti$
-            ld      (drv_need_resched$),a ; preserve non-zero until the jump
             xor     a
             ld      (drv_need_resched$),a
+            pop     af                    ; restore A/F before the context snapshot
             jp      __thread_robin
 drv_isr_reti$:
+            pop     af
             ei
             reti
 
@@ -143,6 +158,8 @@ drv_in_isr$:
             .ds     1
 drv_need_resched$:
             .ds     1
+drv_stream_evt$:
+            .ds     2                   ; consumed event across drv_stream_read_ix
             .area   _CODE
 
             ;; ----------------------------------------------------------------
@@ -464,14 +481,24 @@ dtrf_tail_ok$:
             ;; success consumes the stacked event pointer. failure leaves it on
             ;; the stack so the caller can pop it in its own error path.
             ;; ----------------------------------------------------------------
+            ;; the event pointer is a STACKED arg the caller pushed BELOW our
+            ;; return address (callers do `push ix ; ... ; call drv_stream_read_ix`).
+            ;; consume it here up front -- popping it later would grab the return
+            ;; address instead (the latent bug that made every async read signal a
+            ;; garbage event). callers therefore no longer pop it themselves.
 drv_stream_read_ix::
+            pop     hl                  ; hl = return address
+            ex      (sp),hl             ; hl = event; stack top = return address.
+                                        ; use ex (sp) -- NOT `pop de` -- so DE
+                                        ; (the caller's read buffer) survives.
+            ld      (drv_stream_evt$),hl
             call    _ir_disable
             call    drv_read_drain_ring
             ld      a,b
             or      c
             jr      nz,dsri_need_wait$
             call    _ir_enable
-            pop     ix
+            ld      ix,(drv_stream_evt$)
             call    drv_signal_done
             ld      hl,#DRV_OK
             or      a
@@ -492,9 +519,9 @@ dsri_store$:
             call    drv_owner_current
             ld      DRV_ST_RDOWNER(ix),e
             ld      DRV_ST_RDOWNER+1(ix),d
-            pop     de
-            ld      DRV_ST_RDEVT(ix),e
-            ld      DRV_ST_RDEVT+1(ix),d
+            ld      hl,(drv_stream_evt$)
+            ld      DRV_ST_RDEVT(ix),l
+            ld      DRV_ST_RDEVT+1(ix),h
             call    drv_update_busy_ix
             call    _ir_enable
             ld      hl,#DRV_OK

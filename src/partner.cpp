@@ -7,6 +7,8 @@
 #include <cerrno>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
+#include <ctime>
 
 #include <fcntl.h>
 #include <unistd.h>
@@ -311,6 +313,20 @@ partner::partner(const std::string &rtc_nvram_path) : rtc_nvram_path_(rtc_nvram_
     hdc.present = false;
     idpartner_sasi_init(&sasi_, &hdc);
     mm58167a_init(&rtc);
+
+    // Deterministic RTC for reproducible tests. Without this the RTC visible
+    // time comes from host time(), which makes every boot's clock differ run to
+    // run -- a real source of nondeterminism that flakes timing-sensitive golden
+    // tests (e.g. GDP boots that occasionally mis-render/mis-detect). When
+    // IDP_FIXED_RTC is set the visible time is derived from the emulated tick
+    // counter at the 4 MHz CPU rate (det_base + tick_count/det_hz): reproducible
+    // AND advancing at the true emulated rate. The env var is already applied to
+    // the golden ctest suite (tests/CMakeLists.txt).
+    if (const char *fixed_rtc = std::getenv("IDP_FIXED_RTC")) {
+        rtc.det_base  = (time_t)std::strtoull(fixed_rtc, nullptr, 10);
+        rtc.det_hz    = 4000000u;      // Partner CPU clock (ticks per second)
+        rtc.det_ticks = &tick_count;   // stable member address
+    }
 
     // Connect sector-read callback (preserved across resets)
     fdc.read_sector = read_sector_cb;
@@ -1458,6 +1474,7 @@ void partner::load_rom(const std::string &path)
     file.read(reinterpret_cast<char *>(rom.data()), rom_size);
     if (!file)
         throw std::runtime_error("incomplete rom file: " + path);
+    rom_loaded_ = true;
 
     std::cout << "[info] rom loaded: " << path << "\n";
 }
@@ -1475,18 +1492,21 @@ void partner::reset()
     idpartner_sasi_reset(&sasi_);
     mm58167a_reset(&rtc);
     load_rtc_nvram();
-    rtc.regs[0x0F] &= 0xF0;
-    if (disks_[0].data.empty())
-        rtc.regs[0x09] &= (uint8_t)~PARTNER_FD0_TYPE_MASK;
-    if (disks_[1].data.empty())
-        rtc.regs[0x09] &= (uint8_t)~PARTNER_FD1_TYPE_MASK;
-    if (disks_[2].data.empty())
-        rtc.regs[0x09] &= (uint8_t)~PARTNER_FD2_TYPE_MASK;
-    if (disks_[3].data.empty())
-        rtc.regs[0x09] &= (uint8_t)~PARTNER_FD3_TYPE_MASK;
-    {
+    // Derive the BIOS-visible NVRAM config from the mounted hardware: clear the
+    // FD-type bits for empty drive slots and stamp a valid checksum nibble. Only
+    // when a boot ROM is present -- a bare NVRAM round-trip (no ROM) must read
+    // back exactly what was written, so leave the shadow bytes untouched then.
+    if (rom_loaded_) {
+        rtc.regs[0x0F] &= 0xF0;
+        if (disks_[0].data.empty())
+            rtc.regs[0x09] &= (uint8_t)~PARTNER_FD0_TYPE_MASK;
+        if (disks_[1].data.empty())
+            rtc.regs[0x09] &= (uint8_t)~PARTNER_FD1_TYPE_MASK;
+        if (disks_[2].data.empty())
+            rtc.regs[0x09] &= (uint8_t)~PARTNER_FD2_TYPE_MASK;
+        if (disks_[3].data.empty())
+            rtc.regs[0x09] &= (uint8_t)~PARTNER_FD3_TYPE_MASK;
         uint8_t nibble_sum = 0;
-
         for (uint8_t i = 0; i < 8; ++i) {
             const uint8_t value = rtc.regs[0x08 + i];
             nibble_sum = (uint8_t)((nibble_sum + (value & 0x0F)) & 0x0F);
@@ -1514,6 +1534,8 @@ void partner::reset()
     dbg_im2_ack_vectors.fill(0);
     dbg_im2_ack_pcs.fill(0);
     dbg_im2_ack_count = 0;
+    im2_ack_latched_ = false;
+    im2_ack_latched_vector_ = -1;
     dbg_irref_values.fill(0);
     dbg_irref_pcs.fill(0);
     dbg_irref_sps.fill(0);
@@ -1556,9 +1578,6 @@ void partner::tick()
     const bool cpu_ticked = !dma_owns_bus();
     if (cpu_ticked)
     {
-        const int daisy_vector = get_pending_daisy_vector();
-        const int external_im2_vector = get_external_im2_vector();
-
         // IM2 ack data is sampled by the CPU during internal step 1657.
         // Present the highest-priority interrupt vector on the bus one tick
         // earlier so the sample sees the intended byte instead of stale bus
@@ -1566,22 +1585,7 @@ void partner::tick()
         // and for daisy-chain devices such as the SIO keyboard interrupt.
         if (cpu.step == 1657)
         {
-            int ack_vector = -1;
-            if (daisy_vector >= 0)
-                ack_vector = daisy_vector;
-            else if (fdc.irq_request)
-                ack_vector = fdc_int_vector;
-            else if (external_im2_vector >= 0)
-                ack_vector = external_im2_vector;
-
-            const int fallback_vector = partner_fallback_im2_vector(ctc);
-            if (ack_vector == PARTNER_HD_DMA_VECTOR &&
-                ((peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)) & PARTNER_DEV_FLAG_BUSY) == 0)) {
-                ack_vector = fallback_vector;
-            }
-
-            if (ack_vector < 0)
-                ack_vector = fallback_vector;
+            const int ack_vector = select_im2_ack_vector();
 
             static const bool trace_int = [] {
                 const char *s = std::getenv("IDP_TRACE_INT");
@@ -1902,8 +1906,10 @@ void partner::clean_kernel_io_handoff()
     // collapses into a plain RETI instead of re-entering kernel cold-start.
     write_mem(PARTNER_KERNEL_IM2, (uint8_t)(PARTNER_SPURIOUS_IM2 & 0xFF));
     write_mem((uint16_t)(PARTNER_KERNEL_IM2 + 1), (uint8_t)(PARTNER_SPURIOUS_IM2 >> 8));
-    // Leave interrupt refcount at zero so the scheduler can ei after kernel entry.
-    write_mem(0xF9C1, 0);
+    // NOTE: do NOT poke a hardcoded interrupt-refcount address here. ir_refcnt
+    // now lives in the kernel reserve (0xFB71) and __ir_init self-seeds it; a
+    // stale poke at a fixed RAM address corrupts whatever OS variable currently
+    // occupies it whenever os.sys code size shifts (the old layout-fragility bug).
 }
 
 void partner::restore_drive_ready_flags()
@@ -1968,6 +1974,35 @@ int partner::get_pending_daisy_vector() const
     }
 
     return -1;
+}
+
+int partner::select_im2_ack_vector()
+{
+    if (im2_ack_latched_)
+        return im2_ack_latched_vector_;
+
+    const int daisy_vector = get_pending_daisy_vector();
+    const int external_im2_vector = get_external_im2_vector();
+    int ack_vector = -1;
+
+    if (daisy_vector >= 0)
+        ack_vector = daisy_vector;
+    else if (fdc.irq_request)
+        ack_vector = fdc_int_vector;
+    else if (external_im2_vector >= 0)
+        ack_vector = external_im2_vector;
+
+    const int fallback_vector = partner_fallback_im2_vector(ctc);
+    if (ack_vector == PARTNER_HD_DMA_VECTOR &&
+        ((peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)) & PARTNER_DEV_FLAG_BUSY) == 0)) {
+        ack_vector = fallback_vector;
+    }
+    if (ack_vector < 0)
+        ack_vector = fallback_vector;
+
+    im2_ack_latched_ = true;
+    im2_ack_latched_vector_ = ack_vector;
+    return ack_vector;
 }
 
 void partner::service_cpu_dma_port_write(uint64_t bus_pins)
@@ -2063,28 +2098,7 @@ void partner::service_cpu_bus(uint64_t &bus_pins)
     }
     else if ((bus_pins & (Z80_IORQ | Z80_M1)) == (Z80_IORQ | Z80_M1))
     {
-        const int external_im2_vector = get_external_im2_vector();
-        const int daisy_vector = get_pending_daisy_vector();
-        int ack_vector = -1;
-
-        // External 8272 IM2 acknowledge.
-        // Keep this on the early CPU bus phase so the vector byte lands on the
-        // same acknowledge cycle, but don't steal the cycle from daisy-chain
-        // devices when they have a pending/requested/serviced interrupt.
-        if (fdc.irq_request && (daisy_vector < 0))
-            ack_vector = fdc_int_vector;
-        else if ((external_im2_vector >= 0) && (daisy_vector < 0))
-            ack_vector = external_im2_vector;
-        else if (daisy_vector >= 0)
-            ack_vector = daisy_vector;
-
-        const int fallback_vector = partner_fallback_im2_vector(ctc);
-        if (ack_vector == PARTNER_HD_DMA_VECTOR &&
-            ((peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)) & PARTNER_DEV_FLAG_BUSY) == 0))
-            ack_vector = fallback_vector;
-
-        if (ack_vector < 0)
-            ack_vector = fallback_vector;
+        const int ack_vector = select_im2_ack_vector();
 
         dbg_im2_ack_vectors[dbg_im2_ack_count & 0x7u] = (uint8_t)ack_vector;
         dbg_im2_ack_pcs[dbg_im2_ack_count & 0x7u] = cpu.pc;
@@ -2104,6 +2118,10 @@ void partner::service_cpu_bus(uint64_t &bus_pins)
             fdc.irq_request = false;
             fdc_int_state = 0;
         }
+    }
+    if ((bus_pins & (Z80_IORQ | Z80_M1)) != (Z80_IORQ | Z80_M1)) {
+        im2_ack_latched_ = false;
+        im2_ack_latched_vector_ = -1;
     }
 
     last_cpu_bus_pins_ = bus_pins;

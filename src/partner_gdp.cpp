@@ -492,9 +492,12 @@ void partner_gdp::render_to(display &disp)
     const int avdc_cursor_span = std::clamp((int)(avdc_.ir[6] & 0x0F), 1, avdc_logical_scanlines);
     const int avdc_underline_scan = std::clamp((int)(avdc_.ir[7] & 0x0F), 0, avdc_logical_scanlines - 1);
     const bool avdc_text_blink_enabled = (avdc_.ir[4] & 0x80u) != 0;
-    const uint64_t now_ms = (uint64_t)
-        std::chrono::duration_cast<std::chrono::milliseconds>(
-            std::chrono::steady_clock::now().time_since_epoch()).count();
+    // Blink phase must be driven by *emulated* time, not host wall-clock:
+    // using steady_clock here made the GDP render nondeterministic (a screen
+    // dump could catch blinking cells in their "off" phase and read blank),
+    // which showed up as spurious ~10% "no shell prompt" boot failures in the
+    // partner_gdp golden tests. The Partner CPU runs at 4 MHz => 4000 ticks/ms.
+    const uint64_t now_ms = get_tick_count() / 4000u;
     // Character blink is field-rate based on IR4[7]: 1/64 or 1/128 VSYNC.
     const double blink_frames = ((avdc_.ir[4] & 0x80u) != 0u) ? 128.0 : 64.0;
     const double blink_period_ms_f = std::max(1.0, (blink_frames / 60.0) * 1000.0);

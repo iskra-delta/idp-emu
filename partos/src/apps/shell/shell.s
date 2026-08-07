@@ -21,6 +21,8 @@
             .equ    PARTOS_OFF_READ_KEYBOARD,   10
             .equ    PARTOS_OFF_RUN_COMMAND,     12
             .equ    PARTOS_OFF_ALLOCATE_MEMORY, 26
+            .equ    PARTOS_OFF_DISABLE_INTERRUPTS, 30
+            .equ    PARTOS_OFF_ENABLE_INTERRUPTS, 32
             .equ    PARTOS_OFF_REGISTER_SERVICE,38
             .equ    PARTOS_OFF_EXIT_PROCESS,    70
             .equ    PARTOS_OFF_GET_BOOT_FS,     88
@@ -32,6 +34,7 @@
             .equ    THREAD_PROCESS,             22
             .equ    PROCESS_CMDLINE,            15
             .equ    PROCESS_ENV,                17
+            .equ    SYSINFO_FIRST_PROCESS,      18
             .equ    SYSINFO_CURRENT_THREAD,     24
             .equ    SYSINFO_USER_HEAP,          36
 
@@ -146,6 +149,17 @@
             .globl  __reloc_attach_src$
             .globl  __reloc_attach_len2$
             .globl  __reloc_attach_empty_cmd$
+            .globl  __reloc_attach_disable$
+            .globl  __reloc_attach_live$
+            .globl  __reloc_attach_enable_dead$
+            .globl  __reloc_attach_enable_ok$
+            .globl  __reloc_attach_enable_empty$
+            .globl  __reloc_attach_enable_preserve$
+            .globl  __reloc_attach_live_store$
+            .globl  __reloc_attach_live_sysinfo$
+            .globl  __reloc_attach_live_load$
+            .globl  __reloc_di_off$
+            .globl  __reloc_ei_off$
             .globl  __reloc_run_result_store$
             .globl  __reloc_libcsvc_getcmd$
             .globl  __reloc_libcsvc_getenv$
@@ -594,10 +608,97 @@ sgev_fail$:
             ld      de,#0x0000
             ret
 
+shell_disable_interrupts$:
+            ld      bc,#PARTOS_OFF_DISABLE_INTERRUPTS
+            .db     0xcd
+__reloc_di_off$:
+            .dw     shell_call_offset$
+            ld      a,h
+            or      l
+            ret     z
+            jp      (hl)
+
+shell_enable_interrupts$:
+            ld      bc,#PARTOS_OFF_ENABLE_INTERRUPTS
+            .db     0xcd
+__reloc_ei_off$:
+            .dw     shell_call_offset$
+            ld      a,h
+            or      l
+            ret     z
+            jp      (hl)
+
+shell_attach_enable_preserve$:
+            push    de
+            .db     0xcd
+__reloc_attach_enable_preserve$:
+            .dw     shell_enable_interrupts$
+            pop     de
+            ret
+
+shell_process_is_live$:
+            .db     0xed, 0x53
+__reloc_attach_live_store$:
+            .dw     shell_tmp_ptr$
+            .db     0xcd
+__reloc_attach_live_sysinfo$:
+            .dw     shell_get_sys_info$
+            ld      a,d
+            or      e
+            jr      z,spl_no$
+            ex      de,hl
+            ld      bc,#SYSINFO_FIRST_PROCESS
+            add     hl,bc
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)
+spl_loop$:
+            ld      a,d
+            or      e
+            jr      z,spl_no$
+            .db     0x2a
+__reloc_attach_live_load$:
+            .dw     shell_tmp_ptr$
+            ld      a,h
+            cp      d
+            jr      nz,spl_next$
+            ld      a,l
+            cp      e
+            jr      z,spl_yes$
+spl_next$:
+            ex      de,hl
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)
+            jr      spl_loop$
+spl_yes$:
+            ld      a,#1
+            ret
+spl_no$:
+            xor     a
+            ret
+
 shell_attach_launch$:
             ld      a,d
             or      e
             ret     z
+            push    de
+            .db     0xcd
+__reloc_attach_disable$:
+            .dw     shell_disable_interrupts$
+            pop     de
+            push    de
+            .db     0xcd
+__reloc_attach_live$:
+            .dw     shell_process_is_live$
+            pop     de
+            or      a
+            jr      nz,sal_live$
+            .db     0xcd
+__reloc_attach_enable_dead$:
+            .dw     shell_attach_enable_preserve$
+            ret
+sal_live$:
             push    de
             ex      de,hl
             ld      bc,#PROCESS_ENV
@@ -668,6 +769,9 @@ __reloc_attach_len2$:
             ld      (hl),d
             ld      d,b
             ld      e,c
+            .db     0xcd
+__reloc_attach_enable_ok$:
+            .dw     shell_attach_enable_preserve$
             ret
 sal_store_empty$:
             pop     bc
@@ -684,6 +788,9 @@ __reloc_attach_empty_cmd$:
             inc     hl
             ld      (hl),d
             pop     de
+            .db     0xcd
+__reloc_attach_enable_empty$:
+            .dw     shell_attach_enable_preserve$
             ret
 
 shell_clear$:

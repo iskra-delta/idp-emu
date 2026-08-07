@@ -52,6 +52,7 @@
             .globl  drv_err
             .globl  __sys_nvram_cache
             .globl  sio_init
+            .globl  sio_console_rx_ring
             .globl  sio_dev0
             .globl  sio_dev1
             .globl  sio_dev2
@@ -92,6 +93,22 @@ sio_open::
             jp      c,drv_err
             call    _ir_disable
             call    sio_program_line$
+            ;; drain any RX byte the channel latched during the ROM era / reset,
+            ;; and clear the ring, so a stale byte cannot surface as a spurious
+            ;; keystroke on the first buffered read.
+sio_open_flush$:
+            ld      c,SIO_ST_CTRL(ix)
+            in      a,(c)
+            and     #SIO_RR0_RX_AVAIL
+            jr      z,sio_open_flushed$
+            ld      c,SIO_ST_DATA(ix)
+            in      a,(c)
+            jr      sio_open_flush$
+sio_open_flushed$:
+            xor     a
+            ld      SIO_ST_RXCOUNT(ix),a
+            ld      SIO_ST_RXHEAD(ix),a
+            ld      SIO_ST_RXTAIL(ix),a
             ld      l,SIO_ST_DEV(ix)
             ld      h,SIO_ST_DEV+1(ix)
             ld      de,#DEV_FLAGS
@@ -113,6 +130,10 @@ sio_open::
 sio_init::
             ld      hl,#sio_dev0$
             call    sio_init_dev0$
+            ;; point dev0 (console keyboard) at its static RX ring so the ISR
+            ;; always has a buffer (see sio_console_rx_ring in layout.s).
+            ld      hl,#sio_console_rx_ring
+            ld      (sio_state0$ + SIO_ST_RXBUF),hl
             ld      hl,#sio_dev1$
             call    sio_init_dev1$
             ld      hl,#sio_dev2$
@@ -179,8 +200,13 @@ sio_init_dev3$:
 sio_init_dev$:                          ; hl=dev, a=data, b=ctrl, de=state
             push    hl
             push    de
-            ld      bc,#DEV_DATA
-            add     hl,bc
+            ;; reach dev.data via DE, not BC: `ld bc,#DEV_DATA` would clobber B
+            ;; (the ctrl port) before we store it, leaving data[1] = 0 and every
+            ;; channel's SIO_ST_CTRL = 0 -> in a,(0) -> the async path reads
+            ;; garbage. DE holds the state ptr but it's saved on the stack and
+            ;; restored by the `pop de` below.
+            ld      de,#DEV_DATA
+            add     hl,de
             ld      (hl),a
             inc     hl
             ld      (hl),b
@@ -251,13 +277,22 @@ sid_zero$:
 sio_read::
             call    drv_zero_ok_bc_ix
             ret     z
-            push    ix                  ; preserve caller event pointer
-            call    sio_owner_guard$
+            push    de                  ; save buffer (owner guard clobbers DE)
+            push    ix                  ; stacked event for drv_stream_read_ix
+            call    sio_owner_guard$    ; ix = state; DE clobbered; BC preserved
             jr      c,sior_fail$
-            call    drv_stream_read_ix
+            ld      hl,#2               ; DE = buffer (below the event on the stack)
+            add     hl,sp
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)
+            call    drv_stream_read_ix  ; consumes the stacked event; DE=buf, ix=state
+            pop     hl                  ; drop the saved-buffer slot
             ret     nc
-            pop     ix
+            jp      drv_err
 sior_fail$:
+            pop     ix                  ; drop event
+            pop     de                  ; drop buffer
             jp      drv_err
 
             ;; ----------------------------------------------------------------
@@ -309,8 +344,6 @@ sio_ioctl::
             jp      z,sio_putc$
             cp      #SIO_IOCTL_PEEK
             jp      z,sio_peek$
-            cp      #SIO_IOCTL_GETC
-            jp      z,sio_getc$
             cp      #SIO_IOCTL_TTYINIT
             jp      z,sio_ttyinit$
             call    drv_owner_guard_ix
@@ -373,27 +406,26 @@ sio_putc_wait$:
             ld      hl,#DRV_OK
             ret
 
-            ;; sio_peek$() -> hl = char / 0xffff ; non-blocking receive
+            ;; sio_peek$(ix=state) -> hl = char / 0xffff ; non-blocking receive.
+            ;; drains ONE byte from the interrupt-filled RX ring (the ISR fills it
+            ;; via sss_rx$). blocking reads use sio_read; this is the one console
+            ;; primitive the async read API cannot express. must NOT poll the port
+            ;; directly -- that would steal bytes from the RX ISR. ir-bracketed so
+            ;; the drain of RXCOUNT/RXHEAD does not race the ISR.
 sio_peek$:
-            ei
-            in      a,(SIO0A_CTRL_PORT)
-            and     #SIO_RR0_RX_AVAIL
+            call    _ir_disable
+            ld      a,SIO_ST_RXCOUNT(ix)
+            or      a
             jr      nz,sio_peek_have$
+            call    _ir_enable
             ld      hl,#0xffff
             ret
 sio_peek_have$:
-            in      a,(SIO0A_DATA_PORT)
-            ld      l,a
-            ld      h,#0
-            ret
-
-            ;; sio_getc$() -> hl = char ; blocking receive
-sio_getc$:
-            ei
-            in      a,(SIO0A_CTRL_PORT)
-            and     #SIO_RR0_RX_AVAIL
-            jr      z,sio_getc$
-            in      a,(SIO0A_DATA_PORT)
+            ld      de,#sio_console_char$
+            ld      bc,#1
+            call    drv_read_drain_ring
+            call    _ir_enable
+            ld      a,(sio_console_char$)
             ld      l,a
             ld      h,#0
             ret
@@ -743,3 +775,5 @@ sio_state2$:
             .ds     SIO_ST_SIZE
 sio_state3$:
             .ds     SIO_ST_SIZE
+sio_console_char$:
+            .ds     1                   ; 1-byte scratch for the peek ring drain

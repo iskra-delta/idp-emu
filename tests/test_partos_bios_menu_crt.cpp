@@ -172,7 +172,7 @@ int main()
     }
 
     emu.key_input(0x03);
-    if (!wait_for_any_text(emu, "BOOTING", "NO BOOT DEVICE")) {
+    if (!wait_for_any_text(emu, "BOOT...", "NO BOOT")) {
         const auto cpu = emu.capture_debug_cpu_state();
         std::printf("FAIL boot path did not restart after Ctrl+C (pc=%04x sp=%04x halted=%d)\n",
                     (unsigned)cpu.pc, (unsigned)cpu.sp, cpu.halted ? 1 : 0);

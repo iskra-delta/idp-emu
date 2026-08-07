@@ -140,6 +140,32 @@ static void find_gdp_text_anywhere(const scn2674_t &avdc,
     }
 }
 
+static bool gdp_contains_text(const scn2674_t &avdc, const char *text)
+{
+    int row = -1;
+    int col = -1;
+
+    find_gdp_text_anywhere(avdc, text, row, col);
+    return row >= 0 && col >= 0;
+}
+
+static bool wait_for_gdp_any_text(partner_gdp &emu,
+                                  const char *text0,
+                                  const char *text1)
+{
+    for (uint64_t ticks = 0; ticks < TICK_LIMIT; ++ticks) {
+        emu.tick();
+        if ((ticks & 0x7FFu) != 0)
+            continue;
+        const auto &avdc = emu.get_avdc();
+        if (gdp_contains_text(avdc, text0) ||
+            gdp_contains_text(avdc, text1)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
 
 int main()
@@ -208,6 +234,25 @@ int main()
         std::printf("INFO ttys0 anywhere: row=%d col=%d\n", row, col);
         find_gdp_text_anywhere(avdc, "KEYBOARD", row, col);
         std::printf("INFO keyboard anywhere: row=%d col=%d\n", row, col);
+    }
+
+    emu.key_input(0x03);
+    if (!wait_for_gdp_any_text(emu, "BOOT...", "NO BOOT")) {
+        std::puts("FAIL boot path did not restart after Ctrl+C");
+        ++fails;
+    }
+    const auto &post_exit = emu.get_avdc();
+    if (gdp_contains_text(post_exit, "BIOS SETUP")) {
+        std::puts("FAIL setup title remained visible after boot restart");
+        ++fails;
+    }
+    if (gdp_contains_text(post_exit, "KEYBOARD")) {
+        std::puts("FAIL setup values remained visible after boot restart");
+        ++fails;
+    }
+    if (gdp_contains_text(post_exit, "FLOPPY")) {
+        std::puts("FAIL setup sections remained visible after boot restart");
+        ++fails;
     }
 
     fs::remove(nvram_path, ec);

@@ -11,5 +11,15 @@
             ;; 2026-06-22   tstih
             .module layout
 
+            .globl  sio_console_rx_ring
+
             .area   _INITIALIZED
             .area   _SYSVARS
+
+            ;; dev0 (console keyboard) RX ring backing store, placed FIRST in the
+            ;; bank-local _SYSVARS window (0x1000) so it sits far below the driver
+            ;; ISR stack at 0x1400. sio_init points sio_state0's RXBUF here so the
+            ;; SIO RX ISR always has a real ring to fill (a null RXBUF makes
+            ;; sss_ring$ silently drop keystrokes that arrive between reads).
+sio_console_rx_ring::
+            .ds     32                  ; must equal SIO_DEFAULT_RX in sio.inc

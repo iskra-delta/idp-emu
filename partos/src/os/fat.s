@@ -92,7 +92,11 @@
             .globl  fat_skip_slashes$
             .globl  fat_dev_open$
             .globl  fat_read_block$
+            .globl  fat_read_block_to$
             .globl  fat_write_block$
+            .globl  fat_cache_fdev$
+            .globl  fat_cache_fsec$
+            .globl  fat_xfer_buf$
             .globl  fat_write_volume_sector$
             .globl  fat_queue_req$
             .globl  fat_queue_push$
@@ -159,6 +163,7 @@
 
             .globl  _evt_create
             .globl  _evt_destroy
+            .globl  sched_wake_now$
             .globl  _evt_set
             .globl  _thread_create
             .globl  _thread_resume
@@ -236,6 +241,17 @@ fat_evt_state$:
             or      l
             ret     z
             ld      a,b
+            or      a
+            jr      z,fes_evt$          ; reset (NONSIGNALED): no fast-wake
+            ;; disk/FAT handoff (worker<->process, queue/completion): resume the
+            ;; woken thread on the next reschedule instead of a VBL frame later.
+            ;; Keyboard/SIO does NOT route through here, so console timing is
+            ;; unchanged. Consumed by __thread_select_next.
+            push    af
+            ld      a,#1
+            ld      (sched_wake_now$),a
+            pop     af
+fes_evt$:
             push    af
             inc     sp                 ; leave A (new state) as the 1-byte arg
             call    _evt_set            ; must CALL (evt_set reads arg above its
@@ -863,10 +879,33 @@ fat_wait_one$:
             ;; 256-byte block index becomes [0, block_lo, block_hi].
             ;; ----------------------------------------------------------------
 fat_read_block$:
+            ;; default: read into the shared FAT/metadata buffer, so drop the
+            ;; FAT-sector cache (fat_get_fat_entry$ re-validates after its read).
+            push    hl
+            ld      hl,#fat_sector$
+            ld      (fat_xfer_buf$),hl
+            ld      hl,#0
+            ld      (fat_cache_fdev$),hl
+            pop     hl
+            xor     a
+            jr      fat_xfer_block$
+
+            ;; fat_read_block_to$(<hl> dev, <de> block256): read into the buffer
+            ;; whose address is already in fat_xfer_buf$ (a caller/user DATA buffer).
+            ;; fat_sector$ is NOT touched, so the FAT-sector cache stays valid --
+            ;; this is what lets file/dir DATA reads avoid thrashing the FAT cache.
+fat_read_block_to$:
             xor     a
             jr      fat_xfer_block$
 
 fat_write_block$:
+            ;; writes source fat_sector$ back; drop the FAT-sector cache too.
+            push    hl
+            ld      hl,#fat_sector$
+            ld      (fat_xfer_buf$),hl
+            ld      hl,#0
+            ld      (fat_cache_fdev$),hl
+            pop     hl
             ld      a,#1
 
 fat_xfer_block$:
@@ -892,7 +931,7 @@ fat_xfer_block$:
             jr      nz,fxb_fail_pop$
             pop     hl                  ; restore dev for read()
 
-            ld      de,#fat_sector$
+            ld      de,(fat_xfer_buf$)
             ld      bc,#FAT_SECTOR_SIZE
             ld      ix,(fat_io_event$)
             pop     af
@@ -1346,6 +1385,22 @@ fat_work_dev$:
 fat_work_event$:
             .ds     2
 fat_current_req$:
+            .ds     2
+            ;; single-sector FAT cache: which (dev, volume-relative sector) is
+            ;; currently held in fat_sector$ as a FAT sector. fdev==0 means the
+            ;; cache is invalid. Any fat_xfer_block$ (read or write of ANY block)
+            ;; clears fdev, so a directory/data read or a FAT write never leaves a
+            ;; stale hit; fat_get_fat_entry$ re-validates it after a real read.
+            ;; Zeroed at OS entry (_SYSVARS clear) -> starts invalid.
+fat_cache_fdev$:
+            .ds     2
+fat_cache_fsec$:
+            .ds     2
+            ;; destination buffer for the next fat_xfer_block$ read/write. defaults
+            ;; to fat_sector$ (set by fat_read_block$/fat_write_block$); a file/dir
+            ;; DATA read points it straight at the caller's user buffer via
+            ;; fat_read_block_to$, so fat_sector$ (the FAT cache) is not disturbed.
+fat_xfer_buf$:
             .ds     2
 fat_submit_frame$:
             .ds     10

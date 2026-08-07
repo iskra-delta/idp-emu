@@ -341,6 +341,10 @@ set_tests_properties(partos_full_boot_fd0 PROPERTIES
 # rmdir + cwd-only-lookup and slash-path negative cases), asserting output and
 # detecting freezes/timeouts.
 add_test(NAME partos_shell_regression COMMAND idp-shell-regression)
+add_test(NAME partos_shell_stress COMMAND idp-shell-regression)
+set_tests_properties(partos_shell_stress PROPERTIES
+    ENVIRONMENT "IDP_STRESS_ROUNDS=8;IDP_KEY_TICKS=0"
+)
 
 set_tests_properties(
     partos_kernel_boot
@@ -348,6 +352,7 @@ set_tests_properties(
     partos_full_boot
     partos_full_boot_fd0
     partos_shell_regression
+    partos_shell_stress
     PROPERTIES
     WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
 )
@@ -363,7 +368,7 @@ foreach(idp_partos_test
     partos_cd_return partos_cp_return partos_cwd_command_lookup
     partos_mv_cross_dir_lookup partos_cd_fd0_missing rtc_nvram_shadow
     partos_kernel_boot partos_bootload partos_full_boot
-    partos_full_boot_fd0 partos_shell_regression)
+    partos_full_boot_fd0 partos_shell_regression partos_shell_stress)
   set_property(TEST ${idp_partos_test} APPEND PROPERTY
       ENVIRONMENT "IDP_FIXED_RTC=1700000000")
 endforeach()

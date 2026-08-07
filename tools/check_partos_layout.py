@@ -116,6 +116,7 @@ def collect_layout() -> dict[str, int]:
         "boot_event": find_symbol_addr(OS_MAP, "boot_event$"),
         "fat_queue_event": find_symbol_addr(OS_MAP, "fat_queue_event$"),
         "fat_io_event": find_symbol_addr(OS_MAP, "fat_io_event$"),
+        "sys_nvram_cache": find_symbol_addr(OS_MAP, "__sys_nvram_cache"),
     }
     layout["hd_io_ptr"] = layout["hd_dev0"] + 0x14
     layout["hd_dma_trace_lo"] = layout["hd_dma_setup"]
@@ -158,7 +159,8 @@ def validate_layout(layout: dict[str, int]) -> None:
         f"hd_dev0=0x{layout['hd_dev0']:04X} hd_read=0x{layout['hd_read']:04X} "
         f"hd_dma_setup=0x{layout['hd_dma_setup']:04X} hd_dma_abort=0x{layout['hd_dma_abort']:04X} "
         f"boot_event=0x{layout['boot_event']:04X} fat_queue_event=0x{layout['fat_queue_event']:04X} "
-        f"fat_io_event=0x{layout['fat_io_event']:04X}"
+        f"fat_io_event=0x{layout['fat_io_event']:04X} "
+        f"sys_nvram_cache=0x{layout['sys_nvram_cache']:04X}"
     )
 
 
@@ -183,6 +185,7 @@ inline constexpr std::uint16_t hd_dma_trace_hi = 0x{layout["hd_dma_trace_hi"]:04
 inline constexpr std::uint16_t boot_event = 0x{layout["boot_event"]:04X};
 inline constexpr std::uint16_t fat_queue_event = 0x{layout["fat_queue_event"]:04X};
 inline constexpr std::uint16_t fat_io_event = 0x{layout["fat_io_event"]:04X};
+inline constexpr std::uint16_t sys_nvram_cache = 0x{layout["sys_nvram_cache"]:04X};
 inline constexpr std::uint32_t kernel_size = {layout["kernel_size"]};
 inline constexpr std::uint32_t os_size = {layout["os_size"]};
 }}  // namespace partos_layout

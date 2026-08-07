@@ -14,6 +14,29 @@ static uint8_t cd_dev_required;
 static const char cd_usage_text[] = "usage: cd [PATH|DEV/PATH]";
 static const char cd_error_text[] = "?";
 
+static void cd_lower_ascii(char *s)
+{
+    while (*s != 0) {
+        if (*s >= 'A') {
+            if (*s <= 'Z') {
+                *s = (char)(*s - 'A' + 'a');
+            }
+        }
+        s++;
+    }
+}
+
+static uint8_t cd_end_or_slash(char ch)
+{
+    if (ch == 0) {
+        return 1u;
+    }
+    if (ch == '/') {
+        return 1u;
+    }
+    return 0u;
+}
+
 static void cd_restore_current_fs(const fat_fs_t *src)
 {
     fat_fs_t *dst = app_boot_filesystem();
@@ -64,6 +87,7 @@ int main(int argc, char **argv)
             !app_require_eol(cursor)) {
             goto cd_usage;
         }
+        cd_lower_ascii(cd_arg);
         cd_token = cd_arg;
         cd_path_arg = cd_token;
 
@@ -72,43 +96,56 @@ int main(int argc, char **argv)
             cd_dev_required = 1u;
         }
 
-        if ((((cd_path_arg[0] == 'h') || (cd_path_arg[0] == 'H')) &&
-             ((cd_path_arg[1] == 'd') || (cd_path_arg[1] == 'D')) &&
-             (cd_path_arg[2] >= '0') && (cd_path_arg[2] <= '1') &&
-             ((cd_path_arg[3] == 0) || (cd_path_arg[3] == '/')))) {
-            cd_dev[0] = 's';
-            cd_dev[1] = 'd';
-            cd_dev[2] = (char)('a' + (cd_path_arg[2] - '0'));
-            cd_dev[3] = 0;
-            cd_path_arg += 3u;
-            cd_switch_fs = 1u;
-        } else if ((((cd_path_arg[0] == 's') || (cd_path_arg[0] == 'S')) &&
-                    ((cd_path_arg[1] == 'd') || (cd_path_arg[1] == 'D')) &&
-                    (((cd_path_arg[2] >= 'a') && (cd_path_arg[2] <= 'b')) ||
-                     ((cd_path_arg[2] >= 'A') && (cd_path_arg[2] <= 'B'))) &&
-                    ((cd_path_arg[3] == 0) || (cd_path_arg[3] == '/')))) {
-            cd_dev[0] = 's';
-            cd_dev[1] = 'd';
-            if ((cd_path_arg[2] >= 'A') && (cd_path_arg[2] <= 'B')) {
-                cd_dev[2] = (char)(cd_path_arg[2] - 'A' + 'a');
-            } else {
-                cd_dev[2] = cd_path_arg[2];
+        if (strncmp(cd_path_arg, "hd", 2u) == 0) {
+            if (cd_path_arg[2] >= '0') {
+                if (cd_path_arg[2] <= '1') {
+                    if (cd_end_or_slash(cd_path_arg[3]) != 0u) {
+                        cd_dev[0] = 's';
+                        cd_dev[1] = 'd';
+                        cd_dev[2] = (char)('a' + (cd_path_arg[2] - '0'));
+                        cd_dev[3] = 0;
+                        cd_path_arg += 3u;
+                        cd_switch_fs = 1u;
+                    }
+                }
             }
-            cd_dev[3] = 0;
-            cd_path_arg += 3u;
-            cd_switch_fs = 1u;
-        } else if ((((cd_path_arg[0] == 'f') || (cd_path_arg[0] == 'F')) &&
-                    ((cd_path_arg[1] == 'd') || (cd_path_arg[1] == 'D')) &&
-                    (cd_path_arg[2] >= '0') && (cd_path_arg[2] <= '3') &&
-                    ((cd_path_arg[3] == 0) || (cd_path_arg[3] == '/')))) {
-            cd_dev[0] = 'f';
-            cd_dev[1] = 'd';
-            cd_dev[2] = cd_path_arg[2];
-            cd_dev[3] = 0;
-            cd_path_arg += 3u;
-            cd_switch_fs = 1u;
-        } else if (cd_dev_required != 0u) {
-            goto cd_usage;
+        }
+        if (cd_switch_fs == 0u) {
+            if (strncmp(cd_path_arg, "sd", 2u) == 0) {
+                if (cd_path_arg[2] >= 'a') {
+                    if (cd_path_arg[2] <= 'b') {
+                        if (cd_end_or_slash(cd_path_arg[3]) != 0u) {
+                            cd_dev[0] = 's';
+                            cd_dev[1] = 'd';
+                            cd_dev[2] = cd_path_arg[2];
+                            cd_dev[3] = 0;
+                            cd_path_arg += 3u;
+                            cd_switch_fs = 1u;
+                        }
+                    }
+                }
+            }
+        }
+        if (cd_switch_fs == 0u) {
+            if (strncmp(cd_path_arg, "fd", 2u) == 0) {
+                if (cd_path_arg[2] >= '0') {
+                    if (cd_path_arg[2] <= '3') {
+                        if (cd_end_or_slash(cd_path_arg[3]) != 0u) {
+                            cd_dev[0] = 'f';
+                            cd_dev[1] = 'd';
+                            cd_dev[2] = cd_path_arg[2];
+                            cd_dev[3] = 0;
+                            cd_path_arg += 3u;
+                            cd_switch_fs = 1u;
+                        }
+                    }
+                }
+            }
+        }
+        if (cd_switch_fs == 0u) {
+            if (cd_dev_required != 0u) {
+                goto cd_usage;
+            }
         }
 
         if (cd_switch_fs != 0u) {

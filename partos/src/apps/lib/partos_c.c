@@ -40,74 +40,43 @@ static uint8_t app_cstr_len(const char *s)
     return len;
 }
 
-/* ---- service-table wrappers (call the live partos_t through app_partos) ---- */
+/* ---- service-table accessors (the partos table is always live in a running
+ * app: app_bootstrap() halts via app_dead() if it cannot be bound, so no
+ * per-call null ceremony is needed). ---- */
 
 sys_info_t *app_sys_info(void)
 {
-    partos_t *partos = app_partos();
-
-    if ((partos == 0) || (partos->get_sys_info == 0)) {
-        return 0;
-    }
-    return partos->get_sys_info();
+    return app_partos()->get_sys_info();
 }
 
 fat_fs_t *app_boot_filesystem(void)
 {
-    partos_t *partos = app_partos();
-
-    if ((partos == 0) || (partos->get_boot_filesystem == 0)) {
-        return 0;
-    }
-    return partos->get_boot_filesystem();
+    return app_partos()->get_boot_filesystem();
 }
 
 char *app_current_dir(void)
 {
-    partos_t *partos = app_partos();
-
-    if ((partos == 0) || (partos->get_current_dir == 0)) {
-        return 0;
-    }
-    return partos->get_current_dir();
+    return app_partos()->get_current_dir();
 }
 
 int16_t app_clear_screen(void)
 {
-    partos_t *partos = app_partos();
-
-    if ((partos == 0) || (partos->clear_screen == 0)) {
-        return 0;
-    }
-    return partos->clear_screen();
+    return app_partos()->clear_screen();
 }
 
 int16_t app_write_buffer(const void *buf, uint16_t len)
 {
-    partos_t *partos = app_partos();
-
-    if ((buf == 0) || (len == 0u)) {
-        return 0;
-    }
-    if ((partos == 0) || (partos->write_console == 0)) {
-        return 0;
-    }
-    return partos->write_console(buf, len);
+    return app_partos()->write_console(buf, len);
 }
 
 void app_write_cstr(const char *s)
 {
     uint16_t len = 0;
 
-    if (s == 0) {
-        return;
-    }
     while (s[len] != 0) {
         len++;
     }
-    if (len != 0u) {
-        (void)app_write_buffer(s, len);
-    }
+    (void)app_write_buffer(s, len);
 }
 
 void app_write_newline(void)
@@ -119,11 +88,7 @@ void app_write_newline(void)
 
 void app_set_text_attr(uint8_t attr)
 {
-    partos_t *partos = app_partos();
-
-    if ((partos != 0) && (partos->set_text_attr != 0)) {
-        (void)partos->set_text_attr(attr);
-    }
+    (void)app_partos()->set_text_attr(attr);
 }
 
 void app_write_hex16(uint16_t value)
@@ -142,21 +107,13 @@ void app_write_hex16(uint16_t value)
 
 uint8_t app_read_u8(const void *base, uint8_t offset)
 {
-    const uint8_t *p = (const uint8_t *)base;
-
-    if (p == 0) {
-        return 0u;
-    }
-    return p[offset];
+    return ((const uint8_t *)base)[offset];
 }
 
 uint16_t app_read_u16(const void *base, uint8_t offset)
 {
     const uint8_t *p = (const uint8_t *)base;
 
-    if (p == 0) {
-        return 0u;
-    }
     return (uint16_t)p[offset] | ((uint16_t)p[offset + 1u] << 8);
 }
 
@@ -164,9 +121,6 @@ void app_write_u16(void *base, uint8_t offset, uint16_t value)
 {
     uint8_t *p = (uint8_t *)base;
 
-    if (p == 0) {
-        return;
-    }
     p[offset] = (uint8_t)value;
     p[offset + 1u] = (uint8_t)(value >> 8);
 }

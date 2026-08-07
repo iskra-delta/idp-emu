@@ -37,6 +37,7 @@
             .globl  __thread_cleanup_terminated
             .globl  __thread_select_next
             .globl  __thread_robin
+            .globl  sched_wake_now$
             .globl  tc_fail0$
             .globl  tc_fail1$
 
@@ -557,6 +558,8 @@ tct_skip$:
             ;; ----------------------------------------------------------------
 __thread_select_next::
             call    thread_cleanup_terminated$
+            ld      hl,#0
+            ld      (tsn_woken$),hl     ; no thread promoted yet this pass
             ld      hl,(_thread_first_waiting)
 tsn_wl$:
             ld      a,h
@@ -587,6 +590,13 @@ tsn_wl$:
             call    _list_remove
             pop     bc                  ; t
             push    bc                  ; t
+            ;; remember the FIRST thread woken this pass (all still get promoted)
+            ld      hl,(tsn_woken$)
+            ld      a,h
+            or      l
+            jr      nz,tsn_have_woken$
+            ld      (tsn_woken$),bc
+tsn_have_woken$:
             ld      e,c
             ld      d,b
             ld      hl,#_thread_first_running
@@ -599,6 +609,16 @@ tsn_nosig$:
             pop     hl                  ; hl = next
             jr      tsn_wl$
 tsn_select$:
+            ld      a,(sched_wake_now$)
+            or      a
+            jr      z,tsn_roundrobin$   ; no urgent wake -> normal round-robin
+            xor     a
+            ld      (sched_wake_now$),a ; consume the one-shot request
+            ld      de,(tsn_woken$)
+            ld      a,d
+            or      e
+            ret     nz                  ; run the just-woken I/O worker now
+tsn_roundrobin$:
             ld      hl,(_thread_current)
             ld      a,h
             or      l
@@ -731,6 +751,12 @@ _thread_first_terminated::
 __evt_first::
             .ds     2
 
+            ;; __thread_select_next scratch: first thread promoted (waiting->
+            ;; running) this pass because its event just signaled. Overlaid on the
+            ;; thread_create scratch below: both are touched only with interrupts
+            ;; off, and thread_create never triggers a reschedule, so select_next
+            ;; and thread_create can never run concurrently.
+tsn_woken$:
             ;; thread_create scratch (valid only inside its critical section)
 tc_entry$:
             .ds     2
@@ -738,6 +764,13 @@ tc_stksz$:
             .ds     2
 tc_data$:
             .ds     2
+            ;; one-shot "run the just-woken thread now" request. A bulk-I/O
+            ;; completion ISR (e.g. _hd_isr) sets it so its blocked worker resumes
+            ;; immediately instead of after a VBL frame; select_next consumes it.
+            ;; Sparse I/O (keyboard SIO) does NOT set it, so console timing is
+            ;; unchanged. Overlaid on tc_bank$: set only from an ISR, and ISRs
+            ;; never fire during thread_create (interrupts off), so no conflict.
+sched_wake_now$:
 tc_bank$:
             .ds     1
 tc_t$:

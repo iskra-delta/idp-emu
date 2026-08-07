@@ -42,6 +42,7 @@
             .globl  fat_submit_path_req$
             .globl  fat_submit_frame$
             .globl  fat_read_volume_sector$
+            .globl  fat_read_volume_sector_to$
             .globl  fat_write_volume_sector$
             .globl  fat_cluster_to_sector$
             .globl  fat_is_eoc$
@@ -728,15 +729,18 @@ fhio_have_cluster$:
             jr      fhio_after_sector$
 
 fhio_read_sector$:
-            call    fat_read_volume_sector$
+            ;; stream the data sector straight into the caller's buffer (not via
+            ;; fat_sector$), so the FAT-sector cache survives the read -- following
+            ;; a file/dir cluster chain no longer re-reads the FAT each sector.
+            ld      hl,(fat_file_buf$)  ; de = rel sector (set above), hl = dest
+            call    fat_read_volume_sector_to$
             ld      a,h
             or      l
             jp      nz,fhio_finish_hl$
-            ld      de,(fat_file_buf$)
-            ld      hl,#fat_sector$
-            ld      bc,#FAT_SECTOR_SIZE
-            ldir
-            ld      (fat_file_buf$),de
+            ld      hl,(fat_file_buf$)
+            ld      de,#FAT_SECTOR_SIZE
+            add     hl,de
+            ld      (fat_file_buf$),hl
 
 fhio_after_sector$:
             ld      hl,(fat_file_pos_secs$)

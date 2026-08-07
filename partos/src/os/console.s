@@ -7,9 +7,8 @@
             ;;   - text models print through the first configured TERMINAL SIO
             ;;   - keyboard input is read through the SIO driver (SIO0A channel)
             ;;
-            ;; keyboard input goes through the SIO driver's synchronous polled
-            ;; ioctls (PEEK / GETC, see drivers/sio.inc) instead of poking the SIO
-            ;; ports here. text output still uses the small inline polled TX below:
+            ;; keyboard input goes through the SIO driver's interrupt-driven read
+            ;; path. text output still uses the small inline polled TX below:
             ;; routing text output through the driver's PUTC/TTYINIT ioctls also
             ;; works electrically, but it perturbs the OS layout enough to trip a
             ;; latent (nondeterministic-`-Os`-userland) command-execution bug, so
@@ -46,6 +45,12 @@
             .globl  __sys_nvram_cache
             .globl  sio_ioctl
             .globl  sio_dev0
+            .globl  sio_open
+            .globl  sio_read
+            .globl  _evt_create
+            .globl  _evt_set
+            .globl  _thread_wait4events
+            .globl  _ir_enable
 
             .equ    MODEL_F_GRAPHICS,          0x01
             .equ    CONSOLE_MODE_TTY,          0
@@ -121,9 +126,14 @@ console_tty3$:
             ret
 
 _console_init::
-            ;; keyboard path is always prepared on sio0a.
-            ld      a,#SIO0A_CTRL_PORT
-            call    console_tty_init_ctrl$
+            ;; open SIO0A for interrupt-driven keyboard: RX ISR fills the ring
+            ;; and completes pending reads; create the event read_keyboard waits
+            ;; on. (verified: the RX ISR fires and drains keystrokes.)
+            ld      hl,#sio_dev0
+            call    sio_open
+            ld      hl,#0               ; owner = NONE
+            call    _evt_create         ; de = event
+            ld      (console_kbd_event$),de
 
             xor     a
             ld      (console_mode$),a
@@ -152,7 +162,6 @@ console_text$:
             ld      (console_tx_data$),a
             ld      a,e
             ld      (console_tx_ctrl$),a
-            ld      a,e
             call    console_tty_init_ctrl$
             ret
 
@@ -315,15 +324,33 @@ _partos_peek_keyboard::
             ret
 
 _partos_read_keyboard::
-            ;; blocking keyboard read through the SIO driver (its GETC re-arms
-            ;; interrupts on every polling pass). same register contract as peek.
+            ;; BLOCKING keyboard read via the async driver: arm the event, issue
+            ;; a 1-byte sio_read (drains the ring or registers a pending read the
+            ;; RX ISR completes), then sleep on the event. the thread yields the
+            ;; CPU until a key arrives. result in de; hl/bc/ix preserved.
             push    ix
             push    hl
             push    bc
+            ld      hl,(console_kbd_event$)
+            ld      (console_kbd_wait$),hl
+            xor     a
+            push    af
+            inc     sp
+            call    _evt_set            ; set_event(event, 0)
             ld      hl,#sio_dev0
-            ld      bc,#SIO_IOCTL_GETC
-            call    sio_ioctl           ; hl = char
-            ex      de,hl
+            ld      de,#console_kbd_char$
+            ld      bc,#1
+            ld      ix,(console_kbd_event$)
+            call    sio_read
+            ld      hl,#console_kbd_wait$
+            ld      a,#1
+            push    af
+            inc     sp
+            call    _ir_enable
+            call    _thread_wait4events
+            ld      a,(console_kbd_char$)
+            ld      e,a
+            ld      d,#0
             pop     bc
             pop     hl
             pop     ix
@@ -332,7 +359,7 @@ _partos_read_keyboard::
             .area   _INITIALIZED
 
 console_sio_init$:
-            .db     0x18,0x04,0x44,0x03,0xc1,0x05,0x68,0x01,0x00
+            .db     0x18,0x04,0x44,0x03,0xc1,0x05,0x68,0x01,0x18
 
             .area   _SYSVARS
 
@@ -345,4 +372,10 @@ console_tx_ctrl$:
 console_attr$:
             .ds     1
 console_dev$:
+            .ds     2
+console_kbd_event$:
+            .ds     2
+console_kbd_char$:
+            .ds     1
+console_kbd_wait$:
             .ds     2

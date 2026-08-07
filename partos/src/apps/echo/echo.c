@@ -6,7 +6,7 @@ int main(int argc, char **argv)
 
     for (i = 1; i < argc; ++i) {
         if (i != 1) {
-            (void)putchar(' ');
+            (void)write(" ", 1u);
         }
         (void)write(argv[i], strlen(argv[i]));
     }

@@ -27,6 +27,7 @@ XBIN     := $(abspath ../tools/xcc)
 XCC      := $(XBIN)/xcc
 XAS      := $(XBIN)/xas
 XLD      := $(XBIN)/xld
+XCC_FIX_PROLOGUE := ../tools/fix_xcc_prologue.py
 # xcc lowers some ops (e.g. 16-bit multiply) to runtime helpers; pull them from
 # the suite's runtime lib. `-nostdlib` keeps crt0/libc/platform libs out.
 XRUNTIME := -L/opt/x/z80/lib -lruntime
@@ -152,7 +153,11 @@ PS_COM         := $(BIN)/ps.com
 PS_STACK       := 1024
 
 # shared support module for the newer syscall-only tools
-APP_SUPPORT_ASM_SRC := src/apps/lib/call_hl.s src/apps/lib/call_iy.s src/apps/lib/crt0.s src/apps/lib/bootstrap.s src/apps/lib/cwdcall.s src/apps/lib/fscall.s src/apps/lib/svccall.s
+# NOTE: call_hl.s / call_iy.s (SDCC's ___sdcc_call_hl/_iy indirect-call helpers)
+# are gone: xcc lowers function-pointer calls to ___sdcc_call_bc, which it
+# supplies from its own -lruntime, so those SDCC-named helpers are never
+# referenced.
+APP_SUPPORT_ASM_SRC := src/apps/lib/crt0.s src/apps/lib/bootstrap.s src/apps/lib/cwdcall.s src/apps/lib/fscall.s src/apps/lib/svccall.s
 APP_SUPPORT_ASM_RELS := $(patsubst src/%.s,$(BUILD)/%.rel,$(APP_SUPPORT_ASM_SRC))
 APP_SUPPORT_C_SRC := src/apps/lib/runtime.c src/apps/lib/partos_c.c src/apps/lib/libc.c
 APP_SUPPORT_C_REL := $(patsubst src/%.c,$(BUILD)/%.rel,$(APP_SUPPORT_C_SRC))
@@ -248,6 +253,12 @@ disks: sys
 $(BUILD)/%.rel: src/%.s $(ASM_DEPS)
 	@mkdir -p $(dir $@)
 	cd $(dir $<) && $(AS) -o $(abspath $@) $(notdir $<)
+
+$(BUILD)/apps/%.rel: src/apps/%.c $(C_DEPS) $(XCC_FIX_PROLOGUE)
+	@mkdir -p $(dir $@)
+	cd $(dir $<) && $(CC) $(CCFLAGS) -S -o $(abspath $@).s $(notdir $<)
+	python3 $(XCC_FIX_PROLOGUE) $(abspath $@).s $(abspath $@).fixed.s
+	$(AS) -o $(abspath $@) $(abspath $@).fixed.s
 
 $(BUILD)/%.rel: src/%.c $(C_DEPS)
 	@mkdir -p $(dir $@)

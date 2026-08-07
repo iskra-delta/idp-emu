@@ -190,16 +190,25 @@ pio_init::
 pio_read::
             call    drv_zero_ok_bc_ix
             ret     z
-            push    ix
+            push    de                  ; save buffer (owner guard clobbers DE)
+            push    ix                  ; stacked event for drv_stream_read_ix
             call    pio_owner_guard$
             jr      c,pior_fail$
             ld      a,PIO_ST_MODE(ix)
             cp      #PIO_MODE_INPUT
             jr      nz,pior_fail$
-            call    drv_stream_read_ix
+            ld      hl,#2               ; DE = buffer (below the event on the stack)
+            add     hl,sp
+            ld      e,(hl)
+            inc     hl
+            ld      d,(hl)
+            call    drv_stream_read_ix  ; consumes the stacked event; DE=buf, ix=state
+            pop     hl                  ; drop the saved-buffer slot
             ret     nc
-            pop     ix
+            jp      drv_err
 pior_fail$:
+            pop     ix                  ; drop event
+            pop     de                  ; drop buffer
             jp      drv_err
 
             ;; ----------------------------------------------------------------

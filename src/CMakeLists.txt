@@ -80,6 +80,11 @@ target_link_libraries(idp-shell-regression PRIVATE chipsex imgui_lib SDL2::SDL2 
 target_compile_definitions(idp-shell-regression PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 idp_require_partos_layout(idp-shell-regression)
 
+add_executable(idp-hang-trace probe_hang_trace.cpp ${IDP_CORE_SOURCES})
+target_link_libraries(idp-hang-trace PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
+target_compile_definitions(idp-hang-trace PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+idp_require_partos_layout(idp-hang-trace)
+
 # Optional: define your own debug macro if needed
 target_compile_definitions(idp-emu PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)
 target_compile_definitions(idp-probe PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)

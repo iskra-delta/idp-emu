@@ -166,6 +166,15 @@ extern "C"
         uint8_t addr_latch;    // latched address (via AS)
         time_t last_sync_time; // for refreshing time
         bool nvram_init_done;  // battery-backed setup area initialized once
+        // Deterministic emulated clock (for reproducible tests). When det_ticks
+        // is non-NULL the visible time is derived from the emulated tick counter
+        // (det_base + *det_ticks / det_hz) instead of host time(). This is both
+        // reproducible AND advancing at the true emulated rate; host time() makes
+        // the RTC race the emulation (nondeterministic) and freezing it hangs
+        // boots that wait for the clock to tick.
+        const uint64_t *det_ticks;
+        uint64_t det_hz;
+        time_t   det_base;
     } mm58167a_t;
 
     void mm58167a_init(mm58167a_t *chip);
@@ -209,13 +218,14 @@ void mm58167a_reset(mm58167a_t *chip)
 
 void mm58167a_sync_time(mm58167a_t *chip)
 {
-    time_t now = time(NULL);
-    /* Deterministic-clock override for reproducible tests: when IDP_FIXED_RTC
-     * is set, use that fixed epoch instead of the host wall clock. */
-    {
-        const char *fixed = getenv("IDP_FIXED_RTC");
-        if (fixed != NULL && *fixed != '\0')
-            now = (time_t)strtol(fixed, NULL, 10);
+    time_t now;
+    if (chip->det_ticks != NULL) {
+        /* Deterministic emulated clock: advance from the emulated tick counter
+         * at the CPU clock rate. Reproducible and advancing. */
+        uint64_t hz = chip->det_hz ? chip->det_hz : 1u;
+        now = (time_t)(chip->det_base + (time_t)(*chip->det_ticks / hz));
+    } else {
+        now = time(NULL);
     }
     if (now == chip->last_sync_time)
         return;
