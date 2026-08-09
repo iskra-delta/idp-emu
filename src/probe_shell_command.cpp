@@ -288,7 +288,7 @@ static bool build_all(const std::string &root)
         std::puts("FAIL: PartOS ROM/sys build failed");
         return false;
     }
-    if (std::system(("python3 " + root + "/tools/mkdosdisk.py " + root + "/disks").c_str()) != 0) {
+    if (std::system(("python3 " PARTOS_ROOT "/tools/mkdosdisk.py " + root + "/disks").c_str()) != 0) {
         std::puts("FAIL: disk image build failed");
         return false;
     }
