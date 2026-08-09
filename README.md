@@ -82,11 +82,26 @@ Run Partner G (GDP) with the minimal user-area-0 system disk:
 
 In VS Code, `F5` defaults to the `Original Partner GDP CP/M` launch configuration from `.vscode/launch.json`. It boots the original Partner GDP ROM from `roms/partner_gdp.rom` with the minimal CP/M hard-disk image from `disks/hdd-partner-g-system.img` and keeps its CMOS settings in `partner_cmos.bin`, separate from PartOS. The disk contains only essential system tools in user area 0 and has no `PROFILE.SUB`. The PartOS launch remains available as `PartOS Boot (Unsafe Build Only)` when needed.
 
-To run the PartOS guard separately from the terminal, use:
+### Type commands after startup
+
+Use `--commands` to type through the emulated keyboard after the GUI opens and
+the guest keyboard and display have settled. Both literal newlines and `\n`
+escapes are converted to the Enter key:
 
 ```bash
-make partos-smoke
+./bin/idp-emu --model crt --commands 'b:\ntest\n'
 ```
+
+The default delay is 1000 ms before the first key and 350 ms between keys. Slow
+boots can be given more time, and `--commands` can be repeated:
+
+```bash
+./bin/idp-emu --commands 'b:\n' --commands 'test\n' \
+  --type-delay 3000 --type-interval 350
+```
+
+Supported escapes are `\n`/`\r` (Enter), `\t` (Tab), `\b` (Backspace), `\e`
+(Escape), `\\`, and `\xNN` for an exact byte.
 
 ### Original Partner floppy compatibility
 

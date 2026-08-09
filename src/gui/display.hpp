@@ -5,6 +5,7 @@
 #include <SDL_opengl.h>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 class display
 {
@@ -30,6 +31,8 @@ public:
     void init();
     void shutdown();
     void update();
+    bool capture_rgba(std::vector<uint8_t> &pixels, int &width, int &height,
+                      std::string &error) const;
 
     bool load_font(const std::string &path);
     void set_pixel(int x, int y, bool on);

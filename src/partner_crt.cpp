@@ -100,6 +100,17 @@ void partner_crt::key_input(uint8_t ch)
     queue_key_to_channel(sio, Z80SIO_CHANNEL_A, key_fifo_, ch);
 }
 
+bool partner_crt::keyboard_input_ready() const
+{
+    return (sio.chn[Z80SIO_CHANNEL_A].wr[3] & 0x01u) != 0u;
+}
+
+size_t partner_crt::pending_key_count() const
+{
+    return key_fifo_.size() +
+        (sio.chn[Z80SIO_CHANNEL_A].rx_ready ? 1u : 0u);
+}
+
 std::string partner_crt::dump_terminal_text() const
 {
     return terminal_ ? terminal_->dump_text() : std::string{};

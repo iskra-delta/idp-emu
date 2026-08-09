@@ -61,6 +61,7 @@ endfunction()
 
 # --- SDL2 (system) ---
 find_package(SDL2 REQUIRED)
+find_package(PNG REQUIRED)
 
 # --- OpenGL ---
 find_package(OpenGL REQUIRED)

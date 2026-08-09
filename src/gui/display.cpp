@@ -547,6 +547,60 @@ void display::update()
         apply_crt();
 }
 
+bool display::capture_rgba(std::vector<uint8_t> &pixels, int &width, int &height,
+                           std::string &error) const
+{
+    const GLuint texture = shader_ ? crt_tex_ : source_tex_;
+    if (!texture)
+    {
+        error = "The Partner display is not initialized.";
+        return false;
+    }
+
+    GLint previous_texture = 0;
+    GLint previous_pack_alignment = 0;
+    glGetIntegerv(GL_TEXTURE_BINDING_2D, &previous_texture);
+    glGetIntegerv(GL_PACK_ALIGNMENT, &previous_pack_alignment);
+
+    // glGetTexImage reads the texture in the same row order used by the UVs in
+    // panel_display.cpp, so row zero remains the top row in the saved image.
+    pixels.resize((size_t)FB_W * (size_t)FB_H * 4u);
+    while (glGetError() != GL_NO_ERROR) {}
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glPixelStorei(GL_PACK_ALIGNMENT, 1);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, pixels.data());
+    const GLenum read_error = glGetError();
+
+    glPixelStorei(GL_PACK_ALIGNMENT, previous_pack_alignment);
+    glBindTexture(GL_TEXTURE_2D, (GLuint)previous_texture);
+
+    if (read_error != GL_NO_ERROR)
+    {
+        error = "Could not read pixels from the Partner display (OpenGL error " +
+                std::to_string((unsigned)read_error) + ").";
+        return false;
+    }
+
+    width = content_w_;
+    height = content_h_;
+    if (width != FB_W)
+    {
+        // Compact in place. Destination rows always precede source rows, so
+        // this avoids allocating a second full-resolution buffer per frame.
+        for (int y = 1; y < height; ++y)
+        {
+            const size_t src_offset = (size_t)y * (size_t)FB_W * 4u;
+            const size_t dst_offset = (size_t)y * (size_t)width * 4u;
+            std::memmove(pixels.data() + dst_offset, pixels.data() + src_offset,
+                         (size_t)width * 4u);
+        }
+    }
+    pixels.resize((size_t)width * (size_t)height * 4u);
+
+    error.clear();
+    return true;
+}
+
 void display::apply_crt()
 {
     if (!shader_)

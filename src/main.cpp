@@ -5,11 +5,14 @@
 #include "dap/dap_debugger.hpp"
 #include "gui/gui.hpp"
 #include "gui/display.hpp"
+#include "startup_input.hpp"
+#include <chrono>
 #include <iostream>
 #include <string>
 #include <cstring>
 #include <filesystem>
 #include <memory>
+#include <limits>
 #include <cctype>
 #include <cstdlib>
 #include <vector>
@@ -18,6 +21,7 @@ static constexpr uint32_t CPU_CLOCK_HZ = 4000000;
 static constexpr uint32_t TARGET_FPS = 60;
 static constexpr uint32_t TICKS_PER_FRAME = CPU_CLOCK_HZ / TARGET_FPS;
 static constexpr uint32_t RUN_TICK_SLICE = 8192;
+static constexpr auto STARTUP_INPUT_SETTLE_TIME = std::chrono::milliseconds(400);
 
 namespace {
 
@@ -68,23 +72,45 @@ bool is_partos_rom_path(const std::string &path)
     return low == "partos.rom";
 }
 
+bool parse_milliseconds(const char *text, uint32_t &value)
+{
+    if (!text || !text[0] || text[0] == '-')
+        return false;
+    char *end = nullptr;
+    const unsigned long parsed = std::strtoul(text, &end, 10);
+    if (end == text || *end != '\0' || parsed > std::numeric_limits<uint32_t>::max())
+        return false;
+    value = static_cast<uint32_t>(parsed);
+    return true;
+}
+
 } // namespace
 
 void print_usage(const char *prog)
 {
     std::cerr << "Usage: " << prog << " [options]\n";
-    std::cerr << "Options:\n";
-    std::cerr << "  --help           Show this help\n";
-    std::cerr << "  --rom FILE       ROM file (default: " << DEFAULT_PARTOS_ROM << ")\n";
-    std::cerr << "  --fd0 FILE       Floppy drive 0 image\n";
-    std::cerr << "  --fd1 FILE       Floppy drive 1 image\n";
-    std::cerr << "  --hdd FILE       Hard disk image for Xebec/SASI controller\n";
-    std::cerr << "                   (auto-attached for the default PartOS ROM)\n";
-    std::cerr << "  --boot TYPE      Firmware boot target: default|floppy\n";
-    std::cerr << "  --nvram FILE     Shadow MM58167 NVRAM backing file (default selected by ROM)\n";
-    std::cerr << "  --terminal TYPE  Terminal profile: vt52|vt100\n";
-    std::cerr << "  --model TYPE     Machine model: crt|gdp|auto (default: auto)\n";
-    std::cerr << "  --dap PORT       Start the udap DAP debug server on 127.0.0.1:PORT\n";
+    std::cerr << "All options:\n";
+    std::cerr << "  --help                 Show this help\n";
+    std::cerr << "  --rom FILE             ROM file (default: " << DEFAULT_PARTOS_ROM << ")\n";
+    std::cerr << "  --fd0 FILE             Floppy drive 0 image\n";
+    std::cerr << "  --disk FILE            Alias for --fd0\n";
+    std::cerr << "  --fd1 FILE             Floppy drive 1 image\n";
+    std::cerr << "  --disk-b FILE          Alias for --fd1\n";
+    std::cerr << "  --hdd FILE             Hard disk image for Xebec/SASI controller\n";
+    std::cerr << "                         (auto-attached for the default PartOS ROM)\n";
+    std::cerr << "  --boot TYPE            Firmware boot target: default|floppy\n";
+    std::cerr << "  --nvram FILE           Shadow MM58167 NVRAM backing file\n";
+    std::cerr << "                         (default selected by ROM)\n";
+    std::cerr << "  --terminal TYPE        Terminal profile: vt52|vt100|ansi\n";
+    std::cerr << "  --model TYPE           Machine model: crt|gdp|auto (default: auto)\n";
+    std::cerr << "  --dap PORT             Start the udap DAP server on 127.0.0.1:PORT\n";
+    std::cerr << "  --commands TEXT        Type TEXT after the GUI opens; may be repeated\n";
+    std::cerr << "  --command TEXT         Alias for --commands\n";
+    std::cerr << "  --type TEXT            Alias for --commands\n";
+    std::cerr << "                         Escapes: \\n=Enter, \\r=Enter, \\t=Tab, \\b=Backspace,\n";
+    std::cerr << "                         \\e=Esc, \\\\, quotes, and \\xNN\n";
+    std::cerr << "  --type-delay MS        Delay before the first startup key (default: 1000)\n";
+    std::cerr << "  --type-interval MS     Delay between startup keys (default: 350)\n";
 }
 
 int main(int argc, char **argv)
@@ -103,6 +129,9 @@ int main(int argc, char **argv)
     bool auto_boot_floppy = false;
     bool terminal_explicit = false;
     terminal_profile term_profile = terminal_profile::vt52;
+    std::vector<uint8_t> startup_keys;
+    uint32_t startup_delay_ms = 1000;
+    uint32_t startup_interval_ms = 350;
 
     for (int i = 1; i < argc; i++)
     {
@@ -190,6 +219,39 @@ int main(int argc, char **argv)
                 return 1;
             }
             dap_port = (uint16_t)parsed;
+        }
+        else if (strcmp(argv[i], "--commands") == 0 ||
+                 strcmp(argv[i], "--command") == 0 ||
+                 strcmp(argv[i], "--type") == 0)
+        {
+            if ((i + 1) >= argc)
+            {
+                std::cerr << "Error: " << argv[i] << " requires text to type\n";
+                return 1;
+            }
+            std::string decode_error;
+            if (!startup_input::decode(argv[++i], startup_keys, decode_error))
+            {
+                std::cerr << "Error: " << decode_error << "\n";
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--type-delay") == 0 ||
+                 strcmp(argv[i], "--type-interval") == 0)
+        {
+            const bool is_delay = strcmp(argv[i], "--type-delay") == 0;
+            const char *option = argv[i];
+            if ((i + 1) >= argc)
+            {
+                std::cerr << "Error: " << option << " requires milliseconds\n";
+                return 1;
+            }
+            uint32_t &destination = is_delay ? startup_delay_ms : startup_interval_ms;
+            if (!parse_milliseconds(argv[++i], destination))
+            {
+                std::cerr << "Error: Invalid " << option << " value: " << argv[i] << "\n";
+                return 1;
+            }
         }
         else if (strcmp(argv[i], "--model") == 0)
         {
@@ -435,20 +497,88 @@ int main(int argc, char **argv)
         const char *quit_hint = "Ctrl+Q=Quit";
         std::cout << "[info] Space=Run/Pause  F11=Step Into  F10=Step Over  " << quit_hint << "\n";
 
-        auto push_key = [&](uint8_t ch) {
+        auto push_key = [&](uint8_t ch) -> bool {
             if (auto *crt = dynamic_cast<partner_crt *>(emu.get()))
+            {
                 crt->key_input(ch);
+                return true;
+            }
             else if (auto *gdp = dynamic_cast<partner_gdp *>(emu.get()))
-                gdp->key_input(ch);
+                return gdp->key_input(ch);
+            return false;
+        };
+        const auto keyboard_input_ready = [&]() {
+            if (const auto *crt = dynamic_cast<const partner_crt *>(emu.get()))
+                return crt->keyboard_input_ready();
+            if (const auto *gdp = dynamic_cast<const partner_gdp *>(emu.get()))
+                return gdp->keyboard_input_ready();
+            return false;
+        };
+        const auto pending_key_count = [&]() -> size_t {
+            if (const auto *crt = dynamic_cast<const partner_crt *>(emu.get()))
+                return crt->pending_key_count();
+            if (const auto *gdp = dynamic_cast<const partner_gdp *>(emu.get()))
+                return gdp->pending_key_count();
+            return 0;
+        };
+        const auto terminal_text = [&]() {
+            if (const auto *crt = dynamic_cast<const partner_crt *>(emu.get()))
+                return crt->dump_terminal_text();
+            if (const auto *gdp = dynamic_cast<const partner_gdp *>(emu.get()))
+                return gdp->dump_terminal_text();
+            return std::string{};
+        };
+        startup_input scripted_input(
+            std::move(startup_keys),
+            std::chrono::milliseconds(startup_delay_ms),
+            std::chrono::milliseconds(startup_interval_ms));
+        bool scripted_input_started = false;
+        bool scripted_first_key_sent = false;
+        bool scripted_input_complete_reported = false;
+        std::string scripted_screen_snapshot;
+        auto scripted_screen_changed_at = startup_input::clock::now();
+        const auto service_scripted_input = [&]() {
+            if (!scripted_input_started || scripted_input.finished())
+                return;
+
+            const auto now = startup_input::clock::now();
+            const std::string current_screen = terminal_text();
+            if (current_screen != scripted_screen_snapshot)
+            {
+                scripted_screen_snapshot = current_screen;
+                scripted_screen_changed_at = now;
+            }
+
+            // Firmware commonly enables the keyboard SIO briefly and resets it
+            // again while booting. Wait for a quiet screen before the first
+            // scripted byte so that byte cannot disappear in the later reset.
+            if (!keyboard_input_ready() || pending_key_count() != 0u)
+                return;
+            if (!scripted_first_key_sent &&
+                now - scripted_screen_changed_at < STARTUP_INPUT_SETTLE_TIME)
+                return;
+
+            if (const std::optional<uint8_t> key = scripted_input.take_due(now))
+            {
+                if (!push_key(*key))
+                    return;
+                scripted_first_key_sent = true;
+                if (scripted_input.finished() && !scripted_input_complete_reported)
+                {
+                    scripted_input_complete_reported = true;
+                    std::cout << "[info] startup command typing complete\n";
+                }
+            }
         };
         bool auto_boot_key_sent = false;
         auto service_auto_boot = [&]() {
             if (!auto_boot_floppy || auto_boot_key_sent || !emu->is_rom_enabled())
                 return;
             if (is_boot_prompt_wait(emu->get_current_pc())) {
-                push_key('f');
-                auto_boot_key_sent = true;
-                std::cout << "[info] selected firmware floppy boot\n";
+                if (push_key('f')) {
+                    auto_boot_key_sent = true;
+                    std::cout << "[info] selected firmware floppy boot\n";
+                }
             }
         };
 
@@ -484,6 +614,7 @@ int main(int argc, char **argv)
                 std::unique_lock<std::recursive_mutex> emu_lock(remote_dbg.mutex());
                 const bool was_paused = paused;
                 running = app_gui.process_events(*emu, paused, action);
+                service_scripted_input();
                 remote_dbg.sync_paused_state(paused);
                 // User paused from the GUI while a client continue was
                 // running: tell the client. (Transition only - a pending,
@@ -658,6 +789,15 @@ int main(int argc, char **argv)
                 app_gui.render_panels(*emu, paused, action);
             }
             app_gui.end_frame();
+            if (!scripted_input_started && !scripted_input.empty())
+            {
+                scripted_input.start(startup_input::clock::now());
+                scripted_input_started = true;
+                scripted_screen_changed_at = startup_input::clock::now();
+                std::cout << "[info] queued " << scripted_input.size()
+                          << " startup key(s), first key in " << startup_delay_ms
+                          << " ms\n";
+            }
         }
 
         std::string remote_dbg_stop_error;

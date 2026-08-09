@@ -26,14 +26,18 @@
 #include <imgui_internal.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
+#include <png.h>
 #include <SDL.h>
 #include <SDL_opengl.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <exception>
+#include <chrono>
 #include <cstdlib>
 #include <cstdio>
+#include <cstring>
+#include <ctime>
 #include <filesystem>
 #include <iostream>
 #include <string>
@@ -116,6 +120,79 @@ static const char *host_label_for_special_key(SDL_Keycode key)
     case SDLK_KP_9: return "KP9";
     default: return nullptr;
     }
+}
+
+static std::filesystem::path unused_screenshot_path()
+{
+    namespace fs = std::filesystem;
+    const std::time_t now = std::chrono::system_clock::to_time_t(
+        std::chrono::system_clock::now());
+    std::tm local_time{};
+#if defined(_WIN32)
+    localtime_s(&local_time, &now);
+#else
+    localtime_r(&now, &local_time);
+#endif
+
+    char timestamp[32]{};
+    std::strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", &local_time);
+    const fs::path directory = "screenshots";
+    const std::string stem = std::string("partner-") + timestamp;
+    fs::path candidate = directory / (stem + ".png");
+    std::error_code ec;
+    for (unsigned suffix = 2; fs::exists(candidate, ec) && !ec; ++suffix)
+    {
+        candidate = directory / (stem + "-" + std::to_string(suffix) + ".png");
+    }
+    return candidate;
+}
+
+static std::filesystem::path unused_recording_path()
+{
+    namespace fs = std::filesystem;
+    const std::time_t now = std::chrono::system_clock::to_time_t(
+        std::chrono::system_clock::now());
+    std::tm local_time{};
+#if defined(_WIN32)
+    localtime_s(&local_time, &now);
+#else
+    localtime_r(&now, &local_time);
+#endif
+
+    char timestamp[32]{};
+    std::strftime(timestamp, sizeof(timestamp), "%Y%m%d-%H%M%S", &local_time);
+    const fs::path directory = "recordings";
+    const std::string stem = std::string("partner-") + timestamp;
+    fs::path candidate = directory / (stem + ".avi");
+    std::error_code ec;
+    for (unsigned suffix = 2; fs::exists(candidate, ec) && !ec; ++suffix)
+    {
+        candidate = directory / (stem + "-" + std::to_string(suffix) + ".avi");
+    }
+    return candidate;
+}
+
+static bool write_png(const std::filesystem::path &path,
+                      const std::vector<uint8_t> &pixels,
+                      int width, int height, std::string &error)
+{
+    png_image image{};
+    image.version = PNG_IMAGE_VERSION;
+    image.width = (png_uint_32)width;
+    image.height = (png_uint_32)height;
+    image.format = PNG_FORMAT_RGBA;
+
+    if (!png_image_write_to_file(&image, path.string().c_str(), 0,
+                                 pixels.data(), 0, nullptr))
+    {
+        error = image.message[0] ? image.message : "libpng could not write the screenshot.";
+        png_image_free(&image);
+        return false;
+    }
+
+    png_image_free(&image);
+    error.clear();
+    return true;
 }
 }
 
@@ -250,12 +327,21 @@ void gui::service_keyboard_sound(partner &emu)
 void gui::open_disk_mount_dialog(partner &emu, int drive)
 {
     disk_mount_drive_ = drive;
-    disk_mount_path_ = emu.get_disk_path(drive);
-    if (disk_mount_path_.empty()) {
-        disk_mount_path_ = (drive == 0) ? "disks/fdd-partner-p.img" : "disks/fdd-partner-g.img";
-    }
-    disk_mount_error_.clear();
-    open_disk_mount_popup_ = true;
+    std::filesystem::path initial_path = emu.get_disk_path(drive);
+    if (initial_path.empty())
+        initial_path = (drive == 0) ? "disks/fdd-partner-p.img" : "disks/fdd-partner-g.img";
+
+    file_dialog::request request;
+    request.operation = file_dialog::mode::open_file;
+    request.title = "Mount Floppy FD" + std::to_string(drive);
+    request.confirm_label = "Mount";
+    request.initial_path = initial_path;
+    request.filter_label = "Floppy images (*.img)";
+    request.extensions = {".img"};
+    request.show_recent = true;
+    file_dialog_.open(std::move(request));
+    pending_file_dialog_action_ = file_dialog_action::mount_disk;
+    file_operation_error_.clear();
 }
 
 void gui::open_remote_debugger_dialog()
@@ -268,6 +354,123 @@ void gui::open_remote_debugger_dialog()
     open_remote_debugger_popup_ = true;
 }
 
+void gui::open_screenshot_dialog()
+{
+    namespace fs = std::filesystem;
+    const fs::path path = unused_screenshot_path();
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    if (ec)
+    {
+        file_operation_error_ = "Could not create the screenshots folder: " + ec.message();
+        open_file_operation_error_popup_ = true;
+        return;
+    }
+
+    file_dialog::request request;
+    request.operation = file_dialog::mode::save_file;
+    request.title = "Save Partner Screenshot";
+    request.confirm_label = "Save Screenshot";
+    request.initial_path = path;
+    request.filter_label = "PNG images (*.png)";
+    request.extensions = {".png"};
+    request.default_extension = ".png";
+    file_dialog_.open(std::move(request));
+    pending_file_dialog_action_ = file_dialog_action::save_screenshot;
+    screenshot_saved_path_.clear();
+    file_operation_error_.clear();
+}
+
+void gui::open_recording_dialog()
+{
+    namespace fs = std::filesystem;
+    const fs::path path = unused_recording_path();
+    std::error_code ec;
+    fs::create_directories(path.parent_path(), ec);
+    if (ec)
+    {
+        file_operation_error_ = "Could not create the recordings folder: " + ec.message();
+        open_file_operation_error_popup_ = true;
+        recording_saved_path_.clear();
+        return;
+    }
+
+    file_dialog::request request;
+    request.operation = file_dialog::mode::save_file;
+    request.title = "Save Screen Recording";
+    request.confirm_label = "Start Recording";
+    request.initial_path = path;
+    request.filter_label = "AVI movies (*.avi)";
+    request.extensions = {".avi"};
+    request.default_extension = ".avi";
+    file_dialog_.open(std::move(request));
+    pending_file_dialog_action_ = file_dialog_action::start_recording;
+    recording_error_.clear();
+    recording_saved_path_.clear();
+    file_operation_error_.clear();
+}
+
+void gui::start_screen_recording(const std::filesystem::path &path)
+{
+    namespace fs = std::filesystem;
+    std::error_code ec;
+
+    if (!screen_recorder_.start(display_, path, recording_error_))
+    {
+        recording_saved_path_.clear();
+        file_operation_error_ = recording_error_;
+        open_file_operation_error_popup_ = true;
+        return;
+    }
+
+    recording_error_.clear();
+    recording_saved_path_.clear();
+    std::cout << "[info] Screen recording started: "
+              << fs::absolute(path, ec).lexically_normal().string() << "\n";
+}
+
+void gui::stop_screen_recording()
+{
+    namespace fs = std::filesystem;
+    if (!screen_recorder_.is_recording())
+        return;
+
+    const fs::path path = screen_recorder_.output_path();
+    const uint64_t frames = screen_recorder_.frame_count();
+    const double seconds = screen_recorder_.elapsed_seconds();
+    if (!screen_recorder_.stop(recording_error_))
+    {
+        recording_saved_path_.clear();
+        return;
+    }
+
+    std::error_code ec;
+    recording_saved_path_ = fs::absolute(path, ec).lexically_normal().string();
+    if (ec)
+        recording_saved_path_ = path.lexically_normal().string();
+    recording_error_.clear();
+    std::cout << "[info] Screen recording saved: " << recording_saved_path_
+              << " (" << frames << " frames, " << seconds << " seconds)\n";
+}
+
+void gui::service_screen_recording()
+{
+    if (!screen_recorder_.is_recording())
+        return;
+
+    std::string capture_error;
+    if (screen_recorder_.capture_due(display_, capture_error))
+        return;
+
+    std::string finalize_error;
+    screen_recorder_.stop(finalize_error);
+    recording_saved_path_.clear();
+    recording_error_ = "Recording stopped: " + capture_error;
+    if (!finalize_error.empty())
+        recording_error_ += " " + finalize_error;
+    std::cerr << "[error] " << recording_error_ << "\n";
+}
+
 std::optional<gui::remote_debugger_request> gui::take_remote_debugger_request()
 {
     auto request = std::move(pending_remote_debugger_request_);
@@ -275,49 +478,82 @@ std::optional<gui::remote_debugger_request> gui::take_remote_debugger_request()
     return request;
 }
 
-void gui::render_disk_mount_dialog(partner &emu)
+void gui::render_file_dialog(partner &emu)
 {
-    if (open_disk_mount_popup_) {
-        ImGui::OpenPopup("Mount Floppy");
-        open_disk_mount_popup_ = false;
-    }
-
-    bool open = true;
-    if (!ImGui::BeginPopupModal("Mount Floppy", &open, ImGuiWindowFlags_AlwaysAutoResize)) {
+    namespace fs = std::filesystem;
+    const std::optional<file_dialog::result> result = file_dialog_.render();
+    if (!result)
         return;
-    }
 
-    ImGui::Text("Floppy FD%d:", disk_mount_drive_);
-    const std::string current_path = emu.get_disk_path(disk_mount_drive_);
-    ImGui::TextDisabled("Current: %s", current_path.empty() ? "(empty)" : current_path.c_str());
+    const file_dialog_action action = pending_file_dialog_action_;
+    pending_file_dialog_action_ = file_dialog_action::none;
+    if (!result->accepted)
+        return;
 
-    char path_buf[1024];
-    std::snprintf(path_buf, sizeof(path_buf), "%s", disk_mount_path_.c_str());
-    if (ImGui::InputText("Image path", path_buf, sizeof(path_buf))) {
-        disk_mount_path_ = path_buf;
-    }
+    try
+    {
+        switch (action)
+        {
+        case file_dialog_action::mount_disk:
+            emu.load_disk(disk_mount_drive_, result->path.string());
+            file_dialog_.remember_recent(result->path);
+            break;
 
-    if (!disk_mount_error_.empty()) {
-        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220, 90, 90, 255));
-        ImGui::TextWrapped("%s", disk_mount_error_.c_str());
-        ImGui::PopStyleColor();
-    }
+        case file_dialog_action::save_screenshot:
+        {
+            std::vector<uint8_t> pixels;
+            int width = 0;
+            int height = 0;
+            if (!display_.capture_rgba(pixels, width, height, file_operation_error_) ||
+                !write_png(result->path, pixels, width, height, file_operation_error_))
+            {
+                open_file_operation_error_popup_ = true;
+                return;
+            }
 
-    if (ImGui::Button("Mount")) {
-        try {
-            emu.load_disk(disk_mount_drive_, disk_mount_path_);
-            disk_mount_error_.clear();
-            ImGui::CloseCurrentPopup();
-        } catch (const std::exception &e) {
-            disk_mount_error_ = e.what();
+            std::error_code ec;
+            screenshot_saved_path_ = fs::absolute(result->path, ec).lexically_normal().string();
+            if (ec)
+                screenshot_saved_path_ = result->path.lexically_normal().string();
+            file_operation_error_.clear();
+            std::cout << "[info] Screenshot saved: " << screenshot_saved_path_ << "\n";
+            break;
+        }
+
+        case file_dialog_action::start_recording:
+            start_screen_recording(result->path);
+            break;
+
+        case file_dialog_action::none:
+            break;
         }
     }
-    ImGui::SameLine();
-    if (ImGui::Button("Cancel")) {
-        disk_mount_error_.clear();
+    catch (const std::exception &e)
+    {
+        file_operation_error_ = e.what();
+        open_file_operation_error_popup_ = true;
+    }
+}
+
+void gui::render_file_operation_error()
+{
+    if (open_file_operation_error_popup_)
+    {
+        ImGui::OpenPopup("File Operation Error");
+        open_file_operation_error_popup_ = false;
+    }
+    if (!ImGui::BeginPopupModal("File Operation Error", nullptr,
+                                ImGuiWindowFlags_AlwaysAutoResize))
+        return;
+
+    ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220, 90, 90, 255));
+    ImGui::TextWrapped("%s", file_operation_error_.c_str());
+    ImGui::PopStyleColor();
+    if (ImGui::Button("Close"))
+    {
+        file_operation_error_.clear();
         ImGui::CloseCurrentPopup();
     }
-
     ImGui::EndPopup();
 }
 
@@ -442,17 +678,16 @@ bool gui::init(const std::string &title, int width, int height)
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
+    file_dialog_.set_recent_storage_path("idp-emu.recent");
     ImGuiIO &io = ImGui::GetIO();
     // Keep Dear ImGui settings in a dedicated app-specific config file.
     io.IniFilename = "idp-emu.config";
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
-    const bool enable_viewports = [] {
+    const bool request_viewports = [] {
         const char *s = std::getenv("IDP_EMU_VIEWPORTS");
-        return s && s[0] && s[0] != '0';
+        return !s || !s[0] || s[0] != '0';
     }();
-    if (enable_viewports)
-        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
 
     ImFont* ui_font = nullptr;
     const std::string inter_path = resolve_asset_path("assets/fonts/Inter.ttf");
@@ -478,6 +713,22 @@ bool gui::init(const std::string &title, int width, int height)
     {
         std::cerr << "[error] ImGui_ImplOpenGL3_Init failed\n";
         return false;
+    }
+
+    const ImGuiBackendFlags viewport_backends =
+        ImGuiBackendFlags_PlatformHasViewports |
+        ImGuiBackendFlags_RendererHasViewports;
+    if (request_viewports && (io.BackendFlags & viewport_backends) == viewport_backends)
+    {
+        // The file browser requests its own platform viewport, so it is not
+        // clipped by the emulator window. Set IDP_EMU_VIEWPORTS=0 to keep the
+        // single-window fallback on platforms that need it.
+        io.ConfigFlags |= ImGuiConfigFlags_ViewportsEnable;
+    }
+    else if (request_viewports)
+    {
+        std::cerr << "[warning] Detached windows are unavailable with the current SDL video backend; "
+                     "file dialogs will use the in-window fallback.\n";
     }
 
     SDL_SetWindowHitTest(
@@ -556,6 +807,9 @@ bool gui::init(const std::string &title, int width, int height)
 
 void gui::shutdown()
 {
+    if (screen_recorder_.is_recording())
+        stop_screen_recording();
+
     if (audio_device_ != 0)
     {
         SDL_CloseAudioDevice(audio_device_);
@@ -850,6 +1104,23 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
                     if (paused)
                         action = dbg_action::STEP_OVER;
                     break;
+                case SDLK_s:
+                    if ((mods & KMOD_SHIFT) != 0)
+                    {
+                        open_screenshot_dialog();
+                        continue;
+                    }
+                    break;
+                case SDLK_r:
+                    if ((mods & KMOD_SHIFT) != 0)
+                    {
+                        if (screen_recorder_.is_recording())
+                            stop_screen_recording();
+                        else
+                            open_recording_dialog();
+                        continue;
+                    }
+                    break;
                 default:
                     break;
                 }
@@ -942,9 +1213,10 @@ void gui::begin_frame()
 void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 {
     display_.update();
+    service_screen_recording();
     const bool gdp_keyboard_model = dynamic_cast<partner_gdp *>(&emu) != nullptr;
 
-    draw_custom_title_bar(window_);
+    const int hovered_menu = draw_custom_title_bar(window_, active_menu_);
     const ImGuiViewport* vp = ImGui::GetMainViewport();
     const float title_bar_h = chrome_metrics::title_bar_height;
 
@@ -967,10 +1239,23 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
     ImGui::PopStyleVar(3);
 
     static const char* popup_ids[] = {"##m_emulation", "##m_view", "##m_devices"};
+    if (hovered_menu >= 0 && hovered_menu != active_menu_)
+        open_menu_ = hovered_menu;
     if (open_menu_ >= 0) {
+        active_menu_ = open_menu_;
         ImGui::OpenPopup(popup_ids[open_menu_]);
         open_menu_ = -1;
     }
+
+    const auto mouse_over_current_popup = [] {
+        ImVec2 min = ImGui::GetWindowPos();
+        const ImVec2 size = ImGui::GetWindowSize();
+        // Include the one-pixel placement gap below the custom title bar so
+        // moving into a dropdown cannot close it between frames.
+        min.y -= 2.0f;
+        return ImGui::IsMouseHoveringRect(
+            min, ImVec2(min.x + size.x, min.y + size.y + 2.0f), false);
+    };
 
     if (ImGui::IsPopupOpen("##m_emulation"))
         ImGui::SetNextWindowPos(custom_title_menu_pos(0), ImGuiCond_Always);
@@ -986,6 +1271,37 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             display_.update();
         }
         ImGui::Separator();
+        if (ImGui::MenuItem("Save Screenshot...", "Ctrl+Shift+S"))
+            open_screenshot_dialog();
+        if (ImGui::MenuItem("Start Recording...", "Ctrl+Shift+R", false,
+                            !screen_recorder_.is_recording()))
+            open_recording_dialog();
+        if (ImGui::MenuItem("Stop Recording", "Ctrl+Shift+R", false,
+                            screen_recorder_.is_recording()))
+            stop_screen_recording();
+        if (screen_recorder_.is_recording())
+        {
+            const unsigned total_seconds =
+                static_cast<unsigned>(screen_recorder_.elapsed_seconds());
+            ImGui::TextDisabled("Recording  %02u:%02u  (%llu frames)",
+                                total_seconds / 60, total_seconds % 60,
+                                static_cast<unsigned long long>(screen_recorder_.frame_count()));
+        }
+        else if (!recording_saved_path_.empty())
+        {
+            const std::string filename =
+                std::filesystem::path(recording_saved_path_).filename().string();
+            ImGui::TextDisabled("Saved: %s", filename.c_str());
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip("%s", recording_saved_path_.c_str());
+        }
+        if (!recording_error_.empty())
+        {
+            ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220, 90, 90, 255));
+            ImGui::TextWrapped("%s", recording_error_.c_str());
+            ImGui::PopStyleColor();
+        }
+        ImGui::Separator();
         if (ImGui::MenuItem("Debugger (udap)..."))
             open_remote_debugger_dialog();
         if (remote_debugger_)
@@ -996,6 +1312,11 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             SDL_Event quit_event;
             quit_event.type = SDL_QUIT;
             SDL_PushEvent(&quit_event);
+        }
+        if (hovered_menu != 0 && !mouse_over_current_popup())
+        {
+            active_menu_ = -1;
+            ImGui::CloseCurrentPopup();
         }
         ImGui::EndPopup();
     }
@@ -1014,6 +1335,11 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
         ImGui::MenuItem("MM58167 RTC", nullptr, &show_rtc_);
         ImGui::MenuItem("SCN2674 AVDC", nullptr, &show_scn2674_);
         ImGui::MenuItem("EF9367 GDP", nullptr, &show_ef9367_);
+        if (hovered_menu != 1 && !mouse_over_current_popup())
+        {
+            active_menu_ = -1;
+            ImGui::CloseCurrentPopup();
+        }
         ImGui::EndPopup();
     }
 
@@ -1031,8 +1357,16 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             open_disk_mount_dialog(emu, 1);
         ImGui::TextDisabled("FD0: %s", emu.get_disk_path(0).empty() ? "(empty)" : emu.get_disk_path(0).c_str());
         ImGui::TextDisabled("FD1: %s", emu.get_disk_path(1).empty() ? "(empty)" : emu.get_disk_path(1).c_str());
+        if (hovered_menu != 2 && !mouse_over_current_popup())
+        {
+            active_menu_ = -1;
+            ImGui::CloseCurrentPopup();
+        }
         ImGui::EndPopup();
     }
+
+    if (active_menu_ >= 0 && !ImGui::IsPopupOpen(popup_ids[active_menu_]))
+        active_menu_ = -1;
 
     const ImGuiID dockspace_id = ImGui::GetID("##dockspace");
     ImGui::DockSpace(dockspace_id, ImVec2(0.0f, 0.0f), ImGuiDockNodeFlags_PassthruCentralNode);
@@ -1070,7 +1404,8 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
     if (show_monitor_)
         panels::render_monitor(display_, &show_monitor_);
 
-    render_disk_mount_dialog(emu);
+    render_file_dialog(emu);
+    render_file_operation_error();
     render_remote_debugger_dialog();
 
     if (show_dma_)

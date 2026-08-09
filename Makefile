@@ -1,4 +1,4 @@
-.PHONY: all configure build clean test fetch partos-smoke
+.PHONY: all configure build clean test fetch
 
 BUILD_DIR := build
 BIN_DIR := bin
@@ -29,8 +29,3 @@ clean:
 
 test: build
 	cd $(BUILD_DIR) && ctest --output-on-failure
-
-partos-smoke: build
-	$(MAKE) -C /home/tstih/data/iskra-delta/partos disks
-	python3 /home/tstih/data/iskra-delta/partos/tools/check_partos_layout.py
-	cd $(BUILD_DIR) && ctest --output-on-failure -R 'partos_(bootload|kernel_boot|full_boot|full_boot_fd0)'

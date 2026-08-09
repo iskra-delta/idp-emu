@@ -15,3 +15,6 @@ third_party/udap/
 .claude/
 .codex/
 idp-emu.config
+idp-emu.recent
+screenshots/
+recordings/

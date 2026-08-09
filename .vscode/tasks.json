@@ -100,33 +100,6 @@
       ],
       "dependsOrder": "sequence",
       "problemMatcher": []
-    },
-    {
-      "label": "Smoke PartOS Boot",
-      "type": "shell",
-      "command": "make",
-      "args": [
-        "partos-smoke"
-      ],
-      "options": {
-        "cwd": "${workspaceFolder}"
-      },
-      "problemMatcher": [
-        "$gcc"
-      ],
-      "presentation": {
-        "reveal": "always",
-        "panel": "shared",
-        "clear": false
-      }
-    },
-    {
-      "label": "Build + Smoke PartOS",
-      "dependsOn": [
-        "Smoke PartOS Boot"
-      ],
-      "dependsOrder": "sequence",
-      "problemMatcher": []
     }
   ]
 }

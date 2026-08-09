@@ -21,6 +21,8 @@ public:
     void tick() override;
     void render_to(display &disp);
     void key_input(uint8_t ch);
+    bool keyboard_input_ready() const;
+    size_t pending_key_count() const;
     std::string dump_terminal_text() const;
     std::string dump_raw_serial_text() const;
 

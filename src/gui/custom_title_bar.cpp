@@ -80,7 +80,7 @@ ImVec2 custom_title_menu_pos(int index)
             vp->Pos.y + chrome_metrics::title_bar_height + 1.0f};
 }
 
-void draw_custom_title_bar(SDL_Window* window)
+int draw_custom_title_bar(SDL_Window* window, int active_menu)
 {
     float cbx = 0.0f;
     float cby = 0.0f;
@@ -118,34 +118,40 @@ void draw_custom_title_bar(SDL_Window* window)
     dl->AddText(font, fs, {ox + separator_x, mid_y},
                 dim_alpha(chrome_theme().title_text, 0.30f), "|");
 
+    const ImVec2 separator_size = ImGui::CalcTextSize("|");
+    constexpr float pad = 6.0f;
+    float cursor_x = separator_x + separator_size.x + 8.0f;
+
+    // Refresh the hit rectangles before testing the pointer. This matters on
+    // the first frame and after a font or window scale change.
+    for (int i = 0; i < k_menu_count; ++i) {
+        const ImVec2 label_size = ImGui::CalcTextSize(k_menu_labels[i]);
+        g_menu_rects[i] = {cursor_x, label_size.x + pad * 2.0f};
+        cursor_x += label_size.x + pad * 2.0f + 2.0f;
+    }
+
     int mouse_x = 0;
     int mouse_y = 0;
     const bool mouse_over_main_window = mouse_pos_in_window(window, mouse_x, mouse_y);
     const int hovered_menu =
         mouse_over_main_window ? custom_title_menu_hit(mouse_x, mouse_y) : -1;
 
-    const ImVec2 separator_size = ImGui::CalcTextSize("|");
-    constexpr float pad = 6.0f;
-    float cursor_x = separator_x + separator_size.x + 8.0f;
-
     for (int i = 0; i < k_menu_count; ++i) {
-        ImVec2 label_size = ImGui::CalcTextSize(k_menu_labels[i]);
-        g_menu_rects[i] = {cursor_x, label_size.x + pad * 2.0f};
+        const ImVec2 label_size = ImGui::CalcTextSize(k_menu_labels[i]);
+        const float menu_x = g_menu_rects[i].x;
 
-        if (hovered_menu == i) {
+        if (hovered_menu == i || active_menu == i) {
             dl->AddRectFilled(
-                {ox + cursor_x, oy + 2.0f},
-                {ox + cursor_x + label_size.x + pad * 2.0f, oy + h - 2.0f},
+                {ox + menu_x, oy + 2.0f},
+                {ox + menu_x + label_size.x + pad * 2.0f, oy + h - 2.0f},
                 chrome_theme().close_hover_bg,
                 3.0f);
         }
 
         dl->AddText(font, fs,
-                    {ox + cursor_x + pad, mid_y},
+                    {ox + menu_x + pad, mid_y},
                     chrome_theme().title_text,
                     k_menu_labels[i]);
-
-        cursor_x += label_size.x + pad * 2.0f + 2.0f;
     }
 
     if (mouse_over_main_window && custom_title_close_hit(window, mouse_x, mouse_y)) {
@@ -164,4 +170,6 @@ void draw_custom_title_bar(SDL_Window* window)
                 {ox + cbx + pad_x, oy + cby + cbsize - pad_x},
                 chrome_theme().close_x_color,
                 1.5f);
+
+    return hovered_menu;
 }

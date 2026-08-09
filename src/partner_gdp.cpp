@@ -1051,6 +1051,11 @@ bool partner_gdp::key_input(uint8_t ch)
     return true;
 }
 
+bool partner_gdp::keyboard_input_ready() const
+{
+    return (sio.chn[Z80SIO_CHANNEL_A].wr[3] & 0x01u) != 0u;
+}
+
 size_t partner_gdp::pending_key_count() const
 {
     return key_fifo_.size() +
