@@ -156,7 +156,7 @@ static std::string visualize(const std::string &s)
 
 static bool build_all(const std::string &root)
 {
-    if (std::system(("make -C " + root + "/partos -s sys rom").c_str()) != 0) {
+    if (std::system("make -C " PARTOS_ROOT " -s sys rom") != 0) {
         std::puts("FAIL: PartOS ROM/sys build failed");
         return false;
     }
@@ -566,7 +566,7 @@ int main(int argc, char **argv)
     const uint64_t stress_rounds =
         env_u64_allow_zero_or("IDP_STRESS_ROUNDS", 0);
 
-    const std::string rom_path = root + "/partos/bin/partos.rom";
+    const std::string rom_path = PARTOS_ROOT "/bin/partos.rom";
     const std::string hdd_path = root + "/disks/hdd-dos.img";
 
     // The scripted regression walk. Every step is a real command; success is
@@ -576,7 +576,7 @@ int main(int argc, char **argv)
     append_stress_rounds(script, (size_t)stress_rounds);
 
     regression_partner_crt emu(terminal_profile::vt52,
-                               root + "/partos/partos_shadow_nvram.bin");
+                               PARTOS_ROOT "/partos_shadow_nvram.bin");
     emu.load_rom(rom_path);
     emu.load_hdd(hdd_path);
     emu.reset();

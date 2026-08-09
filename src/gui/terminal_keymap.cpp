@@ -9,6 +9,39 @@ static inline void push_byte(std::vector<uint8_t>& out, uint8_t value)
 
 }
 
+bool terminal_key_repeat_limiter::accept(SDL_Keycode key, bool repeat,
+                                         uint32_t timestamp_ms,
+                                         bool repeat_enabled)
+{
+    if (!repeat) {
+        last_repeat_ms_[key] = timestamp_ms;
+        return true;
+    }
+    if (!repeat_enabled) {
+        return false;
+    }
+
+    auto [it, inserted] = last_repeat_ms_.emplace(key, timestamp_ms);
+    if (inserted) {
+        return true;
+    }
+    if ((uint32_t)(timestamp_ms - it->second) < interval_ms) {
+        return false;
+    }
+    it->second = timestamp_ms;
+    return true;
+}
+
+void terminal_key_repeat_limiter::release(SDL_Keycode key)
+{
+    last_repeat_ms_.erase(key);
+}
+
+void terminal_key_repeat_limiter::clear()
+{
+    last_repeat_ms_.clear();
+}
+
 bool map_terminal_ctrl_key(SDL_Keycode key, SDL_Keymod mods, std::vector<uint8_t>& out)
 {
     if ((mods & KMOD_CTRL) == 0) {
@@ -43,8 +76,19 @@ bool map_terminal_ctrl_key(SDL_Keycode key, SDL_Keymod mods, std::vector<uint8_t
     }
 }
 
-bool map_terminal_key(SDL_Keycode key, std::vector<uint8_t>& out, bool allow_dec_setup_keys)
+bool map_terminal_key(SDL_Keycode key,
+                      std::vector<uint8_t>& out,
+                      terminal_profile profile,
+                      bool allow_dec_setup_keys)
 {
+    const auto push_cursor_key = [&](uint8_t final_byte) {
+        push_byte(out, 0x1B);
+        if (profile == terminal_profile::vt100_ansi) {
+            push_byte(out, '[');
+        }
+        push_byte(out, final_byte);
+    };
+
     switch (key) {
     case SDLK_RETURN:
     case SDLK_KP_ENTER:
@@ -60,20 +104,16 @@ bool map_terminal_key(SDL_Keycode key, std::vector<uint8_t>& out, bool allow_dec
         push_byte(out, 0x1B);
         return true;
     case SDLK_UP:
-        push_byte(out, 0x1B);
-        push_byte(out, 'A');
+        push_cursor_key('A');
         return true;
     case SDLK_DOWN:
-        push_byte(out, 0x1B);
-        push_byte(out, 'B');
+        push_cursor_key('B');
         return true;
     case SDLK_RIGHT:
-        push_byte(out, 0x1B);
-        push_byte(out, 'C');
+        push_cursor_key('C');
         return true;
     case SDLK_LEFT:
-        push_byte(out, 0x1B);
-        push_byte(out, 'D');
+        push_cursor_key('D');
         return true;
     case SDLK_DELETE:
         push_byte(out, 0x7F);

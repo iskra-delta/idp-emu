@@ -1029,7 +1029,7 @@ void partner_gdp::render_to(display &disp)
     (void)avdc_pixels;
 }
 
-void partner_gdp::key_input(uint8_t ch)
+bool partner_gdp::key_input(uint8_t ch)
 {
     if (ch == '\n') {
         ch = '\r';
@@ -1040,11 +1040,21 @@ void partner_gdp::key_input(uint8_t ch)
         z80sio_rx_data(&sio, Z80SIO_CHANNEL_A, ch);
         if (!was_ready && sio.chn[Z80SIO_CHANNEL_A].rx_ready) {
             keyboard_.local_keypress();
-            return;
+            return true;
         }
+    }
+    if (key_fifo_.size() >= KEY_FIFO_CAPACITY) {
+        return false;
     }
     key_fifo_.push_back(ch);
     keyboard_.local_keypress();
+    return true;
+}
+
+size_t partner_gdp::pending_key_count() const
+{
+    return key_fifo_.size() +
+        (sio.chn[Z80SIO_CHANNEL_A].rx_ready ? 1u : 0u);
 }
 
 std::string partner_gdp::dump_terminal_text() const

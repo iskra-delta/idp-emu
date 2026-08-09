@@ -21,8 +21,9 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_options(-g -O0 -Wall -Wextra -Wno-unused-parameter)
 endif()
 
-set(PARTOS_ROOT "/home/tstih/data/iskra-delta/partos")
+set(PARTOS_ROOT "$ENV{HOME}/data/iskra-delta/partos")
 set(PARTOS_LAYOUT_HEADER ${PARTOS_ROOT}/build/partos_layout.hpp)
+add_compile_definitions(PARTOS_ROOT="${PARTOS_ROOT}")
 file(GLOB_RECURSE PARTOS_LAYOUT_DEPENDS CONFIGURE_DEPENDS
     ${PARTOS_ROOT}/src/*.s
     ${PARTOS_ROOT}/src/*.c
@@ -54,7 +55,7 @@ function(idp_require_partos_layout target_name)
     add_dependencies(${target_name} partos_layout_header)
     target_include_directories(${target_name} PRIVATE
         ${CMAKE_SOURCE_DIR}/src
-        ${CMAKE_SOURCE_DIR}/partos/build
+        ${PARTOS_ROOT}/build
     )
 endfunction()
 

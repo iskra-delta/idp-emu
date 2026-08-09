@@ -21,8 +21,9 @@ static constexpr uint32_t RUN_TICK_SLICE = 8192;
 
 namespace {
 
-constexpr const char *DEFAULT_PARTOS_ROM = "partos/bin/partos.rom";
+constexpr const char *DEFAULT_PARTOS_ROM = "" PARTOS_ROOT "/bin/partos.rom";
 constexpr const char *DEFAULT_PARTOS_NVRAM = "partos/partos_shadow_nvram.bin";
+constexpr const char *DEFAULT_PARTNER_NVRAM = "partner_cmos.bin";
 constexpr const char *DEFAULT_LEGACY_CRT_ROM = "roms/partner_crt.rom";
 constexpr const char *DEFAULT_PARTOS_FD0 = "disks/fdd-dos.img";
 constexpr const char *DEFAULT_PARTOS_HDD = "disks/hdd-dos.img";
@@ -79,7 +80,8 @@ void print_usage(const char *prog)
     std::cerr << "  --fd1 FILE       Floppy drive 1 image\n";
     std::cerr << "  --hdd FILE       Hard disk image for Xebec/SASI controller\n";
     std::cerr << "                   (auto-attached for the default PartOS ROM)\n";
-    std::cerr << "  --nvram FILE     Shadow MM58167 NVRAM backing file (default: " << DEFAULT_PARTOS_NVRAM << ")\n";
+    std::cerr << "  --boot TYPE      Firmware boot target: default|floppy\n";
+    std::cerr << "  --nvram FILE     Shadow MM58167 NVRAM backing file (default selected by ROM)\n";
     std::cerr << "  --terminal TYPE  Terminal profile: vt52|vt100\n";
     std::cerr << "  --model TYPE     Machine model: crt|gdp|auto (default: auto)\n";
     std::cerr << "  --dap PORT       Start the udap DAP debug server on 127.0.0.1:PORT\n";
@@ -97,6 +99,8 @@ int main(int argc, char **argv)
     bool rom_explicit = false;
     bool fd0_explicit = false;
     bool fd1_explicit = false;
+    bool nvram_explicit = false;
+    bool auto_boot_floppy = false;
     bool terminal_explicit = false;
     terminal_profile term_profile = terminal_profile::vt52;
 
@@ -130,10 +134,30 @@ int main(int argc, char **argv)
             if ((i + 1) >= argc) { std::cerr << "Error: --hdd requires a value\n"; return 1; }
             hdd_file = argv[++i];
         }
+        else if (strcmp(argv[i], "--boot") == 0)
+        {
+            if ((i + 1) >= argc)
+            {
+                std::cerr << "Error: --boot requires a value: default|floppy\n";
+                return 1;
+            }
+            const char *value = argv[++i];
+            if (strcmp(value, "default") == 0)
+                auto_boot_floppy = false;
+            else if (strcmp(value, "floppy") == 0)
+                auto_boot_floppy = true;
+            else
+            {
+                std::cerr << "Error: Unknown boot target: " << value << "\n";
+                std::cerr << "Valid values: default, floppy\n";
+                return 1;
+            }
+        }
         else if (strcmp(argv[i], "--nvram") == 0)
         {
             if ((i + 1) >= argc) { std::cerr << "Error: --nvram requires a value\n"; return 1; }
             nvram_file = argv[++i];
+            nvram_explicit = true;
         }
         else if (strcmp(argv[i], "--terminal") == 0)
         {
@@ -326,19 +350,24 @@ int main(int argc, char **argv)
                 !hdd_file.empty() ? hdd_file :
                 (is_partos_rom_path(selected_rom) ? resolve_existing_path(DEFAULT_PARTOS_HDD)
                                                   : std::string{});
+            const std::string selected_nvram =
+                nvram_explicit ? nvram_file :
+                resolve_existing_path(is_partos_rom_path(selected_rom)
+                    ? DEFAULT_PARTOS_NVRAM
+                    : DEFAULT_PARTNER_NVRAM);
             const bool auto_insert_floppy = selected_hdd.empty() || fd0_explicit || is_partos_rom_path(selected_rom);
             std::cout << "[info] model=" << (want_gdp ? "gdp" : "crt")
                       << " rom=" << selected_rom
                       << " fd0=" << (auto_insert_floppy ? selected_fd0 : std::string("(none)"))
                       << " fd1=" << (selected_fd1.empty() ? std::string("(none)") : selected_fd1)
                       << (selected_hdd.empty() ? "" : (" hdd=" + selected_hdd))
-                      << " nvram=" << nvram_file
+                      << " nvram=" << selected_nvram
                       << "\n";
 
             std::unique_ptr<partner> created;
             if (want_gdp)
             {
-                auto gdp = std::make_unique<partner_gdp>(term_profile, nvram_file);
+                auto gdp = std::make_unique<partner_gdp>(term_profile, selected_nvram);
                 gdp->load_rom(selected_rom);
                 if (auto_insert_floppy)
                     gdp->load_disk(0, selected_fd0);
@@ -351,7 +380,7 @@ int main(int argc, char **argv)
             }
             else
             {
-                auto crt = std::make_unique<partner_crt>(term_profile, nvram_file);
+                auto crt = std::make_unique<partner_crt>(term_profile, selected_nvram);
                 crt->load_rom(selected_rom);
                 if (auto_insert_floppy)
                     crt->load_disk(0, selected_fd0);
@@ -411,6 +440,16 @@ int main(int argc, char **argv)
                 crt->key_input(ch);
             else if (auto *gdp = dynamic_cast<partner_gdp *>(emu.get()))
                 gdp->key_input(ch);
+        };
+        bool auto_boot_key_sent = false;
+        auto service_auto_boot = [&]() {
+            if (!auto_boot_floppy || auto_boot_key_sent || !emu->is_rom_enabled())
+                return;
+            if (is_boot_prompt_wait(emu->get_current_pc())) {
+                push_key('f');
+                auto_boot_key_sent = true;
+                std::cout << "[info] selected firmware floppy boot\n";
+            }
         };
 
         auto render_machine = [&]() {
@@ -521,6 +560,7 @@ int main(int argc, char **argv)
                             }
 
                             emu->tick();
+                            service_auto_boot();
                             service_boot_trace();
 
                         }

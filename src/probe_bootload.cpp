@@ -47,7 +47,7 @@ std::vector<uint8_t> read_file(const std::string &p) {
 } // namespace
 
 int main(int argc, char **argv) {
-    std::string rom  = (argc > 1) ? argv[1] : "partos/bin/partos.rom";
+    std::string rom  = (argc > 1) ? argv[1] : (std::string(PARTOS_ROOT) + "/bin/partos.rom");
     std::string mode = (argc > 2) ? argv[2] : "fd"; // "fd" or "hd"
     bool hd = (mode == "hd");
     std::string srcdisk  = hd ? "disks/hdd-dos.img" : "disks/fdd-dos.img";

@@ -1536,6 +1536,9 @@ void partner::reset()
     dbg_im2_ack_count = 0;
     im2_ack_latched_ = false;
     im2_ack_latched_vector_ = -1;
+    im2_ack_external_latched_ = false;
+    external_im2_pending_vector_ = -1;
+    external_im2_edge_armed_ = true;
     dbg_irref_values.fill(0);
     dbg_irref_pcs.fill(0);
     dbg_irref_sps.fill(0);
@@ -1562,17 +1565,6 @@ void partner::tick()
     tick_count++;
     mm58167a_sync_time(&rtc);
     i8272_tick(&fdc);
-    /* If a DMA sector finished but the completion IRQ was consumed without
-       running _fd_isr (IM2 preemption / harness timing), leave the controller
-       in RESULT with INTRQ deasserted and the kernel hangs in fat_wait_one$.
-       Re-assert INTRQ while the result phase is still waiting to be drained. */
-    if ((fdc.phase == I8272_PHASE_RESULT) &&
-        ((fdc.cmd_code == I8272_CMD_READ_DATA) ||
-         (fdc.cmd_code == I8272_CMD_WRITE_DATA)) &&
-        !fdc.irq_request && (fdc.irq_delay == 0) &&
-        (fdc.result_len > 0) && (fdc.result_idx == 0)) {
-        fdc.irq_request = true;
-    }
     const uint64_t prev_pins = pins;
 
     const bool cpu_ticked = !dma_owns_bus();
@@ -1635,11 +1627,15 @@ void partner::tick()
         }
 
         // This z80 core enters the interrupt acknowledge sample microsteps
-        // without leaving IORQ visible in the externally observed pin mask.
-        // Reconstruct it here so the daisy-chain devices can see and service
-        // the acknowledge cycle.
-        if ((cpu.step == 1638) || (cpu.step == 1644) || (cpu.step == 1657))
-            pins |= Z80_IORQ;
+        // without always exposing a clean acknowledge bus cycle. Reconstruct
+        // the complete cycle so service_cpu_bus() and the daisy-chain devices
+        // latch the vector before they move REQUESTED to SERVICED. In
+        // particular, a stale MREQ from the preceding opcode fetch must not
+        // make service_cpu_bus() mistake the acknowledge for a memory read.
+        if ((cpu.step == 1638) || (cpu.step == 1644) || (cpu.step == 1657)) {
+            pins &= ~(Z80_MREQ | Z80_RD | Z80_WR);
+            pins |= Z80_M1 | Z80_IORQ;
+        }
 
         service_cpu_bus(pins);
 
@@ -1750,7 +1746,13 @@ void partner::tick()
         const bool hd_xfer_active =
             (dma.int_vector == PARTNER_HD_DMA_VECTOR) &&
             ((peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)) & PARTNER_DEV_FLAG_BUSY) != 0);
-        if (!hd_xfer_active)
+        /*
+            Vector 0x90 is used by the PartOS hard-disk compatibility path.
+            Suppress that one when its synthetic transfer is no longer active,
+            but retain ordinary DMA end-of-block interrupts (notably floppy
+            DMA requests) instead of silently discarding them.
+        */
+        if (dma.int_vector == PARTNER_HD_DMA_VECTOR && !hd_xfer_active)
             dma.int_state &= ~Z80DMA_INT_NEEDED;
     }
     if (dma.int_state & Z80DMA_INT_REQUESTED) {
@@ -1859,7 +1861,28 @@ void partner::tick()
 
     service_virtual_devices();
 
-    if (get_external_im2_vector() >= 0)
+    /*
+        The GDP board presents vertical blank as an external interrupt pulse.
+        During original CP/M floppy I/O, latch a rising edge until the CPU
+        acknowledges it. Otherwise a seek can delay IM2 sampling until after
+        the pulse has disappeared, leaving a bogus floating-bus vector. Keep
+        the normal pulse behavior outside that collision window (in particular
+        for PartOS's own VBL scheduler).
+    */
+    const int external_im2_vector = get_external_im2_vector();
+    const bool latch_external_im2 =
+        (cpu.i == 0xFA) &&
+        ((fdc.phase != I8272_PHASE_IDLE) || fdc.int_pending || (fdc.irq_delay != 0));
+    if (external_im2_vector < 0) {
+        external_im2_edge_armed_ = true;
+    } else {
+        if (latch_external_im2 && external_im2_edge_armed_ &&
+            external_im2_pending_vector_ < 0) {
+            external_im2_pending_vector_ = external_im2_vector;
+        }
+        external_im2_edge_armed_ = false;
+    }
+    if (external_im2_pending_vector_ >= 0 || external_im2_vector >= 0)
         pins |= Z80_INT;
 
     // FDC interrupt participates in the Z80 daisy chain after the Zilog devices.
@@ -1931,7 +1954,7 @@ int partner::get_pending_daisy_vector() const
         const bool hd_xfer_active =
             (dma.int_vector == PARTNER_HD_DMA_VECTOR) &&
             ((peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)) & PARTNER_DEV_FLAG_BUSY) != 0);
-        if (hd_xfer_active)
+        if (dma.int_vector != PARTNER_HD_DMA_VECTOR || hd_xfer_active)
             return dma.int_vector;
         const_cast<partner *>(this)->dma.int_state = 0;
     }
@@ -1984,11 +2007,16 @@ int partner::select_im2_ack_vector()
     const int daisy_vector = get_pending_daisy_vector();
     const int external_im2_vector = get_external_im2_vector();
     int ack_vector = -1;
+    bool external_ack = false;
 
     if (daisy_vector >= 0)
         ack_vector = daisy_vector;
     else if (fdc.irq_request)
         ack_vector = fdc_int_vector;
+    else if (external_im2_pending_vector_ >= 0) {
+        ack_vector = external_im2_pending_vector_;
+        external_ack = true;
+    }
     else if (external_im2_vector >= 0)
         ack_vector = external_im2_vector;
 
@@ -2002,6 +2030,7 @@ int partner::select_im2_ack_vector()
 
     im2_ack_latched_ = true;
     im2_ack_latched_vector_ = ack_vector;
+    im2_ack_external_latched_ = external_ack;
     return ack_vector;
 }
 
@@ -2118,10 +2147,15 @@ void partner::service_cpu_bus(uint64_t &bus_pins)
             fdc.irq_request = false;
             fdc_int_state = 0;
         }
+        if (im2_ack_external_latched_ &&
+            ack_vector == external_im2_pending_vector_) {
+            external_im2_pending_vector_ = -1;
+        }
     }
     if ((bus_pins & (Z80_IORQ | Z80_M1)) != (Z80_IORQ | Z80_M1)) {
         im2_ack_latched_ = false;
         im2_ack_latched_vector_ = -1;
+        im2_ack_external_latched_ = false;
     }
 
     last_cpu_bus_pins_ = bus_pins;

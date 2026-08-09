@@ -244,6 +244,9 @@ protected:
     uint8_t io_read_latched_data_ = 0xFF;
     bool im2_ack_latched_ = false;
     int im2_ack_latched_vector_ = -1;
+    bool im2_ack_external_latched_ = false;
+    int external_im2_pending_vector_ = -1;
+    bool external_im2_edge_armed_ = true;
 
     uint64_t pins = 0;
     uint64_t tick_count = 0;

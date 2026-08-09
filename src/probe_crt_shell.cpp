@@ -412,7 +412,7 @@ static bool shell_prompt_seen(const partner_crt &emu)
 
 static bool build_all(const std::string &root)
 {
-    if (std::system(("make -C " + root + "/partos -s sys rom").c_str()) != 0) {
+    if (std::system("make -C " PARTOS_ROOT " -s sys rom") != 0) {
         std::puts("FAIL: PartOS ROM/sys build failed");
         return false;
     }
@@ -811,12 +811,12 @@ int main(int argc, char **argv)
     if (std::getenv("IDP_SKIP_BUILD") == nullptr && !build_all(root))
         return 1;
 
-    const std::string rom_path = root + "/partos/bin/partos.rom";
-    const std::string kernel_path = root + "/partos/bin/kernel.sys";
-    const std::string os_path = root + "/partos/bin/os.sys";
+    const std::string rom_path = PARTOS_ROOT "/bin/partos.rom";
+    const std::string kernel_path = PARTOS_ROOT "/bin/kernel.sys";
+    const std::string os_path = PARTOS_ROOT "/bin/os.sys";
     const std::string hdd_path = root + "/disks/hdd-dos.img";
-    const std::string kernel_map_path = root + "/partos/build/kernel.map";
-    const std::string os_map_path = root + "/partos/build/os.map";
+    const std::string kernel_map_path = PARTOS_ROOT "/build/kernel.map";
+    const std::string os_map_path = PARTOS_ROOT "/build/os.map";
     symbol_map K(kernel_map_path);
     symbol_map O(os_map_path);
     const uint16_t sys_kernel = K.at("__sys_kernel");
@@ -864,7 +864,7 @@ int main(int argc, char **argv)
     std::vector<uint8_t> boot_shell_expected;
     bool boot_shell_change_logged = false;
 
-    probe_partner_crt emu(terminal_profile::vt52, root + "/partos/partos_shadow_nvram.bin");
+    probe_partner_crt emu(terminal_profile::vt52, PARTOS_ROOT "/partos_shadow_nvram.bin");
     emu.load_hdd(hdd_path);
     uint64_t guard = 0;
     auto st = emu.capture_debug_cpu_state();

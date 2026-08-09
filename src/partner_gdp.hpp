@@ -16,13 +16,16 @@ class display;
 class partner_gdp : public partner
 {
 public:
+    static constexpr size_t KEY_FIFO_CAPACITY = 64;
+
     explicit partner_gdp(terminal_profile profile = terminal_profile::vt100_ansi,
                          const std::string &rtc_nvram_path = "partner_cmos.bin");
 
     void reset() override;
     void tick() override;
     void render_to(display &disp);
-    void key_input(uint8_t ch);
+    bool key_input(uint8_t ch);
+    size_t pending_key_count() const;
     std::string dump_terminal_text() const;
     std::string dump_raw_serial_text() const;
     const scn2674_t& get_avdc() const { return avdc_; }

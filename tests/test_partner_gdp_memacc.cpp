@@ -28,6 +28,27 @@ int main()
         return 1;
     }
 
+    size_t accepted = 0;
+    for (size_t i = 0; i < 1024; i++) {
+        if (emu.key_input('K'))
+            accepted++;
+    }
+    const size_t pending = emu.pending_key_count();
+    if (accepted > partner_gdp::KEY_FIFO_CAPACITY + 1u ||
+        pending > partner_gdp::KEY_FIFO_CAPACITY + 1u ||
+        accepted == 1024u)
+    {
+        std::printf("test_partner_gdp_memacc: FAIL keyboard accepted=%zu pending=%zu\n",
+                    accepted, pending);
+        return 1;
+    }
+
+    emu.reset();
+    if (emu.pending_key_count() != 0u) {
+        std::puts("test_partner_gdp_memacc: FAIL keyboard reset did not clear backlog");
+        return 1;
+    }
+
     std::puts("test_partner_gdp_memacc: PASS");
     return 0;
 }

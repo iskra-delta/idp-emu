@@ -1,6 +1,7 @@
 #pragma once
 #include "display.hpp"
 #include "panel_display.hpp"
+#include "terminal_keymap.hpp"
 #include "../debugger.hpp"
 #include "../terminal/terminal_factory.hpp"
 #include <SDL.h>
@@ -89,6 +90,7 @@ private:
     SDL_AudioSpec audio_spec_{};
 
     std::vector<uint8_t> key_buf_;
+    terminal_key_repeat_limiter key_repeat_limiter_{};
     std::unordered_map<std::string, uint32_t> key_blink_until_ms_{};
     dap_debugger *remote_debugger_ = nullptr;
     std::string disk_mount_path_;

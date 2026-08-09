@@ -2,7 +2,7 @@
   "version": "0.2.0",
   "configurations": [
     {
-      "name": "PartOS Boot",
+      "name": "Original Partner GDP CP/M",
       "type": "cppdbg",
       "request": "launch",
       "program": "${workspaceFolder}/bin/idp-emu",
@@ -10,15 +10,11 @@
         "--model",
         "gdp",
         "--rom",
-        "${workspaceFolder}/partos/bin/partos.rom",
+        "${workspaceFolder}/roms/partner_gdp.rom",
         "--nvram",
-        "${workspaceFolder}/partos/partos_shadow_nvram.bin",
-        "--disk",
-        "${workspaceFolder}/disks/fdd-dos.img",
+        "${workspaceFolder}/partner_cmos.bin",
         "--hdd",
-        "${workspaceFolder}/disks/hdd-dos.img",
-        "--terminal",
-        "vt100"
+        "${workspaceFolder}/disks/hdd-partner-g-system.img"
       ],
       "cwd": "${workspaceFolder}",
       "stopAtEntry": false,
@@ -35,7 +31,7 @@
       ],
       "MIMode": "gdb",
       "miDebuggerPath": "${workspaceFolder}/tools/gdb-no-debuginfod.sh",
-      "preLaunchTask": "Build + Smoke PartOS",
+      "preLaunchTask": "CMake Build RelWithDebInfo",
       "setupCommands": [
         {
           "description": "Enable async MI so Pause/interrupt works while the target is running",

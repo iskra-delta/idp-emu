@@ -583,7 +583,8 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
     service_keyboard_sound(emu);
 
     const Uint32 main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
-    const bool gdp_keyboard_model = dynamic_cast<partner_gdp *>(&emu) != nullptr;
+    auto *gdp_keyboard = dynamic_cast<partner_gdp *>(&emu);
+    const bool gdp_keyboard_model = gdp_keyboard != nullptr;
     const bool has_serial_mouse = emu.has_serial_mouse_attached();
     const auto point_in_display = [&](int window_x, int window_y) -> bool {
         int win_x = 0;
@@ -665,6 +666,7 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
             (event.window.event == SDL_WINDOWEVENT_FOCUS_LOST ||
              event.window.event == SDL_WINDOWEVENT_LEAVE))
         {
+            key_repeat_limiter_.clear();
             release_mouse_mode();
         }
 
@@ -765,10 +767,33 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
             continue;
         }
 
+        if (event.type == SDL_KEYUP)
+        {
+            key_repeat_limiter_.release(event.key.keysym.sym);
+        }
+
         if (event.type == SDL_KEYDOWN)
         {
             const SDL_Keycode sym = event.key.keysym.sym;
             const SDL_Keymod mods = (SDL_Keymod)event.key.keysym.mod;
+            const bool repeat = event.key.repeat != 0;
+            const bool repeat_enabled =
+                !gdp_keyboard_model || gdp_keyboard->get_keyboard().autorepeat_enabled();
+            const uint32_t timestamp =
+                event.key.timestamp != 0 ? event.key.timestamp : SDL_GetTicks();
+            if (!key_repeat_limiter_.accept(sym, repeat, timestamp, repeat_enabled))
+                continue;
+
+            /*
+                A GDP cursor key is a three-byte ANSI packet. If the guest is
+                busy drawing, do not let host repeats get ahead of the serial
+                keyboard path and accumulate an ever-growing command stream.
+            */
+            constexpr size_t repeat_backlog_limit = 6;
+            const size_t repeat_backlog = key_buf_.size() +
+                (gdp_keyboard_model ? gdp_keyboard->pending_key_count() : 0u);
+            if (repeat && repeat_backlog >= repeat_backlog_limit)
+                continue;
 
             if (mouse_relative_active_ && (sym == SDLK_LCTRL || sym == SDLK_RCTRL))
             {
@@ -836,7 +861,7 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
                 if (map_terminal_ctrl_key(sym, mods, key_buf_))
                     continue;
 
-                if (map_terminal_key(sym, key_buf_, gdp_keyboard_model))
+                if (map_terminal_key(sym, key_buf_, terminal_profile_, gdp_keyboard_model))
                     continue;
 
                 switch (sym)

@@ -100,7 +100,7 @@ static uint16_t read_area_addr(const std::string &path, const std::string &area)
 
 static bool build_all(const std::string &root)
 {
-    if (std::system(("make -C " + root + "/partos -s sys").c_str()) != 0) {
+    if (std::system("make -C " PARTOS_ROOT " -s sys") != 0) {
         std::puts("FAIL: split PartOS build failed");
         return false;
     }
@@ -121,10 +121,10 @@ int main(int argc, char **argv)
     if (std::getenv("IDP_SKIP_BUILD") == nullptr && !build_all(root))
         return 1;
 
-    const std::string kernel_path = root + "/partos/bin/kernel.sys";
-    const std::string os_path = root + "/partos/bin/os.sys";
-    const std::string kernel_map_path = root + "/partos/build/kernel.map";
-    const std::string os_map_path = root + "/partos/build/os.map";
+    const std::string kernel_path = PARTOS_ROOT "/bin/kernel.sys";
+    const std::string os_path = PARTOS_ROOT "/bin/os.sys";
+    const std::string kernel_map_path = PARTOS_ROOT "/build/kernel.map";
+    const std::string os_map_path = PARTOS_ROOT "/build/os.map";
 
     const auto kernel_img = read_file(kernel_path);
     const auto os_img = read_file(os_path);
@@ -170,7 +170,7 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    partner emu(root + "/partos/partos_shadow_nvram.bin");
+    partner emu(PARTOS_ROOT "/partos_shadow_nvram.bin");
     emu.reset();
     emu.clean_kernel_io_handoff();
 

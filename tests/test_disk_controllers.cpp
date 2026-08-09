@@ -21,6 +21,10 @@ struct fdc_write_capture {
     size_t size = 0;
 };
 
+struct fdc_read_capture {
+    bool called = false;
+};
+
 struct fdc_format_capture {
     int calls = 0;
     std::array<int, 8> drive{};
@@ -54,6 +58,13 @@ static bool fdc_write_sector_cb(int drive, int c, int h, int r, int n,
     if (cap->size > cap->data.size())
         cap->size = cap->data.size();
     std::memcpy(cap->data.data(), buf, cap->size);
+    return true;
+}
+
+static bool fdc_read_sector_cb(int, int, int, int, int, uint8_t *, void *user)
+{
+    auto *cap = static_cast<fdc_read_capture *>(user);
+    cap->called = true;
     return true;
 }
 
@@ -143,6 +154,48 @@ static int test_i8272_write_data_command()
     CHECK(result[4] == 0x01);
     CHECK(result[5] == 0x05);
     CHECK(result[6] == 0x01);
+    CHECK(fdc.phase == I8272_PHASE_IDLE);
+
+#undef CHECK
+    return fails;
+}
+
+static int test_i8272_read_data_not_ready()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+
+    fdc_read_capture cap{};
+    i8272_t fdc{};
+    i8272_init(&fdc);
+    fdc.read_sector = fdc_read_sector_cb;
+    fdc.user_data = &cap;
+    fdc.drive[1].ready = false;
+
+    const uint8_t cmd[] = {
+        I8272_CMD_READ_DATA, 0x05, 0x03, 0x01, 0x07, 0x01, 0x07, 0x1B, 0xFF
+    };
+    for (uint8_t byte : cmd)
+        i8272_write_data(&fdc, byte);
+
+    CHECK(!cap.called);
+    CHECK(fdc.phase == I8272_PHASE_RESULT);
+    CHECK(fdc.data_len == 0u);
+    CHECK(fdc.st0 == (I8272_ST0_IC_AT | I8272_ST0_NR | I8272_ST0_HD | I8272_ST0_US0));
+    CHECK(fdc.st1 == 0u);
+    CHECK(fdc.st2 == 0u);
+
+    uint8_t result[7]{};
+    for (uint8_t &byte : result)
+        byte = i8272_read_data(&fdc);
+
+    CHECK(result[0] == (I8272_ST0_IC_AT | I8272_ST0_NR | I8272_ST0_HD | I8272_ST0_US0));
+    CHECK(result[1] == 0u);
+    CHECK(result[2] == 0u);
+    CHECK(result[3] == 0x03u);
+    CHECK(result[4] == 0x01u);
+    CHECK(result[5] == 0x07u);
+    CHECK(result[6] == 0x01u);
     CHECK(fdc.phase == I8272_PHASE_IDLE);
 
 #undef CHECK
@@ -289,6 +342,7 @@ int main()
 {
     int fails = 0;
     fails += test_i8272_write_data_command();
+    fails += test_i8272_read_data_not_ready();
     fails += test_i8272_format_track_command();
     fails += test_s1410_write6_command();
     fails += test_sasi_adapter_write_phase_status();

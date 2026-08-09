@@ -45,7 +45,7 @@ int main(int argc, char **argv)
     if (argc > 1)
         root = argv[1];
 
-    const std::string rom_path = root + "/partos/bin/partos.rom";
+    const std::string rom_path = PARTOS_ROOT "/bin/partos.rom";
     const std::string fdd_path = root + "/disks/fdd-dos.img";
     const std::string hdd_path = root + "/disks/hdd-dos.img";
 

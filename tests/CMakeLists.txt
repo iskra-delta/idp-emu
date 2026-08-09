@@ -84,6 +84,18 @@ idp_require_partos_layout(test_partner_gdp_memacc)
 
 add_test(NAME partner_gdp_memacc_unit COMMAND test_partner_gdp_memacc)
 
+add_executable(test_partner_external_im2
+    test_partner_external_im2.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+)
+
+target_include_directories(test_partner_external_im2 PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_partner_external_im2 PRIVATE chipsex)
+idp_require_partos_layout(test_partner_external_im2)
+
+add_test(NAME partner_external_im2_unit COMMAND test_partner_external_im2)
+
 add_executable(test_ef9367
     test_ef9367.cpp
 )
@@ -324,7 +336,7 @@ add_test(NAME rtc_nvram_shadow COMMAND test_rtc_nvram_shadow)
 add_test(NAME partos_kernel_boot COMMAND idp-kernel-probe)
 
 # ROM loader byte-for-byte verification for the real HD split image path.
-add_test(NAME partos_bootload COMMAND idp-bootload-probe partos/bin/partos.rom hd)
+add_test(NAME partos_bootload COMMAND idp-bootload-probe ${PARTOS_ROOT}/bin/partos.rom hd)
 
 # ROM -> HDD kernel load -> scheduler -> FAT shell read (no kernel overlay).
 add_test(NAME partos_full_boot COMMAND idp-full-boot-probe)

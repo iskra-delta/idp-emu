@@ -546,8 +546,9 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
     /* Calculate sector size */
     const uint16_t sector_size = _i8272_sector_size(n);
 
+    const bool drive_ready = fdc->drive[us].ready;
     bool ok = false;
-    if (fdc->read_sector) {
+    if (drive_ready && fdc->read_sector) {
         ok = fdc->read_sector(us, c, h, r, n, fdc->data_buf, fdc->user_data);
     }
     if (ok) {
@@ -563,6 +564,16 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
         if (r == eot) {
             fdc->st1 |= I8272_ST1_EN;
         }
+    } else if (!drive_ready) {
+        /*
+            No medium is a drive-status failure, not a sector lookup failure.
+            Reporting ND/MA here makes CP/M diagnose an absent floppy as a
+            damaged formatted disk and walk its sector-error message table.
+        */
+        fdc->data_len = 0;
+        fdc->data_idx = 0;
+        fdc->st0 = I8272_ST0_IC_AT | I8272_ST0_NR |
+                   (uint8_t)(hd << 2) | (us & 0x03);
     } else {
         /* Sector not found */
         fdc->data_len = 0;

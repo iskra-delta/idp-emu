@@ -284,7 +284,7 @@ static bool prompt_returned(const std::string &term, const std::string &raw)
 
 static bool build_all(const std::string &root)
 {
-    if (std::system(("make -C " + root + "/partos -s sys rom").c_str()) != 0) {
+    if (std::system("make -C " PARTOS_ROOT " -s sys rom") != 0) {
         std::puts("FAIL: PartOS ROM/sys build failed");
         return false;
     }
@@ -375,17 +375,17 @@ int main(int argc, char **argv)
     if (std::getenv("IDP_SKIP_BUILD") == nullptr && !build_all(root))
         return 1;
 
-    const std::string rom_path = root + "/partos/bin/partos.rom";
+    const std::string rom_path = PARTOS_ROOT "/bin/partos.rom";
     const std::string hdd_path = root + "/disks/hdd-dos.img";
-    const std::string kernel_map_path = root + "/partos/build/kernel.map";
-    const std::string os_map_path = root + "/partos/build/os.map";
-    const std::string shell_map_path = root + "/partos/build/shell_payload.map";
+    const std::string kernel_map_path = PARTOS_ROOT "/build/kernel.map";
+    const std::string os_map_path = PARTOS_ROOT "/build/os.map";
+    const std::string shell_map_path = PARTOS_ROOT "/build/shell_payload.map";
     const std::string app_stem = command_target_stem(command);
     const std::string expected_proc_name = lowercase_ascii(app_stem);
     const std::string app_xld_map_path =
-        root + "/partos/build/" + app_stem + "_xld.map";
+        PARTOS_ROOT "/build/" + app_stem + "_xld.map";
     const std::string app_payload_map_path =
-        root + "/partos/build/" + app_stem + "_payload.map";
+        PARTOS_ROOT "/build/" + app_stem + "_payload.map";
     symbol_map K(kernel_map_path);
     symbol_map O(os_map_path);
     symbol_map S(shell_map_path);
@@ -442,7 +442,7 @@ int main(int argc, char **argv)
     const uint16_t pc_evt_destroy = K.at("_evt_destroy");
 
     partner_crt emu(terminal_profile::vt52,
-                    root + "/partos/partos_shadow_nvram.bin");
+                    PARTOS_ROOT "/partos_shadow_nvram.bin");
     emu.load_rom(rom_path);
     emu.load_hdd(hdd_path);
     emu.reset();

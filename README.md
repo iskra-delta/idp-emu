@@ -74,12 +74,39 @@ Run Partner G (GDP) with empty HDD:
 ./bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g-empty.img
 ```
 
-In VS Code, `F5` uses the guarded `PartOS Boot` launch configuration from `.vscode/launch.json`. It now runs a PartOS layout check plus the `partos_kernel_boot` and `partos_full_boot` smoke probes first, and refuses to launch the emulator when boot is already broken. If you explicitly want to bypass that guardrail for manual debugging, use `PartOS Boot (Unsafe Build Only)`. If you only want the emulator window, use `Run Without Debugging` (`Ctrl+F5`).
+Run Partner G (GDP) with the minimal user-area-0 system disk:
 
-For the same guarded check from the terminal, run:
+```bash
+./bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g-system.img
+```
+
+In VS Code, `F5` defaults to the `Original Partner GDP CP/M` launch configuration from `.vscode/launch.json`. It boots the original Partner GDP ROM from `roms/partner_gdp.rom` with the minimal CP/M hard-disk image from `disks/hdd-partner-g-system.img` and keeps its CMOS settings in `partner_cmos.bin`, separate from PartOS. The disk contains only essential system tools in user area 0 and has no `PROFILE.SUB`. The PartOS launch remains available as `PartOS Boot (Unsafe Build Only)` when needed.
+
+To run the PartOS guard separately from the terminal, use:
 
 ```bash
 make partos-smoke
+```
+
+### Original Partner floppy compatibility
+
+The original GDP ROM/CP/M software matrix mounts each known sibling-project
+floppy as drive `B:`, launches every program, and saves a framebuffer plus a
+machine-readable and Markdown report:
+
+```bash
+python3 tools/run_partner_software_matrix.py \
+  --output /tmp/idp-partner-software-matrix
+```
+
+The two `*-xcc-final.img` source artifacts are empty CP/M images. Their
+companion COM binaries can still be checked from temporary populated copies
+(the source images are left untouched):
+
+```bash
+python3 tools/run_partner_software_matrix.py \
+  --output /tmp/idp-partner-software-matrix-xcc \
+  --test-xcc-binaries
 ```
 
 # Dependencies
