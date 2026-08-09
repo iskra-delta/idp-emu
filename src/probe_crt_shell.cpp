@@ -412,7 +412,7 @@ static bool build_all(const std::string &root)
         std::puts("FAIL: PartOS ROM/sys build failed");
         return false;
     }
-    if (std::system(("python3 " PARTOS_ROOT "/tools/mkdosdisk.py " + root + "/disks").c_str()) != 0) {
+    if (std::system("python3 " PARTOS_ROOT "/tools/mkdosdisk.py " PARTOS_ROOT "/bin/disks") != 0) {
         std::puts("FAIL: disk image build failed");
         return false;
     }
@@ -801,7 +801,7 @@ int main(int argc, char **argv)
     const std::string rom_path = PARTOS_ROOT "/bin/partos.rom";
     const std::string kernel_path = PARTOS_ROOT "/bin/kernel.sys";
     const std::string os_path = PARTOS_ROOT "/bin/os.sys";
-    const std::string hdd_path = root + "/disks/hdd-dos.img";
+    const std::string hdd_path = PARTOS_ROOT "/bin/disks/hdd-dos.img";
     const std::string kernel_map_path = PARTOS_ROOT "/build/kernel.map";
     const std::string os_map_path = PARTOS_ROOT "/build/os.map";
     symbol_map K(kernel_map_path);

@@ -160,7 +160,7 @@ static bool build_all(const std::string &root)
         std::puts("FAIL: PartOS ROM/sys build failed");
         return false;
     }
-    if (std::system(("python3 " PARTOS_ROOT "/tools/mkdosdisk.py " + root + "/disks").c_str()) != 0) {
+    if (std::system("python3 " PARTOS_ROOT "/tools/mkdosdisk.py " PARTOS_ROOT "/bin/disks") != 0) {
         std::puts("FAIL: disk image build failed");
         return false;
     }
@@ -567,7 +567,7 @@ int main(int argc, char **argv)
         env_u64_allow_zero_or("IDP_STRESS_ROUNDS", 0);
 
     const std::string rom_path = PARTOS_ROOT "/bin/partos.rom";
-    const std::string hdd_path = root + "/disks/hdd-dos.img";
+    const std::string hdd_path = PARTOS_ROOT "/bin/disks/hdd-dos.img";
 
     // The scripted regression walk. Every step is a real command; success is
     // silent for the mutating commands, so those simply forbid the error
