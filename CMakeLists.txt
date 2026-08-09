@@ -21,21 +21,32 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_options(-g -O0 -Wall -Wextra -Wno-unused-parameter)
 endif()
 
-set(PARTOS_LAYOUT_HEADER ${CMAKE_SOURCE_DIR}/partos/build/partos_layout.hpp)
+set(PARTOS_ROOT "/home/tstih/data/iskra-delta/partos")
+set(PARTOS_LAYOUT_HEADER ${PARTOS_ROOT}/build/partos_layout.hpp)
 file(GLOB_RECURSE PARTOS_LAYOUT_DEPENDS CONFIGURE_DEPENDS
-    ${CMAKE_SOURCE_DIR}/partos/src/*.s
-    ${CMAKE_SOURCE_DIR}/partos/src/*.c
-    ${CMAKE_SOURCE_DIR}/partos/src/*.inc
-    ${CMAKE_SOURCE_DIR}/partos/include/*.h
-    ${CMAKE_SOURCE_DIR}/partos/Makefile
-    ${CMAKE_SOURCE_DIR}/tools/check_partos_layout.py
+    ${PARTOS_ROOT}/src/*.s
+    ${PARTOS_ROOT}/src/*.c
+    ${PARTOS_ROOT}/src/*.inc
+    ${PARTOS_ROOT}/include/*.h
+    ${PARTOS_ROOT}/Makefile
+    ${PARTOS_ROOT}/tools/check_partos_layout.py
 )
+
+# CMake 3.28+ can tell GNU Make that this nested PartOS build participates in
+# the parent's jobserver.  Without this, parallel F5 builds warn and force the
+# nested make invocation to run serially.
+set(PARTOS_LAYOUT_JOB_SERVER_ARGS)
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
+    set(PARTOS_LAYOUT_JOB_SERVER_ARGS JOB_SERVER_AWARE TRUE)
+endif()
+
 add_custom_command(
     OUTPUT ${PARTOS_LAYOUT_HEADER}
-    COMMAND ${CMAKE_MAKE_PROGRAM} -C ${CMAKE_SOURCE_DIR}/partos build/partos_layout.hpp
+    COMMAND ${CMAKE_MAKE_PROGRAM} -C ${PARTOS_ROOT} build/partos_layout.hpp
     DEPENDS ${PARTOS_LAYOUT_DEPENDS}
     COMMENT "Generating PartOS layout header"
     VERBATIM
+    ${PARTOS_LAYOUT_JOB_SERVER_ARGS}
 )
 add_custom_target(partos_layout_header DEPENDS ${PARTOS_LAYOUT_HEADER})
 
