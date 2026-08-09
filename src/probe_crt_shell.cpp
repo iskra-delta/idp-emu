@@ -229,10 +229,6 @@ static void dump_shell_state(const char *label,
     constexpr uint16_t SHELL_OFF_RUN_COMMAND = 0x01AC;
     constexpr uint16_t SHELL_OFF_CALL_OFFSET = 0x00C3;
     constexpr uint16_t SHELL_OFF_PARTOS = 0x026E;
-    constexpr uint16_t SHELL_OFF_TMP_PTR = 0x0272;
-    constexpr uint16_t SHELL_OFF_CMD_LEN = 0x0274;
-    constexpr uint16_t SHELL_OFF_CHAR = 0x0275;
-    constexpr uint16_t SHELL_OFF_CMD_BUF = 0x0276;
 
     const shell_layout lay = read_shell_layout(emu, usr_heap, owner);
     if (lay.com == 0) {
@@ -421,15 +417,6 @@ static bool build_all(const std::string &root)
         return false;
     }
     return true;
-}
-
-static void push_script(partner_crt &emu, const char *script)
-{
-    for (const char *p = script; *p != '\0'; ++p) {
-        emu.key_input((uint8_t)*p);
-        for (int n = 0; n < 4000; ++n)
-            emu.tick();
-    }
 }
 
 static void step_one_instruction(partner &emu)

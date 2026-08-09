@@ -231,15 +231,6 @@ static std::string command_target_stem(const std::string &command)
     return stem.empty() ? command_stem(command) : stem;
 }
 
-static std::string uppercase_ascii(std::string s)
-{
-    for (char &ch : s) {
-        if (ch >= 'a' && ch <= 'z')
-            ch = (char)(ch - 'a' + 'A');
-    }
-    return s;
-}
-
 static std::string lowercase_ascii(std::string s)
 {
     for (char &ch : s) {
