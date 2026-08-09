@@ -18,7 +18,7 @@ constexpr std::array<uint8_t, 8> INVALID_NVRAM = {
 
 static bool build_partos_rom(const std::filesystem::path &source_root)
 {
-    const std::string cmd = "make -C " + (source_root / "partos").string() + " -s";
+    const std::string cmd = "make -C " PARTOS_ROOT " -s";
     return std::system(cmd.c_str()) == 0;
 }
 
@@ -174,7 +174,7 @@ int main()
     namespace fs = std::filesystem;
 
     const fs::path root = IDP_SOURCE_ROOT;
-    const fs::path rom_path = root / "partos" / "bin" / "partos.rom";
+    const fs::path rom_path = PARTOS_ROOT "/bin/partos.rom";
     const fs::path tmp_dir = root / "tests" / ".tmp-partos-bios-menu-gdp";
     const fs::path nvram_path = tmp_dir / "invalid-nvram.bin";
 
