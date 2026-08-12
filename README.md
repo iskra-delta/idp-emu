@@ -56,6 +56,9 @@ make clean
 
 ## Run
 
+See the [complete command-line reference](docs/COMMAND-LINE.md) for every
+option, alias, accepted value, default, escape sequence, and additional example.
+
 Run Partner P (CRT) with floppy:
 
 ```bash
@@ -102,6 +105,21 @@ boots can be given more time, and `--commands` can be repeated:
 
 Supported escapes are `\n`/`\r` (Enter), `\t` (Tab), `\b` (Backspace), `\e`
 (Escape), `\\`, and `\xNN` for an exact byte.
+
+### Covox audio and recordings
+
+The emulator can attach a real-time 8-bit Covox DAC to either free port of the
+main PIO (`D0h`–`D3h`). Port `1` is A and port `2` is B:
+
+```bash
+./bin/idp-emu --model gdp --hdd disks/music.img \
+  --covox-port 1 --commands 'player 1\n'
+```
+
+This does not use the GDP board's separate PIO at `30h`–`33h`. You can also
+attach or detach the DAC in **Devices → PIO Devices**. When a Covox is attached
+at the start of a screen recording, its 44.1 kHz mono output is included in the
+AVI with the recorded image.
 
 ### Original Partner floppy compatibility
 

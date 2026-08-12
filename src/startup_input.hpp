@@ -14,7 +14,8 @@ public:
 
     startup_input(std::vector<uint8_t> keys,
                   std::chrono::milliseconds initial_delay,
-                  std::chrono::milliseconds key_interval);
+                  std::chrono::milliseconds key_interval,
+                  std::chrono::milliseconds enter_delay);
 
     static bool decode(std::string_view text,
                        std::vector<uint8_t> &keys,
@@ -31,6 +32,7 @@ private:
     std::vector<uint8_t> keys_;
     std::chrono::milliseconds initial_delay_{};
     std::chrono::milliseconds key_interval_{};
+    std::chrono::milliseconds enter_delay_{};
     clock::time_point next_due_{};
     std::size_t next_key_ = 0;
     bool started_ = false;

@@ -55,7 +55,7 @@ void test_invalid_escapes()
 void test_timing()
 {
     using namespace std::chrono_literals;
-    startup_input input({'a', 'b'}, 100ms, 40ms);
+    startup_input input({'a', 'b'}, 100ms, 40ms, 200ms);
     const startup_input::clock::time_point start{};
     input.start(start);
 
@@ -67,6 +67,19 @@ void test_timing()
            "second key is produced after key interval");
     expect(input.finished(), "input reports completion");
     expect(!input.take_due(start + 1000ms), "completed input produces no more keys");
+
+    startup_input commands({'b', ':', 0x0D, 'm'}, 0ms, 40ms, 200ms);
+    commands.start(start);
+    expect(commands.take_due(start) == std::optional<uint8_t>{'b'},
+           "command typing starts normally");
+    expect(commands.take_due(start + 40ms) == std::optional<uint8_t>{':'},
+           "normal key interval remains in use");
+    expect(commands.take_due(start + 80ms) == std::optional<uint8_t>{0x0D},
+           "Enter is emitted at the normal interval");
+    expect(!commands.take_due(start + 279ms),
+           "the next command observes the Enter delay");
+    expect(commands.take_due(start + 280ms) == std::optional<uint8_t>{'m'},
+           "the first key after Enter uses the dedicated delay");
 }
 }
 

@@ -105,6 +105,28 @@ idp_require_partos_layout(test_partner_external_im2)
 
 add_test(NAME partner_external_im2_unit COMMAND test_partner_external_im2)
 
+add_executable(test_partner_covox
+    test_partner_covox.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+)
+
+target_include_directories(test_partner_covox PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_partner_covox PRIVATE chipsex)
+idp_require_partos_layout(test_partner_covox)
+
+add_test(NAME partner_covox_unit COMMAND test_partner_covox)
+
+add_executable(test_screen_recorder
+    test_screen_recorder.cpp
+    ../src/gui/screen_recorder.cpp
+)
+
+target_include_directories(test_screen_recorder PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_screen_recorder PRIVATE SDL2::SDL2)
+
+add_test(NAME screen_recorder_unit COMMAND test_screen_recorder)
+
 add_executable(test_ef9367
     test_ef9367.cpp
 )

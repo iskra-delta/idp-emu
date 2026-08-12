@@ -7,10 +7,11 @@
 #include "../debugger.hpp"
 #include "../terminal/terminal_factory.hpp"
 #include <SDL.h>
+#include <array>
+#include <cstdint>
 #include <filesystem>
 #include <string>
 #include <vector>
-#include <cstdint>
 #include <unordered_map>
 #include <optional>
 
@@ -56,14 +57,16 @@ private:
     void queue_keyboard_tone(float freq_hz, float duration_ms, float amplitude, bool square_wave);
     void queue_keyboard_sound(partner_gdp_keyboard_sound sound);
     void service_keyboard_sound(partner &emu);
+    void service_covox_audio(partner &emu);
+    void reset_covox_audio_timeline(partner &emu, uint64_t tick);
     void open_disk_mount_dialog(partner &emu, int drive);
     void open_screenshot_dialog();
     void open_recording_dialog();
     void render_file_dialog(partner &emu);
     void render_file_operation_error();
-    void start_screen_recording(const std::filesystem::path &path);
+    void start_screen_recording(const std::filesystem::path &path, partner &emu);
     void stop_screen_recording();
-    void service_screen_recording();
+    void service_screen_recording(partner &emu);
     void open_remote_debugger_dialog();
     void render_remote_debugger_dialog();
 
@@ -106,6 +109,11 @@ private:
     terminal_profile terminal_profile_ = terminal_profile::vt52;
     SDL_AudioDeviceID audio_device_ = 0;
     SDL_AudioSpec audio_spec_{};
+    bool covox_audio_timeline_active_ = false;
+    uint64_t covox_audio_tick_ = 0;
+    uint64_t covox_audio_phase_ = 0;
+    std::array<uint8_t, 2> covox_audio_levels_{{0x80, 0x80}};
+    std::array<bool, 2> covox_audio_attached_{{false, false}};
 
     std::vector<uint8_t> key_buf_;
     terminal_key_repeat_limiter key_repeat_limiter_{};

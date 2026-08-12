@@ -502,7 +502,17 @@ partner::pio_device_config partner::get_pio_device_config(pio_port_id port) cons
 
 void partner::set_pio_device_config(pio_port_id port, const pio_device_config &cfg)
 {
-    pio_device_cfg_[pio_port_index(port)] = cfg;
+    const int index = pio_port_index(port);
+    if (pio_device_cfg_[index].kind == cfg.kind)
+        return;
+    pio_device_cfg_[index] = cfg;
+    pio_device_runtime_[index].covox_level = 0.0f;
+
+    // A routing change is an audio discontinuity. Discard stale samples for
+    // this port so the host starts the newly attached DAC at quiet midscale.
+    std::erase_if(covox_sample_events_, [port](const covox_sample_event &event) {
+        return event.port == port;
+    });
 }
 
 partner::pio_port_status partner::get_pio_port_status(pio_port_id port) const
@@ -513,6 +523,18 @@ partner::pio_port_status partner::get_pio_port_status(pio_port_id port) const
     st.covox_level = rt.covox_level;
     st.bytes_seen = rt.bytes_seen;
     return st;
+}
+
+std::vector<partner::covox_sample_event> partner::drain_covox_sample_events()
+{
+    std::vector<covox_sample_event> events;
+    events.reserve(covox_sample_events_.size());
+    while (!covox_sample_events_.empty())
+    {
+        events.push_back(covox_sample_events_.front());
+        covox_sample_events_.pop_front();
+    }
+    return events;
 }
 
 void partner::cleanup_tcp_bridge(tcp_bridge_runtime &tcp)
@@ -1049,6 +1071,12 @@ void partner::apply_pio_device_output(pio_port_id port, uint8_t data)
     rt.bytes_seen++;
     if (kind == pio_device_kind::covox) {
         rt.covox_level = (float)data / 255.0f;
+        // Keep exact emulated timing. The GUI resamples these zero-order-held
+        // 8-bit DAC values to the host rate for live and recorded audio.
+        static constexpr size_t max_pending_covox_samples = 262144;
+        if (covox_sample_events_.size() == max_pending_covox_samples)
+            covox_sample_events_.pop_front();
+        covox_sample_events_.push_back({tick_count, port, data});
         return;
     }
     if (kind == pio_device_kind::centronics_printer)
@@ -1557,6 +1585,7 @@ void partner::reset()
         rt.covox_level = 0.0f;
         rt.bytes_seen = 0;
     }
+    covox_sample_events_.clear();
     virtual_printer_text_.clear();
 }
 
@@ -1840,7 +1869,18 @@ void partner::tick()
         if (port & 0x01) pins |= Z80PIO_CDSEL; // control
         if (port & 0x02) pins |= Z80PIO_BASEL; // port B
     }
+    // The CPU core exposes the leading M1 phase before RD/MREQ settles. The
+    // standalone PIO model interprets M1 without RD/IORQ as its reset
+    // sequence, which would otherwise reset both ports after every Z80
+    // instruction. Machine reset already calls z80pio_reset() explicitly;
+    // keep M1 only for a real IORQ interrupt-acknowledge cycle here.
+    const bool masked_transient_pio_m1 =
+        (pins & Z80PIO_M1) && !(pins & Z80PIO_IORQ) && !(pins & Z80PIO_RD);
+    if (masked_transient_pio_m1)
+        pins &= ~Z80PIO_M1;
     pins = z80pio_tick(&pio, pins);
+    if (masked_transient_pio_m1)
+        pins |= Z80PIO_M1;
     pins &= ~(Z80PIO_CE | Z80PIO_CDSEL | Z80PIO_BASEL);
 
     // DMA uses the same high-bit namespace as the Zilog family chips for its
@@ -2552,11 +2592,11 @@ void partner::io_write(uint16_t port, uint8_t data)
         const bool is_data_write = (port & 0x01) == 0;
         const pio_port_id pio_port = (port & 0x02) ? pio_port_id::b : pio_port_id::a;
         z80pio_cpu_write(&pio, (uint8_t)port, data);
-        if (is_data_write)
+        const int port_index = (port & 0x02) ? Z80PIO_PORT_B : Z80PIO_PORT_A;
+        if (is_data_write && pio.port[port_index].mode == Z80PIO_MODE_OUTPUT)
         {
-            apply_pio_device_output(pio_port, pio.port[(port & 0x02) ? Z80PIO_PORT_B : Z80PIO_PORT_A].output);
-            if (pio.port[(port & 0x02) ? Z80PIO_PORT_B : Z80PIO_PORT_A].mode == Z80PIO_MODE_OUTPUT)
-                pulse_pio_output_ack(pio_port);
+            apply_pio_device_output(pio_port, pio.port[port_index].output);
+            pulse_pio_output_ack(pio_port);
         }
         return;
     }

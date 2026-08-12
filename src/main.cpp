@@ -13,8 +13,10 @@
 #include <filesystem>
 #include <memory>
 #include <limits>
+#include <optional>
 #include <cctype>
 #include <cstdlib>
+#include <thread>
 #include <vector>
 
 static constexpr uint32_t CPU_CLOCK_HZ = 4000000;
@@ -103,6 +105,7 @@ void print_usage(const char *prog)
     std::cerr << "                         (default selected by ROM)\n";
     std::cerr << "  --terminal TYPE        Terminal profile: vt52|vt100|ansi\n";
     std::cerr << "  --model TYPE           Machine model: crt|gdp|auto (default: auto)\n";
+    std::cerr << "  --covox-port PORT      Attach Covox to main PIO: 1=A, 2=B\n";
     std::cerr << "  --dap PORT             Start the udap DAP server on 127.0.0.1:PORT\n";
     std::cerr << "  --commands TEXT        Type TEXT after the GUI opens; may be repeated\n";
     std::cerr << "  --command TEXT         Alias for --commands\n";
@@ -111,6 +114,7 @@ void print_usage(const char *prog)
     std::cerr << "                         \\e=Esc, \\\\, quotes, and \\xNN\n";
     std::cerr << "  --type-delay MS        Delay before the first startup key (default: 1000)\n";
     std::cerr << "  --type-interval MS     Delay between startup keys (default: 350)\n";
+    std::cerr << "  --type-enter-delay MS  Delay after Enter when more keys follow (default: interval)\n";
 }
 
 int main(int argc, char **argv)
@@ -122,6 +126,7 @@ int main(int argc, char **argv)
     std::string nvram_file = DEFAULT_PARTOS_NVRAM;
     std::string model = "auto";
     uint16_t dap_port = 0;
+    int covox_port = 0;
     bool rom_explicit = false;
     bool fd0_explicit = false;
     bool fd1_explicit = false;
@@ -132,6 +137,8 @@ int main(int argc, char **argv)
     std::vector<uint8_t> startup_keys;
     uint32_t startup_delay_ms = 1000;
     uint32_t startup_interval_ms = 350;
+    uint32_t startup_enter_delay_ms = 350;
+    bool startup_enter_delay_explicit = false;
 
     for (int i = 1; i < argc; i++)
     {
@@ -220,6 +227,25 @@ int main(int argc, char **argv)
             }
             dap_port = (uint16_t)parsed;
         }
+        else if (strcmp(argv[i], "--covox-port") == 0)
+        {
+            if ((i + 1) >= argc)
+            {
+                std::cerr << "Error: --covox-port requires 1 (PIO A) or 2 (PIO B)\n";
+                return 1;
+            }
+            const char *value = argv[++i];
+            if (strcmp(value, "1") == 0)
+                covox_port = 1;
+            else if (strcmp(value, "2") == 0)
+                covox_port = 2;
+            else
+            {
+                std::cerr << "Error: Invalid --covox-port value: " << value
+                          << "; use 1 or 2\n";
+                return 1;
+            }
+        }
         else if (strcmp(argv[i], "--commands") == 0 ||
                  strcmp(argv[i], "--command") == 0 ||
                  strcmp(argv[i], "--type") == 0)
@@ -237,21 +263,27 @@ int main(int argc, char **argv)
             }
         }
         else if (strcmp(argv[i], "--type-delay") == 0 ||
-                 strcmp(argv[i], "--type-interval") == 0)
+                 strcmp(argv[i], "--type-interval") == 0 ||
+                 strcmp(argv[i], "--type-enter-delay") == 0)
         {
             const bool is_delay = strcmp(argv[i], "--type-delay") == 0;
+            const bool is_enter_delay =
+                strcmp(argv[i], "--type-enter-delay") == 0;
             const char *option = argv[i];
             if ((i + 1) >= argc)
             {
                 std::cerr << "Error: " << option << " requires milliseconds\n";
                 return 1;
             }
-            uint32_t &destination = is_delay ? startup_delay_ms : startup_interval_ms;
+            uint32_t &destination = is_delay ? startup_delay_ms :
+                (is_enter_delay ? startup_enter_delay_ms : startup_interval_ms);
             if (!parse_milliseconds(argv[++i], destination))
             {
                 std::cerr << "Error: Invalid " << option << " value: " << argv[i] << "\n";
                 return 1;
             }
+            if (is_enter_delay)
+                startup_enter_delay_explicit = true;
         }
         else if (strcmp(argv[i], "--model") == 0)
         {
@@ -457,6 +489,17 @@ int main(int argc, char **argv)
         };
 
         std::unique_ptr<partner> emu = make_emu(gdp_model);
+        if (covox_port != 0)
+        {
+            const auto port = covox_port == 1 ? partner::pio_port_id::a
+                                              : partner::pio_port_id::b;
+            partner::pio_device_config config;
+            config.kind = partner::pio_device_kind::covox;
+            emu->set_pio_device_config(port, config);
+            std::cout << "[info] Covox attached to main PIO "
+                      << (covox_port == 1 ? "A" : "B")
+                      << " (program argument " << covox_port << ")\n";
+        }
 
         gui app_gui;
         dap_debugger remote_dbg;
@@ -497,6 +540,12 @@ int main(int argc, char **argv)
         const char *quit_hint = "Ctrl+Q=Quit";
         std::cout << "[info] Space=Run/Pause  F11=Step Into  F10=Step Over  " << quit_hint << "\n";
 
+        using frame_clock = std::chrono::steady_clock;
+        const auto host_frame_period =
+            std::chrono::nanoseconds(1000000000ULL / TARGET_FPS);
+        auto next_host_frame = frame_clock::now() + host_frame_period;
+        uint32_t frame_tick_remainder = 0;
+
         auto push_key = [&](uint8_t ch) -> bool {
             if (auto *crt = dynamic_cast<partner_crt *>(emu.get()))
             {
@@ -528,10 +577,13 @@ int main(int argc, char **argv)
                 return gdp->dump_terminal_text();
             return std::string{};
         };
+        if (!startup_enter_delay_explicit)
+            startup_enter_delay_ms = startup_interval_ms;
         startup_input scripted_input(
             std::move(startup_keys),
             std::chrono::milliseconds(startup_delay_ms),
-            std::chrono::milliseconds(startup_interval_ms));
+            std::chrono::milliseconds(startup_interval_ms),
+            std::chrono::milliseconds(startup_enter_delay_ms));
         bool scripted_input_started = false;
         bool scripted_first_key_sent = false;
         bool scripted_input_complete_reported = false;
@@ -665,6 +717,12 @@ int main(int argc, char **argv)
                     // Execute roughly a frame worth of emulation, but in smaller
                     // chunks so the window remains responsive.
                     uint32_t ticks_left = TICKS_PER_FRAME;
+                    frame_tick_remainder += CPU_CLOCK_HZ % TARGET_FPS;
+                    if (frame_tick_remainder >= TARGET_FPS)
+                    {
+                        ++ticks_left;
+                        frame_tick_remainder -= TARGET_FPS;
+                    }
                     while (ticks_left > 0 && running && !paused)
                     {
                         const uint32_t slice = (ticks_left > RUN_TICK_SLICE) ? RUN_TICK_SLICE : ticks_left;
@@ -789,6 +847,26 @@ int main(int argc, char **argv)
                 app_gui.render_panels(*emu, paused, action);
             }
             app_gui.end_frame();
+
+            // TICKS_PER_FRAME represents exactly one 60 Hz slice of the
+            // Partner's 4 MHz clock. Pace those slices against steady host
+            // time even when OpenGL vsync is disabled, or sound and the whole
+            // guest run faster than the physical machine. Do not accumulate a
+            // large catch-up burst after a debugger stop or host stall.
+            const auto host_now = frame_clock::now();
+            if (host_now < next_host_frame)
+            {
+                std::this_thread::sleep_until(next_host_frame);
+                next_host_frame += host_frame_period;
+            }
+            else if (host_now - next_host_frame > host_frame_period * 4)
+            {
+                next_host_frame = host_now + host_frame_period;
+            }
+            else
+            {
+                next_host_frame += host_frame_period;
+            }
             if (!scripted_input_started && !scripted_input.empty())
             {
                 scripted_input.start(startup_input::clock::now());

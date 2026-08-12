@@ -17,10 +17,12 @@ int hex_value(char value)
 
 startup_input::startup_input(std::vector<uint8_t> keys,
                              std::chrono::milliseconds initial_delay,
-                             std::chrono::milliseconds key_interval)
+                             std::chrono::milliseconds key_interval,
+                             std::chrono::milliseconds enter_delay)
     : keys_(std::move(keys)),
       initial_delay_(initial_delay),
-      key_interval_(key_interval)
+      key_interval_(key_interval),
+      enter_delay_(enter_delay)
 {
 }
 
@@ -127,6 +129,7 @@ std::optional<uint8_t> startup_input::take_due(clock::time_point now)
         return std::nullopt;
 
     const uint8_t key = keys_[next_key_++];
-    next_due_ = now + key_interval_;
+    const bool command_boundary = key == 0x0D && !finished();
+    next_due_ = now + (command_boundary ? enter_delay_ : key_interval_);
     return key;
 }

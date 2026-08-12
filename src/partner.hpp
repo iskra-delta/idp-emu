@@ -81,6 +81,12 @@ public:
         uint64_t bytes_seen = 0;
     };
 
+    struct covox_sample_event {
+        uint64_t tick = 0;
+        pio_port_id port = pio_port_id::a;
+        uint8_t sample = 0x80;
+    };
+
     explicit partner(const std::string &rtc_nvram_path = "partner_cmos.bin");
     virtual ~partner();
 
@@ -170,6 +176,7 @@ public:
     pio_device_config get_pio_device_config(pio_port_id port) const;
     void set_pio_device_config(pio_port_id port, const pio_device_config &cfg);
     pio_port_status get_pio_port_status(pio_port_id port) const;
+    std::vector<covox_sample_event> drain_covox_sample_events();
     const std::string &get_virtual_printer_text() const { return virtual_printer_text_; }
     void clear_virtual_printer_text() { virtual_printer_text_.clear(); }
 
@@ -361,6 +368,7 @@ private:
     std::array<std::string, 4> sio_port_lock_reason_{};
     std::array<pio_device_config, 2> pio_device_cfg_{};
     std::array<pio_device_runtime, 2> pio_device_runtime_{};
+    std::deque<covox_sample_event> covox_sample_events_;
     std::string virtual_printer_text_;
 
     bool persist_disk_bytes(disk_image &disk, uint64_t offset,

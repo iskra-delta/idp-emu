@@ -318,9 +318,165 @@ void gui::service_keyboard_sound(partner &emu)
         return;
     }
     auto &kbd = gdp->get_keyboard();
+    const bool covox_attached =
+        emu.get_pio_device_config(partner::pio_port_id::a).kind ==
+            partner::pio_device_kind::covox ||
+        emu.get_pio_device_config(partner::pio_port_id::b).kind ==
+            partner::pio_device_kind::covox;
     partner_gdp_keyboard_sound sound = partner_gdp_keyboard_sound::none;
     while (kbd.pop_sound(sound)) {
-        queue_keyboard_sound(sound);
+        // The SDL queue is the physical Covox output while a DAC is attached.
+        // Do not splice the emulator UI's synthetic keyboard tones into it.
+        if (!covox_attached)
+            queue_keyboard_sound(sound);
+    }
+}
+
+void gui::reset_covox_audio_timeline(partner &emu, uint64_t tick)
+{
+    const std::array<partner::pio_port_id, 2> ports = {
+        partner::pio_port_id::a,
+        partner::pio_port_id::b,
+    };
+    for (size_t i = 0; i < ports.size(); ++i)
+    {
+        const auto config = emu.get_pio_device_config(ports[i]);
+        const auto status = emu.get_pio_port_status(ports[i]);
+        covox_audio_attached_[i] =
+            config.kind == partner::pio_device_kind::covox;
+        covox_audio_levels_[i] = status.bytes_seen == 0 ? 0x80 : status.last_output;
+    }
+    (void)emu.drain_covox_sample_events();
+    covox_audio_tick_ = tick;
+    covox_audio_phase_ = 0;
+    covox_audio_timeline_active_ = true;
+}
+
+void gui::service_covox_audio(partner &emu)
+{
+    static constexpr uint64_t cpu_clock_hz = 4000000;
+    static constexpr uint64_t sample_rate = 44100;
+    const uint64_t now = emu.get_tick_count();
+    const std::array<partner::pio_port_id, 2> ports = {
+        partner::pio_port_id::a,
+        partner::pio_port_id::b,
+    };
+    std::array<bool, 2> attached{};
+    for (size_t i = 0; i < ports.size(); ++i)
+    {
+        attached[i] =
+            emu.get_pio_device_config(ports[i]).kind ==
+            partner::pio_device_kind::covox;
+    }
+
+    std::vector<partner::covox_sample_event> events =
+        emu.drain_covox_sample_events();
+    const bool route_changed = attached != covox_audio_attached_;
+    const bool need_timeline = attached[0] || attached[1] ||
+                               screen_recorder_.has_audio();
+    if (!need_timeline)
+    {
+        covox_audio_attached_ = attached;
+        covox_audio_timeline_active_ = false;
+        return;
+    }
+
+    if (!covox_audio_timeline_active_ || now < covox_audio_tick_ || route_changed)
+    {
+        covox_audio_attached_ = attached;
+        for (size_t i = 0; i < ports.size(); ++i)
+        {
+            const auto status = emu.get_pio_port_status(ports[i]);
+            covox_audio_levels_[i] =
+                status.bytes_seen == 0 ? 0x80 : status.last_output;
+        }
+        covox_audio_tick_ = now;
+        covox_audio_phase_ = 0;
+        covox_audio_timeline_active_ = true;
+        events.clear();
+        if (route_changed && audio_device_ != 0)
+            SDL_ClearQueuedAudio(audio_device_);
+    }
+
+    std::vector<float> live_samples;
+    std::vector<int16_t> recorded_samples;
+    const auto current_level = [&]() {
+        int sum = 0;
+        int count = 0;
+        for (size_t i = 0; i < ports.size(); ++i)
+        {
+            if (covox_audio_attached_[i])
+            {
+                sum += static_cast<int>(covox_audio_levels_[i]) - 128;
+                ++count;
+            }
+        }
+        if (count == 0)
+            return 0.0f;
+        return std::clamp(static_cast<float>(sum) /
+                              (128.0f * static_cast<float>(count)),
+                          -1.0f, 1.0f);
+    };
+    const auto emit_until = [&](uint64_t target_tick) {
+        if (target_tick <= covox_audio_tick_)
+            return;
+        const uint64_t delta = target_tick - covox_audio_tick_;
+        const uint64_t scaled = covox_audio_phase_ + delta * sample_rate;
+        const size_t count = static_cast<size_t>(scaled / cpu_clock_hz);
+        covox_audio_phase_ = scaled % cpu_clock_hz;
+        covox_audio_tick_ = target_tick;
+        if (count == 0)
+            return;
+
+        const float level = current_level();
+        live_samples.insert(live_samples.end(), count, level);
+        const long converted = std::lround(level * 32767.0f);
+        recorded_samples.insert(recorded_samples.end(), count,
+                                static_cast<int16_t>(std::clamp(
+                                    converted, -32768L, 32767L)));
+    };
+
+    for (const auto &event : events)
+    {
+        emit_until(std::min(event.tick, now));
+        const size_t port_index =
+            event.port == partner::pio_port_id::a ? 0u : 1u;
+        if (event.tick <= now && covox_audio_attached_[port_index])
+            covox_audio_levels_[port_index] = event.sample;
+    }
+    emit_until(now);
+
+    if (audio_device_ != 0 && !live_samples.empty() &&
+        (covox_audio_attached_[0] || covox_audio_attached_[1]))
+    {
+        const uint32_t max_queue_bytes =
+            static_cast<uint32_t>(sample_rate * sizeof(float) / 2u);
+        if (SDL_GetQueuedAudioSize(audio_device_) > max_queue_bytes)
+            SDL_ClearQueuedAudio(audio_device_);
+        if (SDL_QueueAudio(audio_device_, live_samples.data(),
+                           static_cast<uint32_t>(live_samples.size() *
+                                                 sizeof(float))) != 0)
+        {
+            std::cerr << "[warning] SDL_QueueAudio failed: "
+                      << SDL_GetError() << "\n";
+        }
+    }
+
+    if (screen_recorder_.has_audio() && !recorded_samples.empty())
+    {
+        std::string audio_error;
+        if (!screen_recorder_.append_audio_samples(recorded_samples.data(),
+                                                   recorded_samples.size(),
+                                                   audio_error))
+        {
+            std::string finalize_error;
+            screen_recorder_.stop(finalize_error);
+            recording_saved_path_.clear();
+            recording_error_ = "Recording stopped: " + audio_error;
+            if (!finalize_error.empty())
+                recording_error_ += " " + finalize_error;
+            std::cerr << "[error] " << recording_error_ << "\n";
+        }
     }
 }
 
@@ -410,12 +566,19 @@ void gui::open_recording_dialog()
     file_operation_error_.clear();
 }
 
-void gui::start_screen_recording(const std::filesystem::path &path)
+void gui::start_screen_recording(const std::filesystem::path &path, partner &emu)
 {
     namespace fs = std::filesystem;
     std::error_code ec;
+    const bool with_covox_audio =
+        emu.get_pio_device_config(partner::pio_port_id::a).kind ==
+            partner::pio_device_kind::covox ||
+        emu.get_pio_device_config(partner::pio_port_id::b).kind ==
+            partner::pio_device_kind::covox;
+    const uint64_t tick = emu.get_tick_count();
 
-    if (!screen_recorder_.start(display_, path, recording_error_))
+    if (!screen_recorder_.start(display_, path, tick, with_covox_audio,
+                                recording_error_))
     {
         recording_saved_path_.clear();
         file_operation_error_ = recording_error_;
@@ -425,8 +588,12 @@ void gui::start_screen_recording(const std::filesystem::path &path)
 
     recording_error_.clear();
     recording_saved_path_.clear();
+    if (with_covox_audio)
+        reset_covox_audio_timeline(emu, tick);
     std::cout << "[info] Screen recording started: "
-              << fs::absolute(path, ec).lexically_normal().string() << "\n";
+              << fs::absolute(path, ec).lexically_normal().string()
+              << (with_covox_audio ? " (Covox audio enabled)" : " (video only)")
+              << "\n";
 }
 
 void gui::stop_screen_recording()
@@ -453,13 +620,13 @@ void gui::stop_screen_recording()
               << " (" << frames << " frames, " << seconds << " seconds)\n";
 }
 
-void gui::service_screen_recording()
+void gui::service_screen_recording(partner &emu)
 {
     if (!screen_recorder_.is_recording())
         return;
 
     std::string capture_error;
-    if (screen_recorder_.capture_due(display_, capture_error))
+    if (screen_recorder_.capture_due(display_, emu.get_tick_count(), capture_error))
         return;
 
     std::string finalize_error;
@@ -521,7 +688,7 @@ void gui::render_file_dialog(partner &emu)
         }
 
         case file_dialog_action::start_recording:
-            start_screen_recording(result->path);
+            start_screen_recording(result->path, emu);
             break;
 
         case file_dialog_action::none:
@@ -832,8 +999,9 @@ void gui::shutdown()
 
 bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
 {
-    // Drain keyboard sound events whenever we pump the event loop. This keeps
-    // audio close to emulation timing rather than waiting for render only.
+    // Drain audio events whenever we pump the event loop. This keeps playback
+    // and recording tied to emulated PIO timing rather than render timing.
+    service_covox_audio(emu);
     service_keyboard_sound(emu);
 
     const Uint32 main_window_id = window_ ? SDL_GetWindowID(window_) : 0;
@@ -1213,7 +1381,7 @@ void gui::begin_frame()
 void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
 {
     display_.update();
-    service_screen_recording();
+    service_screen_recording(emu);
     const bool gdp_keyboard_model = dynamic_cast<partner_gdp *>(&emu) != nullptr;
 
     const int hovered_menu = draw_custom_title_bar(window_, active_menu_);
@@ -1286,6 +1454,8 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             ImGui::TextDisabled("Recording  %02u:%02u  (%llu frames)",
                                 total_seconds / 60, total_seconds % 60,
                                 static_cast<unsigned long long>(screen_recorder_.frame_count()));
+            if (screen_recorder_.has_audio())
+                ImGui::TextDisabled("Audio: Covox (44.1 kHz mono)");
         }
         else if (!recording_saved_path_.empty())
         {
