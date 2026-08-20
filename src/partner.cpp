@@ -1,5 +1,4 @@
 #include "partner.hpp"
-#include "partos_layout.hpp"
 #include <fstream>
 #include <iostream>
 #include <cstring>
@@ -23,13 +22,6 @@ constexpr uint64_t TCP_POLL_INTERVAL_ACTIVE_TICKS = 2048;
 constexpr uint64_t TCP_POLL_INTERVAL_IDLE_TICKS = 8192;
 constexpr uint64_t PARTNER_CPU_CLOCK_HZ = 4000000;
 constexpr uint64_t PARTNER_SIO_CLOCK_HZ = 153600;
-constexpr uint16_t PARTOS_HD_DEV0 = partos_layout::hd_dev0;
-constexpr uint16_t PARTOS_HD_IO_PTR = partos_layout::hd_io_ptr;
-constexpr uint16_t PARTOS_HD_READ = partos_layout::hd_read;
-constexpr uint16_t PARTOS_HD_DMA_LO = partos_layout::hd_dma_trace_lo;
-constexpr uint16_t PARTOS_HD_DMA_HI = partos_layout::hd_dma_trace_hi;
-constexpr uint16_t PARTNER_KERNEL_IM2    = 0xFE00;
-constexpr uint16_t PARTNER_SPURIOUS_IM2  = 0x0038;
 constexpr uint8_t  PARTNER_SPURIOUS_VECTOR = 0x00;
 constexpr uint8_t  PARTNER_FD0_TYPE_MASK = 0xC0;
 constexpr uint8_t  PARTNER_FD1_TYPE_MASK = 0x30;
@@ -1617,10 +1609,21 @@ void partner::reset()
     fdc_int_state = 0;
     fdc_reset_irq_armed_ = false;
     prompt_fdc_cleanup_done_ = false;
-    kernel_handoff_cleaned_ = false;
     fdc_motor_running = false;
     dma_busreq_latched = false;
     dma_ready_input_ = false;
+    dma_fdc_reads_ = 0;
+    dma_mem_writes_ = 0;
+    dma_port_writes_ = 0;
+    last_dma_port_wr_tick_ = 0;
+    fd_read_real_calls_ = 0;
+    dma_enabled_ticks_ = 0;
+    dma_commit_reads_ = 0;
+    dma_commit_eligible_ = 0;
+    sasi_data_reads_ = 0;
+    sasi_data_writes_ = 0;
+    sasi_data_phase_reads_ = 0;
+    dma_bus_service_ = false;
     last_cpu_bus_pins_ = 0;
     io_read_latched_ = false;
     io_read_latched_addr_ = 0;
@@ -1642,8 +1645,6 @@ void partner::reset()
     dbg_irref_ticks.fill(0);
     dbg_irref_count = 0;
     restore_drive_ready_flags();
-    clean_kernel_io_handoff();
-    kernel_handoff_cleaned_ = false;
 
     for (sio_port_id port : { sio_port_id::sio1_a, sio_port_id::sio1_b, sio_port_id::sio2_a, sio_port_id::sio2_b })
         reset_sio_device_runtime(port);
@@ -1687,10 +1688,8 @@ void partner::tick()
                 return s && s[0] && s[0] != '0';
             }();
             if (trace_int) {
-                std::fprintf(stderr, "[int] ack vec=%02X busy=%02X pc=%04X\n",
-                    ack_vector,
-                    peek_ram((uint16_t)(PARTOS_HD_DEV0 + 8)),
-                    cpu.pc);
+                std::fprintf(stderr, "[int] ack vec=%02X pc=%04X\n",
+                    ack_vector, cpu.pc);
             }
             dbg_im2_ack_vectors[dbg_im2_ack_count & 0x7u] = (uint8_t)ack_vector;
             dbg_im2_ack_pcs[dbg_im2_ack_count & 0x7u] = cpu.pc;
@@ -1701,17 +1700,6 @@ void partner::tick()
 
         // Tick the CPU
         pins = z80_tick(&cpu, pins);
-        if (cpu.pc >= PARTOS_HD_DMA_LO && cpu.pc <= PARTOS_HD_DMA_HI)
-            ++hd_dma_region_ticks_;
-        if (cpu.pc == PARTOS_HD_READ && cpu.bc == 0x0100) {
-            static const bool trace_hd = [] {
-                const char *s = std::getenv("IDP_TRACE_HD");
-                return s && s[0] && s[0] != '0';
-            }();
-            if (trace_hd)
-                std::fprintf(stderr, "[hd] hd_read entry de=%04X\n", cpu.de);
-            ++hd_read_real_calls_;
-        }
         if (cpu.pc == 0xD4D1) {
             static const bool trace_hd = [] {
                 const char *s = std::getenv("IDP_TRACE_HD");
@@ -1723,11 +1711,6 @@ void partner::tick()
         }
         if (cpu.pc == 0xD1BA && cpu.bc == 0x0100)
             ++fd_read_real_calls_;
-
-        if (!rom_enabled && !kernel_handoff_cleaned_ && get_current_pc() == 0x0000) {
-            clean_kernel_io_handoff();
-            kernel_handoff_cleaned_ = true;
-        }
 
         // This z80 core enters the interrupt acknowledge sample microsteps
         // without always exposing a clean acknowledge bus cycle. Reconstruct
@@ -1934,51 +1917,6 @@ void partner::tick()
     // FDC interrupt participates in the Z80 daisy chain after the Zilog devices.
     service_fdc_daisy(pins, cpu_ticked);
 
-}
-
-void partner::clean_kernel_io_handoff()
-{
-    i8272_reset(&fdc);
-    restore_drive_ready_flags();
-    fdc_int_vector = 0;
-    fdc_int_state = 0;
-    fdc_reset_irq_armed_ = false;
-    fdc_motor = 0;
-    fdc_motor_running = false;
-    z80dma_reset(&dma);
-    dma_busreq_latched = false;
-    dma_ready_input_ = false;
-    dma_fdc_reads_ = 0;
-    dma_mem_writes_ = 0;
-    dma_port_writes_ = 0;
-    last_dma_port_wr_tick_ = 0;
-    hd_dma_region_ticks_ = 0;
-    hd_read_real_calls_ = 0;
-    fd_read_real_calls_ = 0;
-    dma_enabled_ticks_ = 0;
-    dma_commit_reads_ = 0;
-    dma_commit_eligible_ = 0;
-    sasi_data_reads_ = 0;
-    sasi_data_writes_ = 0;
-    sasi_data_phase_reads_ = 0;
-    dma_bus_service_ = false;
-    idpartner_sasi_reset_w(&sasi_, 0);
-    if (s1410_is_present(&hdc))
-        s1410_write_control(&hdc, 0x00);
-    // Kernel _SYSVARS is not zero-initialized; clear HD driver scratch so a
-    // stale DEV_FLAGS busy bit cannot acknowledge a spurious DMA vector.
-    write_mem((uint16_t)(PARTOS_HD_DEV0 + 8), 0);
-    write_mem(PARTOS_HD_IO_PTR, 0);
-    write_mem((uint16_t)(PARTOS_HD_IO_PTR + 1), 0);
-    // Slot 0 is our spurious-IM2 sink: vector 0 -> 0x0038, where the low page
-    // already holds `jp __sys_rst38_default`, so an unexpected acknowledge
-    // collapses into a plain RETI instead of re-entering kernel cold-start.
-    write_mem(PARTNER_KERNEL_IM2, (uint8_t)(PARTNER_SPURIOUS_IM2 & 0xFF));
-    write_mem((uint16_t)(PARTNER_KERNEL_IM2 + 1), (uint8_t)(PARTNER_SPURIOUS_IM2 >> 8));
-    // NOTE: do NOT poke a hardcoded interrupt-refcount address here. ir_refcnt
-    // now lives in the kernel reserve (0xFB71) and __ir_init self-seeds it; a
-    // stale poke at a fixed RAM address corrupts whatever OS variable currently
-    // occupies it whenever os.sys code size shifts (the old layout-fragility bug).
 }
 
 void partner::restore_drive_ready_flags()

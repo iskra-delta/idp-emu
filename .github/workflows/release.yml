@@ -201,11 +201,13 @@ jobs:
         shell: pwsh
         run: |
           cmake --build build --parallel 2
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir build --output-on-failure
       - name: Stage and verify relocatable tree
         shell: pwsh
         run: |
           cmake --install build --prefix "$PWD/dist/tree"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/package/verify_bundle.py `
             --root dist/tree --platform windows --version "${{ steps.version.outputs.value }}"
       - name: Build Windows and portable packages
@@ -218,6 +220,7 @@ jobs:
             "/DSourceDir=$source" `
             "/DAppVersion=${{ steps.version.outputs.value }}" `
             "/DOutputDir=$destination"
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Rename-Item dist/tree "Iskra-Delta-Partner-${{ steps.version.outputs.value }}-Windows-x86_64"
           Compress-Archive `
             -Path "dist/Iskra-Delta-Partner-${{ steps.version.outputs.value }}-Windows-x86_64" `

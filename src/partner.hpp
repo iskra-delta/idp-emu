@@ -97,7 +97,6 @@ public:
     std::string get_disk_path(int drive) const;
     virtual void reset();
     virtual void tick();
-    void clean_kernel_io_handoff();
 
     // State accessors for GUI panels (read-only)
     const z80_t& get_cpu() const { return cpu; }
@@ -128,8 +127,6 @@ public:
     uint32_t get_sasi_data_phase_reads() const { return sasi_data_phase_reads_; }
     uint32_t get_dma_enabled_ticks() const { return dma_enabled_ticks_; }
     uint32_t get_dma_port_writes() const { return dma_port_writes_; }
-    uint32_t get_hd_dma_region_ticks() const { return hd_dma_region_ticks_; }
-    uint32_t get_hd_read_real_calls() const { return hd_read_real_calls_; }
     uint32_t get_fd_read_real_calls() const { return fd_read_real_calls_; }
     bool get_dma_ready_input() const { return dma_ready_input_; }
     uint8_t peek_mem(uint16_t addr) const {
@@ -241,7 +238,6 @@ protected:
     uint8_t fdc_int_state = 0;
     bool fdc_reset_irq_armed_ = false;
     bool prompt_fdc_cleanup_done_ = false;
-    bool kernel_handoff_cleaned_ = false;
     bool fdc_motor_running = false;
     bool dma_busreq_latched = false;
     bool dma_ready_input_ = false;
@@ -255,8 +251,6 @@ protected:
     uint32_t dma_enabled_ticks_ = 0;
     uint32_t dma_port_writes_ = 0;
     uint64_t last_dma_port_wr_tick_ = 0;
-    uint32_t hd_dma_region_ticks_ = 0;
-    uint32_t hd_read_real_calls_ = 0;
     uint32_t fd_read_real_calls_ = 0;
     bool dma_bus_service_ = false;
     uint64_t last_cpu_bus_pins_ = 0;

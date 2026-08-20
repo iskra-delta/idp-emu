@@ -64,6 +64,7 @@ add_executable(idp-mcp
     mcp/idp_mcp_server.cpp
     ${IDP_CORE_SOURCES}
 )
+target_include_directories(idp-mcp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(idp-mcp PRIVATE
     chipsex SDL2::SDL2 PNG::PNG OpenGL::GL nlohmann_json::nlohmann_json)
 target_compile_definitions(idp-mcp PRIVATE
