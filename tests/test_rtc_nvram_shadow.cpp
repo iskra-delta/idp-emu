@@ -14,6 +14,15 @@ public:
     using partner::partner;
     using partner::io_read;
     using partner::io_write;
+
+    void set_emulated_tick(uint64_t value)
+    {
+        rtc.det_base = 1700000000;
+        rtc.det_hz = 4000000u;
+        rtc.det_ticks = &tick_count;
+        tick_count = value;
+        mm58167a_sync_time(&rtc);
+    }
 };
 
 static int fail(const char *msg)
@@ -43,6 +52,12 @@ int main()
 
     {
         partner_test emu(nvram_path.string());
+        emu.set_emulated_tick(492000); // 123 ms at 4 MHz
+        if (emu.io_read(0xA1) != 0x12)
+            return fail("RTC hundredths do not follow emulated time");
+        if (emu.io_read(0xA0) != 0x30)
+            return fail("RTC thousandths do not follow emulated time");
+
         std::ifstream file(nvram_path, std::ios::binary);
         if (!file)
             return fail("shadow NVRAM file was not created");

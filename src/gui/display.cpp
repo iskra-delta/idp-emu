@@ -486,7 +486,7 @@ bool display::load_font(const std::string &path)
             ? ef9367_builtin_font::rom_size : 480u;
         memcpy(rom, ef9367_builtin_font::rom, n);
         loaded = true;
-        std::cout << "[info] Font loaded from embedded EF9365 ROM image\n";
+        std::cerr << "[info] Font loaded from embedded EF9365 ROM image\n";
     }
 
     // Decode 96 characters, each 5 bytes (40 bits), first 35 bits = 7 rows x 5 cols
@@ -508,7 +508,7 @@ bool display::load_font(const std::string &path)
 
     font_loaded_ = true;
     if (file)
-        std::cout << "[info] Font loaded: " << path << "\n";
+        std::cerr << "[info] Font loaded: " << path << "\n";
     return true;
 }
 

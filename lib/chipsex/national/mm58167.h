@@ -24,7 +24,7 @@
 
     ***************************************
     *           +-----------+             *
-    * D0..D7 <->|           |<-> A0..A3   *
+    * D0..D7 <->|           |<-> A0..A4   *
     *           |           |             *
     *   CS̅  --->|           |             *
     *   AS̅  --->|           |             *
@@ -35,7 +35,7 @@
     ***************************************
 
     - D0..D7: Bidirectional 8-bit data bus
-    - A0..A3: Latched register address
+    - A0..A4: Latched register address
     - CS̅:    Chip Select (active-low)
     - AS̅:    Address Strobe (latches A0..A3)
     - DS̅:    Data Strobe (active-low)
@@ -165,6 +165,7 @@ extern "C"
         uint8_t regs[32];      // MM58167 has 32 registers
         uint8_t addr_latch;    // latched address (via AS)
         time_t last_sync_time; // for refreshing time
+        uint16_t last_sync_millisecond;
         bool nvram_init_done;  // battery-backed setup area initialized once
         // Deterministic emulated clock (for reproducible tests). When det_ticks
         // is non-NULL the visible time is derived from the emulated tick counter
@@ -213,23 +214,49 @@ void mm58167a_reset(mm58167a_t *chip)
     }
     chip->addr_latch = 0;
     chip->last_sync_time = 0;
+    chip->last_sync_millisecond = UINT16_MAX;
     mm58167a_sync_time(chip);
 }
 
 void mm58167a_sync_time(mm58167a_t *chip)
 {
     time_t now;
+    uint16_t millisecond;
     if (chip->det_ticks != NULL) {
         /* Deterministic emulated clock: advance from the emulated tick counter
          * at the CPU clock rate. Reproducible and advancing. */
         uint64_t hz = chip->det_hz ? chip->det_hz : 1u;
-        now = (time_t)(chip->det_base + (time_t)(*chip->det_ticks / hz));
+        uint64_t ticks = *chip->det_ticks;
+        now = (time_t)(chip->det_base + (time_t)(ticks / hz));
+        millisecond = (uint16_t)(((ticks % hz) * 1000u) / hz);
     } else {
-        now = time(NULL);
+        struct timespec ts;
+        if (timespec_get(&ts, TIME_UTC) == TIME_UTC) {
+            now = ts.tv_sec;
+            millisecond = (uint16_t)(ts.tv_nsec / 1000000L);
+        } else {
+            now = time(NULL);
+            millisecond = 0;
+        }
     }
-    if (now == chip->last_sync_time)
+
+    if (now == chip->last_sync_time &&
+        millisecond == chip->last_sync_millisecond)
         return;
+    const bool second_changed = now != chip->last_sync_time;
     chip->last_sync_time = now;
+    chip->last_sync_millisecond = millisecond;
+
+    /* The thousandths digit occupies the high nibble of register A0.  A1 is
+     * the packed-BCD hundredths counter.  Partner's timer_ms() combines these
+     * two registers, so leaving either at zero turns short delays into whole
+     * seconds. */
+    const uint8_t hsec = (uint8_t)(millisecond / 10u);
+    chip->regs[0x00] = (uint8_t)((millisecond % 10u) << 4);
+    chip->regs[0x01] = (uint8_t)((hsec % 10u) | ((hsec / 10u) << 4));
+
+    if (!second_changed)
+        return;
 
     struct tm *t = localtime(&now);
 
@@ -238,8 +265,6 @@ void mm58167a_sync_time(mm58167a_t *chip)
     // 0xA5: wday, 0xA6: day, 0xA7: month, 0xA9: year (software-maintained).
     // Do not overwrite 0xA9 from host time: Partner firmware treats it as
     // battery-backed setup/state rather than true hardware year.
-    chip->regs[0x00] = 0x00;                                                     // 1/1000s
-    chip->regs[0x01] = 0x00;                                                     // 1/100s
     chip->regs[0x02] = ((t->tm_sec % 10) | ((t->tm_sec / 10) << 4));            // sec
     chip->regs[0x03] = ((t->tm_min % 10) | ((t->tm_min / 10) << 4));            // min
     chip->regs[0x04] = ((t->tm_hour % 10) | ((t->tm_hour / 10) << 4));          // hour
@@ -261,7 +286,7 @@ uint64_t mm58167a_tick(mm58167a_t *chip, uint64_t pins)
     // latch address
     if ((pins & MM58167A_AS) == 0)
     {
-        chip->addr_latch = (uint8_t)(pins & 0x0F); // lower address lines A0–A3
+        chip->addr_latch = (uint8_t)(pins & 0x1F); // lower address lines A0–A4
     }
 
     if ((pins & MM58167A_CS) == 0 && (pins & MM58167A_DS) == 0)

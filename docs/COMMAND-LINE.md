@@ -26,6 +26,7 @@ escapes stop startup with an error.
 | `--terminal TYPE` | `vt52`, `vt100`, `ansi` | VT52 for CRT; VT100 for GDP | Select terminal emulation. `ansi` is an alias for `vt100`. |
 | `--model TYPE` | `crt`, `gdp`, `auto` | `auto` | Select the text or graphics Partner model. Automatic selection uses the ROM filename. |
 | `--covox-port PORT` | `1`, `2` | disabled | Attach the host-audio Covox DAC to main PIO A (`1`) or B (`2`). This is the PIO at `D0h`–`D3h`, not the GDP-board PIO at `30h`–`33h`. |
+| `--sio-tcp PORT DATA CONTROL` | PAKET port `2`–`4` and two TCP ports | disabled | Attach the selected free SIO channel to a TCP data/control bridge. |
 | `--dap PORT` | `1`–`65535` | disabled | Start the udap Debug Adapter Protocol server on `127.0.0.1:PORT`. |
 | `--commands TEXT` | escaped or literal text | no startup input | Type text through the emulated keyboard after startup. This option may be repeated. |
 | `--command TEXT` | escaped or literal text | — | Alias for `--commands`. |
@@ -148,4 +149,84 @@ Attach two floppy images and start the debug server:
   --fd0 disks/system.img \
   --fd1 disks/data.img \
   --dap 4711
+```
+
+## Invisible MCP server
+
+`idp-mcp` is a headerless, stateful instance of the emulator for AI clients.
+It speaks newline-delimited MCP JSON-RPC on stdin/stdout and never creates an
+SDL window. Protocol output is the only content written to stdout; `--verbose`
+and all emulator diagnostics use stderr.
+
+```bash
+./bin/idp-mcp [options]
+```
+
+| Option | Accepted value | Default | Description |
+| --- | --- | --- | --- |
+| `--model` | `crt`, `gdp` | `crt` | Select the Partner board model. |
+| `--rom FILE` | ROM image path | `roms/partner_MODEL.rom` | Load a ROM before serving. |
+| `--no-rom` | none | disabled | Start with no ROM instead of loading the model ROM. |
+| `--fd0` … `--fd3` | disk-image path | no disk | Attach a floppy to the selected drive. |
+| `--hdd FILE` | hard-disk image path | no disk | Attach a Xebec/SASI image. |
+| `--nvram FILE` | file path | ephemeral | Persist the MM58167 shadow bytes. With no path, no NVRAM file is written. |
+| `--terminal` | `vt52`, `vt100`, `ansi` | `vt52` | Select the invisible terminal parser. |
+| `--list-tools` | none | — | Print tool definitions as JSON and exit. |
+| `--verbose` | none | disabled | Log JSON-RPC traffic to stderr. |
+| `--version` | none | — | Print the server version and exit. |
+| `--help` | none | — | Print MCP-server help and exit. |
+
+The MCP tools are:
+
+| Tool | Purpose |
+| --- | --- |
+| `load` | Load inline/file binary data or a 2K Partner ROM, or attach `fd0`–`fd3`/`hdd`. |
+| `status` | Inspect CPU, bus, DMA, FDC, banking, model, cumulative cycles, and timing metadata. |
+| `reset` | Reset the complete chip set while retaining RAM and media; `clear_memory` also wipes both RAM banks. |
+| `run` | Run by nominal 60 Hz frames, T-states/ticks, instructions, or legacy `until_pc`; breakpoints always stop it. |
+| `run_until` | Run to an instruction-boundary address with a `max_tstates` guard. |
+| `step` | Execute complete instructions and return exact elapsed clocks. |
+| `measure_cycles` | Measure exact elapsed 4 MHz chip clocks/T-states for instructions or a routine ending at `until_pc`. |
+| `registers` | Read or update the main/shadow Z80 registers, interrupt state, and PC. |
+| `read_memory` / `write_memory` | Access wrapping CPU-visible memory using byte arrays or hex text; writes can explicitly patch visible ROM. |
+| `breakpoint` | Manage execute, memory-read/write, and I/O-read/write signal breakpoints with optional data matching. |
+| `read_port` / `set_port` | Perform actual motherboard I/O accesses without running the CPU. |
+| `read_io` / `write_io` | Backward-compatible aliases of `read_port` / `set_port`. |
+| `press_keys` | Type text or named keys through the physical keyboard SIO while advancing emulated time. |
+| `keyboard` | Queue raw bytes through the keyboard SIO, optionally spacing them by exact ticks. |
+| `screen` | Return the current CRT/GDP chip raster as an MCP PNG image. |
+| `screen_text` | Read terminal characters and serial/printer transcripts, or return framebuffer ASCII art. |
+| `screenshot` | Save the current chip raster as PNG. |
+| `video_start` / `video_stop` | Record raster frames during emulation to a nominal-60-Hz YUV4MPEG2 file. |
+| `mount_media` | Attach `fd0`–`fd3` or `hdd` while the server is running. |
+
+The names and argument shapes follow the applicable commands in
+`zx-spectrum-mcp`. Spectrum-only snapshots, screen dumps, and cassette
+transport are not exposed: Partner has different display/media chips and no
+cassette interface. Partner-specific raw keyboard and media tools remain for
+low-level work.
+
+Every run request is bounded. With no limit, `run` advances one nominal 60 Hz
+slice (66,667 clocks). `max_ticks`/`max_tstates` protect instruction and address
+runs from a wedged guest. One `tick`, `tstate`, or `cycle` in MCP results is one
+call through the full chip set at the emulator's 4 MHz CPU/master clock; DMA
+bus ownership and chip wait behavior are therefore included in elapsed cycle
+measurements. Numeric inputs also accept decimal numbers and strings beginning
+with `0x`, `$`, or `#`.
+
+For example, load a NOP at `8000h` and measure it:
+
+```json
+{"name":"load","arguments":{"data":"00","address":"0x8000","start":"0x8000"}}
+{"name":"measure_cycles","arguments":{"instructions":1}}
+```
+
+The measurement reports four cycles/T-states and ends at `8001h`.
+
+Example MCP client configuration:
+
+```toml
+[mcp_servers.iskra_partner]
+command = "/home/user/idp-emu/bin/idp-mcp"
+args = ["--model", "gdp", "--hdd", "/home/user/disks/partner.img"]
 ```

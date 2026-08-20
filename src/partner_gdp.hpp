@@ -48,13 +48,12 @@ public:
     uint64_t get_avdc_char_nonspace_writes() const { return avdc_char_nonspace_wr_cnt_; }
     const std::array<uint64_t, 256>& get_avdc_char_hist() const { return avdc_char_hist_; }
     uint8_t get_gdp_scroll() const { return gdp_scroll_; }
-    uint8_t get_gdp_pio_port_a() const { return gdp_video_pio_.port[Z80PIO_PORT_A].output; }
-    uint8_t get_gdp_pio_port_b() const { return gdp_video_pio_.port[Z80PIO_PORT_B].output; }
+    uint8_t get_gdp_pio_port_a() const { return Z80PIO_GET_PA(gdp_video_pio_pins_); }
+    uint8_t get_gdp_pio_port_b() const { return Z80PIO_GET_PB(gdp_video_pio_pins_); }
 
 protected:
     uint8_t io_read(uint16_t port) override;
     void io_write(uint16_t port, uint8_t data) override;
-    int get_external_im2_vector() const override;
     bool get_avdc_vb_edge() const override { return avdc_vb_edge_; }
 
 private:
@@ -72,8 +71,6 @@ private:
     int text_rows_ = 26;
     bool expect_abs_x_ = false;
     bool expect_abs_y_ = false;
-    uint16_t sync_div_ = 0;
-    bool sync_bit4_ = false;
     io_counters io_cnt_{};
     std::array<uint64_t, 16> avdc_port_wr_cnt_{};
     std::array<uint64_t, 256> avdc_cmd_cnt_{};
@@ -82,19 +79,18 @@ private:
     std::array<uint64_t, 256> avdc_char_hist_{};
     uint8_t gdp_scroll_ = 0; // external GDP scroll latch (port 0x36 write)
     bool avdc_takeover_ = false;
-    bool avdc_mem_acc_phase_ = false;
     uint16_t avdc_rowtbl_base_cache_ = 0;
     bool avdc_rowtbl_base_cache_valid_ = false;
     bool avdc_rowtbl_be_cache_ = false;
     int avdc_rowtbl_bias_cache_ = 0;
     std::deque<uint8_t> key_fifo_{};
     partner_gdp_keyboard keyboard_{};
-    void sync_ef_mode_from_gdp_pio();
+    uint64_t gdp_video_pio_pins_ = 0;
+    uint64_t ef9367_pins_ = 0;
+    uint64_t avdc_pins_ = 0;
 
-    // AVDC VB → external IM2 edge flag (set in tick(), read by get_external_im2_vector).
-    bool     avdc_vb_edge_        = false;
-    // Countdown: holds INT high for N ticks after each VB so the Z80 catches it.
-    uint32_t avdint_hold_ticks_   = 0;
+    // AVDC VB is physically wired to CTC CLK/TRG3 on the GDP board.
+    bool avdc_vb_edge_ = false;
 
     void gdp_put_char(uint8_t ch);
     void gdp_newline();

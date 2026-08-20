@@ -115,6 +115,9 @@ public:
     uint8_t get_fdc_int_vector() const { return fdc_int_vector; }
     uint8_t get_fdc_int_state() const { return fdc_int_state; }
     uint64_t get_pins() const { return pins; }
+    // CPU-side transaction after motherboard memory/I/O decoding and before
+    // the shared pins pass through the peripheral daisy chain.
+    uint64_t get_last_cpu_bus_pins() const { return last_cpu_bus_pins_; }
     uint32_t get_dma_fdc_reads() const { return dma_fdc_reads_; }
     uint32_t get_dma_mem_writes() const { return dma_mem_writes_; }
     uint32_t get_sasi_data_reads() const { return sasi_data_reads_; }
@@ -189,12 +192,17 @@ public:
         uint16_t bc = 0;
         uint16_t de = 0;
         uint16_t hl = 0;
+        uint16_t af_alt = 0;
+        uint16_t bc_alt = 0;
+        uint16_t de_alt = 0;
+        uint16_t hl_alt = 0;
         uint16_t ix = 0;
         uint16_t iy = 0;
         uint16_t sp = 0;
         uint16_t pc = 0;
         uint8_t i = 0;
         uint8_t r = 0;
+        uint8_t im = 0;
         bool iff1 = false;
         bool iff2 = false;
         bool halted = false;
@@ -206,7 +214,12 @@ public:
     // restarts the CPU's pipelined opcode fetch at the new address.
     void debug_set_pc(uint16_t pc);
     std::vector<uint8_t> read_debug_memory(uint32_t address, size_t length) const;
-    void write_debug_memory(uint32_t address, const std::vector<uint8_t> &data);
+    void write_debug_memory(uint32_t address, const std::vector<uint8_t> &data,
+                            bool allow_rom = false);
+    void clear_debug_memory();
+    void load_debug_rom(const std::vector<uint8_t> &data);
+    uint8_t read_debug_io(uint16_t port) { return io_read(port); }
+    void write_debug_io(uint16_t port, uint8_t data) { io_write(port, data); }
 
 protected:
     // All Zilog chips in Partner system
@@ -283,13 +296,10 @@ protected:
     void service_cpu_dma_port_write(uint64_t bus_pins);
     void service_dma_read_bus(uint64_t &pins);
     void service_dma_write_bus(uint64_t &pins);
-    void service_dma_write_complete();
-    void commit_dma_io_to_mem_byte(uint8_t data);
-    void pump_sasi_dma_transfer();
     uint8_t sasi_data_read_for_bus();
     void service_fdc_daisy(uint64_t &pins, bool cpu_ticked);
-    int get_pending_daisy_vector() const;
     int select_im2_ack_vector();
+    uint64_t clock_zilog_daisy_chain(uint64_t bus_pins);
     bool dma_owns_bus() const;
     bool dma_transfer_pending() const;
     uint8_t peek_ram(uint16_t addr) const;

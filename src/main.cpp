@@ -86,6 +86,16 @@ bool parse_milliseconds(const char *text, uint32_t &value)
     return true;
 }
 
+bool parse_tcp_port(const char *text, int &value)
+{
+    uint32_t parsed = 0;
+
+    if (!parse_milliseconds(text, parsed) || parsed == 0U || parsed > 65535U)
+        return false;
+    value = static_cast<int>(parsed);
+    return true;
+}
+
 } // namespace
 
 void print_usage(const char *prog)
@@ -106,6 +116,8 @@ void print_usage(const char *prog)
     std::cerr << "  --terminal TYPE        Terminal profile: vt52|vt100|ansi\n";
     std::cerr << "  --model TYPE           Machine model: crt|gdp|auto (default: auto)\n";
     std::cerr << "  --covox-port PORT      Attach Covox to main PIO: 1=A, 2=B\n";
+    std::cerr << "  --sio-tcp PORT DATA CONTROL\n";
+    std::cerr << "                         Attach PAKET port 2, 3, or 4 to a TCP bridge\n";
     std::cerr << "  --dap PORT             Start the udap DAP server on 127.0.0.1:PORT\n";
     std::cerr << "  --commands TEXT        Type TEXT after the GUI opens; may be repeated\n";
     std::cerr << "  --command TEXT         Alias for --commands\n";
@@ -127,6 +139,9 @@ int main(int argc, char **argv)
     std::string model = "auto";
     uint16_t dap_port = 0;
     int covox_port = 0;
+    int sio_tcp_port = 0;
+    int sio_tcp_data_port = 0;
+    int sio_tcp_control_port = 0;
     bool rom_explicit = false;
     bool fd0_explicit = false;
     bool fd1_explicit = false;
@@ -243,6 +258,28 @@ int main(int argc, char **argv)
             {
                 std::cerr << "Error: Invalid --covox-port value: " << value
                           << "; use 1 or 2\n";
+                return 1;
+            }
+        }
+        else if (strcmp(argv[i], "--sio-tcp") == 0)
+        {
+            if ((i + 3) >= argc)
+            {
+                std::cerr << "Error: --sio-tcp requires PORT DATA CONTROL\n";
+                return 1;
+            }
+            const char *port = argv[++i];
+            if ((port[1] != '\0') || (port[0] < '2') || (port[0] > '4'))
+            {
+                std::cerr << "Error: --sio-tcp PORT must be 2, 3, or 4\n";
+                return 1;
+            }
+            sio_tcp_port = port[0] - '0';
+            if (!parse_tcp_port(argv[++i], sio_tcp_data_port) ||
+                !parse_tcp_port(argv[++i], sio_tcp_control_port) ||
+                (sio_tcp_data_port == sio_tcp_control_port))
+            {
+                std::cerr << "Error: --sio-tcp DATA and CONTROL must be distinct TCP ports\n";
                 return 1;
             }
         }
@@ -499,6 +536,26 @@ int main(int argc, char **argv)
             std::cout << "[info] Covox attached to main PIO "
                       << (covox_port == 1 ? "A" : "B")
                       << " (program argument " << covox_port << ")\n";
+        }
+        if (sio_tcp_port != 0)
+        {
+            const auto port = sio_tcp_port == 2 ? partner::sio_port_id::sio1_b :
+                (sio_tcp_port == 3 ? partner::sio_port_id::sio2_a
+                                   : partner::sio_port_id::sio2_b);
+            partner::sio_device_config config;
+            config.kind = partner::sio_device_kind::tcp_bridge;
+            config.tcp_data_port = sio_tcp_data_port;
+            config.tcp_control_port = sio_tcp_control_port;
+            config.tcp_require_rts = true;
+            config.tcp_cts_follows_data_client = true;
+            if (!emu->set_sio_device_config(port, config))
+            {
+                std::cerr << "Error: could not attach TCP bridge to SIO port\n";
+                return 1;
+            }
+            std::cout << "[info] PAKET port " << sio_tcp_port
+                      << " attached to TCP " << sio_tcp_data_port
+                      << "/" << sio_tcp_control_port << "\n";
         }
 
         gui app_gui;

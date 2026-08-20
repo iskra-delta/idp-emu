@@ -38,7 +38,7 @@
     *   CS̅  --->|   FDC     |---> IRQ     *
     *   RD̅  --->|           |             *
     *   WR̅  --->|           |             *
-    * RESET̅ --->|           |             *
+    * RESET̅ --->|           |<--- IACK    *
     *           +-----------+             *
     ***************************************
 
@@ -47,6 +47,7 @@
     - CS̅/RD̅/WR̅: active-low bus control
     - RESET̅: active-low reset
     - IRQ: INTRQ output
+    - IACK: board interrupt-acknowledge input; clears the IRQ output latch
 
     ## Functions:
     ~~~C
@@ -111,12 +112,14 @@ extern "C" {
 #define I8272_PIN_CS           (26)
 #define I8272_PIN_RESET        (27)
 #define I8272_PIN_IRQ          (28)  /* INTRQ output */
+#define I8272_PIN_IACK         (29)  /* interrupt acknowledge input */
 
 #define I8272_RD               (1ULL << I8272_PIN_RD)
 #define I8272_WR               (1ULL << I8272_PIN_WR)
 #define I8272_CS               (1ULL << I8272_PIN_CS)
 #define I8272_RESET            (1ULL << I8272_PIN_RESET)
 #define I8272_IRQ              (1ULL << I8272_PIN_IRQ)
+#define I8272_IACK             (1ULL << I8272_PIN_IACK)
 
 /*--- MSR (Main Status Register) bits, read from port 0xF0 ---*/
 #define I8272_MSR_RQM       (1 << 7)   /* Request for Master: 1=ready */
@@ -262,6 +265,13 @@ void i8272_reset(i8272_t *fdc);
 void i8272_tick(i8272_t *fdc);
 /* Pin-level tick for CHIPS-style bus integration */
 uint64_t i8272_tick_pins(i8272_t *fdc, uint64_t pins);
+/* Drive/acknowledge only the interrupt pins without advancing controller time. */
+uint64_t i8272_irq_pins(i8272_t *fdc, uint64_t pins);
+/* Board-facing drive input/control lines. */
+void i8272_set_drive_ready(i8272_t *fdc, int drive, bool ready);
+void i8272_set_drive_motor(i8272_t *fdc, int drive, bool on);
+/* Schedule the controller's reset-complete interrupt response. */
+void i8272_schedule_reset_irq(i8272_t *fdc, uint32_t delay_ticks);
 /* Read Main Status Register (port 0xF0) */
 uint8_t i8272_read_status(i8272_t *fdc);
 /* Read Data Register (port 0xF1) */
@@ -338,6 +348,23 @@ static void _i8272_schedule_irq(i8272_t *fdc, uint32_t delay_ticks,
     fdc->irq_delay = delay_ticks;
     fdc->irq_sets_sense = set_sense_pending;
     fdc->irq_enters_result = enter_result;
+}
+
+void i8272_set_drive_ready(i8272_t *fdc, int drive, bool ready) {
+    CHIPS_ASSERT(fdc);
+    CHIPS_ASSERT((drive >= 0) && (drive < I8272_MAX_DRIVES));
+    fdc->drive[drive].ready = ready;
+}
+
+void i8272_set_drive_motor(i8272_t *fdc, int drive, bool on) {
+    CHIPS_ASSERT(fdc);
+    CHIPS_ASSERT((drive >= 0) && (drive < I8272_MAX_DRIVES));
+    fdc->drive[drive].motor = on;
+}
+
+void i8272_schedule_reset_irq(i8272_t *fdc, uint32_t delay_ticks) {
+    CHIPS_ASSERT(fdc);
+    _i8272_schedule_irq(fdc, delay_ticks, true, false);
 }
 
 /*
@@ -879,6 +906,20 @@ void i8272_tick(i8272_t *fdc) {
     fdc->irq_request = true;
 }
 
+uint64_t i8272_irq_pins(i8272_t *fdc, uint64_t pins) {
+    CHIPS_ASSERT(fdc);
+
+    if (pins & I8272_IACK) {
+        fdc->irq_request = false;
+    }
+    if (fdc->irq_request) {
+        pins |= I8272_IRQ;
+    } else {
+        pins &= ~I8272_IRQ;
+    }
+    return pins;
+}
+
 uint64_t i8272_tick_pins(i8272_t *fdc, uint64_t pins) {
     CHIPS_ASSERT(fdc);
 
@@ -887,6 +928,8 @@ uint64_t i8272_tick_pins(i8272_t *fdc, uint64_t pins) {
         pins &= ~I8272_IRQ;
         return pins;
     }
+
+    pins = i8272_irq_pins(fdc, pins);
 
     /* progress internal delayed execution/IRQ state */
     i8272_tick(fdc);
@@ -903,12 +946,7 @@ uint64_t i8272_tick_pins(i8272_t *fdc, uint64_t pins) {
         }
     }
 
-    if (fdc->irq_request) {
-        pins |= I8272_IRQ;
-    } else {
-        pins &= ~I8272_IRQ;
-    }
-    return pins;
+    return i8272_irq_pins(fdc, pins);
 }
 
 uint8_t i8272_read_status(i8272_t *fdc) {

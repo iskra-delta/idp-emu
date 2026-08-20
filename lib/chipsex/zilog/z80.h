@@ -373,6 +373,11 @@ uint64_t z80_reset(z80_t* cpu);
 uint64_t z80_tick(z80_t* cpu, uint64_t pins);
 // force execution to continue at address 'new_pc'
 uint64_t z80_prefetch(z80_t* cpu, uint16_t new_pc);
+// Debugger adapter: redirect execution to an already-driven M1/T1 opcode
+// fetch boundary. The supplied data is the byte currently presented by the
+// memory bus, and the next z80_tick() begins M1/T2. This avoids exposing the
+// synthetic bootstrap NOP used by z80_prefetch() as a stepped instruction.
+uint64_t z80_debug_prefetch(z80_t* cpu, uint16_t new_pc, uint8_t data);
 // return true when full instruction has finished
 bool z80_opdone(z80_t* cpu);
 
@@ -1035,6 +1040,17 @@ uint64_t z80_prefetch(z80_t* cpu, uint16_t new_pc) {
     // overlapped M1:T1 of the NOP instruction to initiate opcode fetch at new pc
     cpu->step = 0;
     return 0;
+}
+
+uint64_t z80_debug_prefetch(z80_t* cpu, uint16_t new_pc, uint8_t data) {
+    z80_prefetch(cpu, new_pc);
+    cpu->pc = (uint16_t)(new_pc + 1);
+    cpu->step = Z80_M1_T2;
+    cpu->hlx_idx = 0;
+    cpu->prefix_active = false;
+    uint64_t pins = Z80_MAKE_PINS(Z80_M1 | Z80_MREQ | Z80_RD, new_pc, data);
+    cpu->pins = pins;
+    return pins;
 }
 
 // pin helper macros

@@ -84,6 +84,11 @@ int main()
     emu.finish_acknowledge();
     emu.tick();
     CHECK(emu.pending_external_vector() == -1);
+    CHECK((emu.get_pins() & Z80_INT) == 0);
+    // A second acknowledge while the same source level is high must see only
+    // the spurious-interrupt sink, never another copy of the VBL vector.
+    CHECK(emu.acknowledge() == 0x00);
+    emu.finish_acknowledge();
 
     // Going low rearms the latch for the next vertical-blank edge.
     emu.set_external_vector(-1);

@@ -223,6 +223,8 @@ void z80ctc_init(z80ctc_t* ctc);
 void z80ctc_reset(z80ctc_t* ctc);
 // tick the CTC instance
 uint64_t z80ctc_tick(z80ctc_t* ctc, uint64_t pins);
+// clock only the interrupt daisy-chain pins (no timer/counter advance)
+uint64_t z80ctc_daisychain(z80ctc_t* ctc, uint64_t pins);
 
 #ifdef __cplusplus
 } // extern "C"
@@ -476,12 +478,19 @@ static uint64_t _z80ctc_int(z80ctc_t* ctc, uint64_t pins) {
     return pins;
 }
 
+uint64_t z80ctc_daisychain(z80ctc_t* ctc, uint64_t pins) {
+    CHIPS_ASSERT(ctc);
+    pins = _z80ctc_int(ctc, pins);
+    ctc->pins = pins;
+    return pins;
+}
+
 uint64_t z80ctc_tick(z80ctc_t* ctc, uint64_t pins) {
     if ((pins & (Z80CTC_CE|Z80CTC_IORQ|Z80CTC_M1)) == (Z80CTC_CE|Z80CTC_IORQ)) {
         pins = _z80ctc_iorq(ctc, pins);
     }
     pins = _z80ctc_tick(ctc, pins);
-    pins = _z80ctc_int(ctc, pins);
+    pins = z80ctc_daisychain(ctc, pins);
     ctc->pins = pins;
     return pins;
 }

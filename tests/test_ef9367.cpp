@@ -219,7 +219,7 @@ static int test_xor_mode_toggles_with_pen_only()
     return fails;
 }
 
-static int test_partner_rom_observed_home_and_block_commands()
+static int test_home_and_block_commands()
 {
     int fails = 0;
 #define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
@@ -230,7 +230,7 @@ static int test_partner_rom_observed_home_and_block_commands()
 
     gdp.x = 123;
     gdp.y = 77;
-    ef9367_command(&gdp, 0x05); // Partner GDP homes X while preserving Y
+    ef9367_command(&gdp, 0x05); // Partner ROM-observed X home
     CHECK(gdp.x == 0);
     CHECK(gdp.y == 77);
 
@@ -253,6 +253,45 @@ static int test_partner_rom_observed_home_and_block_commands()
     return fails;
 }
 
+static int test_partner_control_and_vblank_pins()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+    ef9367_t gdp{};
+    ef9367_init(&gdp);
+    uint64_t pins = EF9367_CS | EF9367_RD | EF9367_WR | EF9367_RESET |
+                    EF9367_RBNK | EF9367_WBNK | EF9367_XORM |
+                    EF9367_FM0 | EF9367_FM1;
+    pins = ef9367_tick(&gdp, pins);
+    CHECK(gdp.read_bank == 1);
+    CHECK(gdp.write_bank == 1);
+    CHECK(gdp.xor_mode);
+    CHECK(gdp.mode_512_lines);
+
+    pins |= EF9367_SCROLL_LOAD;
+    pins &= ~EF9367_SCRLM;
+    EF9367_SET_DATA(pins, 0xF8);
+    pins = ef9367_tick(&gdp, pins);
+    CHECK(gdp.scroll_latch == 0xF8);
+    CHECK(gdp.scroll_offset == -8);
+    pins = (pins & ~EF9367_SCROLL_LOAD) | EF9367_SCRLM;
+    pins = ef9367_tick(&gdp, pins);
+    CHECK(gdp.scroll_offset == 0);
+
+    bool saw_vblank = false;
+    bool saw_visible = false;
+    pins &= ~EF9367_SCRLM;
+    for (int i = 0; i < 1100; ++i) {
+        pins = ef9367_tick(&gdp, pins);
+        saw_vblank = saw_vblank || ((pins & EF9367_VBLANK) != 0);
+        saw_visible = saw_visible || ((pins & EF9367_VBLANK) == 0);
+    }
+    CHECK(saw_vblank);
+    CHECK(saw_visible);
+#undef CHECK
+    return fails;
+}
+
 } // namespace
 
 int main()
@@ -263,7 +302,8 @@ int main()
     fails += test_pen_up_moves_without_drawing();
     fails += test_reverse_erase_clears_vector();
     fails += test_xor_mode_toggles_with_pen_only();
-    fails += test_partner_rom_observed_home_and_block_commands();
+    fails += test_home_and_block_commands();
+    fails += test_partner_control_and_vblank_pins();
 
     if (fails == 0) {
         std::printf("test_ef9367: all tests passed\n");

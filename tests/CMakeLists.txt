@@ -6,6 +6,22 @@ target_link_libraries(test_z80sio PRIVATE chipsex)
 
 add_test(NAME z80sio_unit COMMAND test_z80sio)
 
+add_executable(test_z80dma test_z80dma.cpp)
+target_link_libraries(test_z80dma PRIVATE chipsex)
+add_test(NAME z80dma_unit COMMAND test_z80dma)
+
+add_executable(test_partner_sio
+    test_partner_sio.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+)
+
+target_include_directories(test_partner_sio PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_partner_sio PRIVATE chipsex)
+idp_require_partos_layout(test_partner_sio)
+
+add_test(NAME partner_sio_unit COMMAND test_partner_sio)
+
 add_executable(test_terminal_keymap
     test_terminal_keymap.cpp
     ../src/gui/terminal_keymap.cpp
@@ -93,6 +109,27 @@ idp_require_partos_layout(test_partner_gdp_memacc)
 
 add_test(NAME partner_gdp_memacc_unit COMMAND test_partner_gdp_memacc)
 
+add_executable(test_partner_gdp_boot
+    test_partner_gdp_boot.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partner_gdp_boot PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partner_gdp_boot PRIVATE
+    GL_GLEXT_PROTOTYPES
+    IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+)
+target_link_libraries(test_partner_gdp_boot PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+idp_require_partos_layout(test_partner_gdp_boot)
+
+add_test(NAME partner_gdp_boot_integration COMMAND test_partner_gdp_boot)
+
 add_executable(test_partner_external_im2
     test_partner_external_im2.cpp
     ../src/chips_impl.cpp
@@ -162,3 +199,7 @@ target_link_libraries(test_rtc_nvram_shadow PRIVATE chipsex)
 idp_require_partos_layout(test_rtc_nvram_shadow)
 
 add_test(NAME rtc_nvram_shadow COMMAND test_rtc_nvram_shadow)
+
+add_test(NAME mcp_stdio
+    COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_mcp_stdio.py
+            $<TARGET_FILE:idp-mcp>)

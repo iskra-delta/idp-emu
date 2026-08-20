@@ -7,6 +7,7 @@
 #include "i8272.h"
 #include "s1410.h"
 #include "idpartner_sasi.h"
+#include "z80dma.h"
 
 namespace {
 
@@ -336,6 +337,48 @@ static int test_sasi_adapter_write_phase_status()
     return fails;
 }
 
+static int test_partner_dma_compat_direction_trailer()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+
+    const uint8_t prefix[] = {
+        0x79, 0x00, 0x51, 0xFF, 0x00, // RAM address 0x5100, 256 bytes
+        0x14, 0x28, 0x85, 0xF1, 0x8A, // port A=RAM, port B=FDC data
+        0xCF
+    };
+
+    z80dma_t dma{};
+    z80dma_init(&dma);
+    for (uint8_t byte : prefix)
+        z80dma_write(&dma, byte);
+    z80dma_write(&dma, 0x01); // BIOS read trailer: port B -> port A
+    z80dma_write(&dma, 0xCF);
+    z80dma_write(&dma, 0x87);
+    CHECK(!dma.direction_ab);
+    CHECK(dma.port_a.is_memory);
+    CHECK(!dma.port_b.is_memory);
+    CHECK(dma.port_b.address == 0x00F1u);
+    CHECK(dma.port_a.block_length == 256u);
+    CHECK(dma.enabled);
+
+    z80dma_reset(&dma);
+    for (uint8_t byte : prefix)
+        z80dma_write(&dma, byte);
+    z80dma_write(&dma, 0x05); // BIOS write trailer: port A -> port B
+    z80dma_write(&dma, 0xCF);
+    z80dma_write(&dma, 0x87);
+    CHECK(dma.direction_ab);
+    CHECK(dma.port_a.is_memory);
+    CHECK(!dma.port_b.is_memory);
+    CHECK(dma.port_b.address == 0x00F1u);
+    CHECK(dma.port_a.block_length == 256u);
+    CHECK(dma.enabled);
+
+#undef CHECK
+    return fails;
+}
+
 } // namespace
 
 int main()
@@ -346,6 +389,7 @@ int main()
     fails += test_i8272_format_track_command();
     fails += test_s1410_write6_command();
     fails += test_sasi_adapter_write_phase_status();
+    fails += test_partner_dma_compat_direction_trailer();
     if (fails == 0) {
         std::puts("test_disk_controllers: PASS");
         return 0;

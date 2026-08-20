@@ -47,13 +47,20 @@ bool expect(bool cond, const char *label)
 void send_tx_byte(partner_crt_test &emu, uint16_t port, uint8_t ch)
 {
     emu.io_write(port, ch);
-    emu.tick();
+    for (int i = 0; i < 400; ++i)
+        emu.tick();
 }
 
 void enable_rx(partner_crt_test &emu, uint16_t ctrl_port)
 {
     emu.io_write(ctrl_port, 3);
     emu.io_write(ctrl_port, 1);
+}
+
+void enable_tx(partner_crt_test &emu, uint16_t ctrl_port)
+{
+    emu.io_write(ctrl_port, 5);
+    emu.io_write(ctrl_port, 0x08); // WR5: transmitter enable
 }
 
 } // namespace
@@ -65,6 +72,8 @@ int main()
     {
         partner_crt_test emu(terminal_profile::vt52);
         emu.reset();
+        enable_tx(emu, INTERNAL_CTRL_PORT);
+        enable_tx(emu, SECONDARY_B_CTRL_PORT);
 
         const uint8_t seq_internal[] = { 0x1B, 'Y', ' ', '"', 'A' };
         for (uint8_t ch : seq_internal)
@@ -93,11 +102,23 @@ int main()
     {
         partner_crt_test emu(terminal_profile::vt52);
         emu.reset();
+
+        // GUI input is queued independently of the receiver-enable window.
+        // Do not discard a key merely because firmware has not configured the
+        // SIO yet; it must remain pending until the chip can receive it.
+        emu.key_input('Q');
+        for (int i = 0; i < 400; ++i)
+            emu.tick();
+        fails += !expect(emu.pending_key_count() == 1u,
+                         "key waits while internal SIO RX is disabled");
+
+        emu.reset();
         enable_rx(emu, INTERNAL_CTRL_PORT);
         enable_rx(emu, SECONDARY_A_CTRL_PORT);
         enable_rx(emu, SECONDARY_B_CTRL_PORT);
         emu.key_input('K');
-        emu.tick();
+        for (int i = 0; i < 400; ++i)
+            emu.tick();
 
         const auto &sio = emu.get_sio();
         const auto &sio2 = emu.get_sio2();

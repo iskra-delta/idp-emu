@@ -9,6 +9,8 @@
     - 4-bit register select A0..A3 (maps to ports 0x20..0x2F)
     - CS/RD/WR control
     - RESET pin
+    - Partner board control inputs RBNK, WBNK, XORM, FM0, FM1 and SCRLM
+    - vertical-blank output
 
     ## Emulated Pins
 
@@ -27,6 +29,11 @@
     - A0..A3: register index (0x20..0x2F window)
     - CS̅/RD̅/WR̅: active-low bus control
     - RESET̅: active-low reset
+    - RBNK/WBNK: display and drawing page selects
+    - XORM: XOR drawing enable
+    - FM0/FM1: 256/512-line format selects
+    - SCRLM: active-low external scroll-latch enable
+    - VBLANK: vertical-blank output
 #*/
 #include <stdint.h>
 #include <stdbool.h>
@@ -46,11 +53,28 @@ extern "C" {
 #define EF9367_PIN_WR           (25)
 #define EF9367_PIN_CS           (26)
 #define EF9367_PIN_RESET        (27)
+#define EF9367_PIN_RBNK         (28)
+#define EF9367_PIN_WBNK         (29)
+#define EF9367_PIN_XORM         (30)
+#define EF9367_PIN_FM0          (31)
+#define EF9367_PIN_FM1          (32)
+#define EF9367_PIN_SCRLM        (33)
+#define EF9367_PIN_VBLANK       (34)
+#define EF9367_PIN_SCROLL_LOAD  (35)
 
 #define EF9367_RD               (1ULL << EF9367_PIN_RD)
 #define EF9367_WR               (1ULL << EF9367_PIN_WR)
 #define EF9367_CS               (1ULL << EF9367_PIN_CS)
 #define EF9367_RESET            (1ULL << EF9367_PIN_RESET)
+#define EF9367_RBNK             (1ULL << EF9367_PIN_RBNK)
+#define EF9367_WBNK             (1ULL << EF9367_PIN_WBNK)
+#define EF9367_XORM             (1ULL << EF9367_PIN_XORM)
+#define EF9367_FM0              (1ULL << EF9367_PIN_FM0)
+#define EF9367_FM1              (1ULL << EF9367_PIN_FM1)
+#define EF9367_SCRLM            (1ULL << EF9367_PIN_SCRLM)
+#define EF9367_VBLANK           (1ULL << EF9367_PIN_VBLANK)
+/* Board scroll latch write strobe; the byte is sampled from D0..D7. */
+#define EF9367_SCROLL_LOAD      (1ULL << EF9367_PIN_SCROLL_LOAD)
 
 typedef struct {
     uint8_t command;
@@ -70,6 +94,7 @@ typedef struct {
     uint16_t scan_ctr;
     bool vblank;
     int16_t scroll_offset;
+    uint8_t scroll_latch;
     uint8_t glyph_rom[96][7];
     bool glyph_rom_loaded;
     bool mode_512_lines; /* true=1024x512, false=1024x256 (each line doubled) */
@@ -86,6 +111,7 @@ uint8_t ef9367_read(ef9367_t *gdp, uint8_t port);
 void ef9367_write(ef9367_t *gdp, uint8_t port, uint8_t data);
 void ef9367_command(ef9367_t *gdp, uint8_t cmd);
 bool ef9367_load_charset_rom(ef9367_t *gdp, const uint8_t *rom, uint32_t size);
+void ef9367_clear_framebuffers(ef9367_t *gdp);
 
 #ifdef __cplusplus
 }
@@ -367,12 +393,18 @@ void ef9367_reset(ef9367_t *gdp) {
     gdp->scan_ctr = 0;
     gdp->vblank = false;
     gdp->scroll_offset = 0;
+    gdp->scroll_latch = 0;
     gdp->glyph_rom_loaded = false;
     gdp->mode_512_lines = true;
     gdp->read_bank = 0;
     gdp->write_bank = 0;
     gdp->xor_mode = false;
     gdp->status = _ef9367_status(gdp);
+}
+
+void ef9367_clear_framebuffers(ef9367_t *gdp) {
+    CHIPS_ASSERT(gdp);
+    memset(gdp->fb, 0, sizeof(gdp->fb));
 }
 
 static inline uint8_t _ef9367_read_idx(ef9367_t *gdp, uint8_t idx) {
@@ -428,6 +460,26 @@ uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
         return pins;
     }
 
+    /* These are physical Partner GDP board inputs, sampled continuously by
+       the controller rather than copied into it by motherboard code. */
+    gdp->read_bank = (pins & EF9367_RBNK) ? 1u : 0u;
+    gdp->write_bank = (pins & EF9367_WBNK) ? 1u : 0u;
+    gdp->xor_mode = (pins & EF9367_XORM) != 0;
+    const uint8_t format = (uint8_t)(((pins & EF9367_FM0) ? 1u : 0u) |
+                                     ((pins & EF9367_FM1) ? 2u : 0u));
+    if (format == 0u) {
+        gdp->mode_512_lines = false;
+    } else if (format == 3u) {
+        gdp->mode_512_lines = true;
+    } else {
+        /* Mixed values occur while the two PIO outputs settle. */
+        gdp->mode_512_lines = (format & 1u) != 0u;
+    }
+    if (pins & EF9367_SCROLL_LOAD) {
+        gdp->scroll_latch = EF9367_GET_DATA(pins);
+    }
+    gdp->scroll_offset = (pins & EF9367_SCRLM) ? 0 : (int8_t)gdp->scroll_latch;
+
     /* active-low CS/RD/WR */
     if ((pins & EF9367_CS) == 0) {
         const uint8_t idx = EF9367_GET_ADDR(pins);
@@ -448,6 +500,11 @@ uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
     gdp->vblank = (gdp->scan_ctr >= 992);
     gdp->ready = true;
     gdp->status = _ef9367_status(gdp);
+    if (gdp->vblank) {
+        pins |= EF9367_VBLANK;
+    } else {
+        pins &= ~EF9367_VBLANK;
+    }
     return pins;
 }
 
@@ -489,7 +546,7 @@ void ef9367_command(ef9367_t *gdp, uint8_t cmd) {
         case 0x03: /* pen/eraser up */
             gdp->cr1 &= (uint8_t)~0x01;
             break;
-        case 0x05: /* Partner GDP firmware uses this as X-home / left edge */
+        case 0x05: /* Partner-observed X home */
             gdp->x = 0;
             break;
         case 0x06: /* CLS + X=Y=0 */

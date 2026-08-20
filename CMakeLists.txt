@@ -66,6 +66,7 @@ find_package(PNG REQUIRED)
 # --- OpenGL ---
 find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
+find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
 # --- Dear ImGui via FetchContent ---
 include(FetchContent)

@@ -125,6 +125,12 @@ uint8_t s1410_read_error(s1410_t *ctrl);
 void s1410_write_control(s1410_t *ctrl, uint8_t data);
 void s1410_write_data(s1410_t *ctrl, uint8_t data);
 uint64_t s1410_tick_pins(s1410_t *ctrl, uint64_t pins);
+void s1410_set_present(s1410_t *ctrl, bool present);
+bool s1410_is_present(const s1410_t *ctrl);
+void s1410_set_block_callbacks(s1410_t *ctrl,
+                               s1410_read_blocks_cb read_blocks,
+                               s1410_write_blocks_cb write_blocks,
+                               void *user_data);
 
 #ifdef __cplusplus
 }
@@ -171,6 +177,26 @@ void s1410_init(s1410_t *ctrl) {
     ctrl->read_blocks = NULL;
     ctrl->write_blocks = NULL;
     s1410_reset(ctrl);
+}
+
+void s1410_set_present(s1410_t *ctrl, bool present) {
+    CHIPS_ASSERT(ctrl);
+    ctrl->present = present;
+}
+
+bool s1410_is_present(const s1410_t *ctrl) {
+    CHIPS_ASSERT(ctrl);
+    return ctrl->present;
+}
+
+void s1410_set_block_callbacks(s1410_t *ctrl,
+                               s1410_read_blocks_cb read_blocks,
+                               s1410_write_blocks_cb write_blocks,
+                               void *user_data) {
+    CHIPS_ASSERT(ctrl);
+    ctrl->read_blocks = read_blocks;
+    ctrl->write_blocks = write_blocks;
+    ctrl->user_data = user_data;
 }
 
 void s1410_reset(s1410_t *ctrl) {

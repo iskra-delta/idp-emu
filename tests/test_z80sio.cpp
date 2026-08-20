@@ -73,6 +73,12 @@ static int test_tx_data_path_and_control_data_select()
     CHECK(z80sio_tx_data(&sio, Z80SIO_CHANNEL_B) == 0xA5);
     CHECK(sio.chn[Z80SIO_CHANNEL_A].tx_ready == true);
     CHECK(sio.chn[Z80SIO_CHANNEL_B].tx_ready == true);
+    CHECK(sio.chn[Z80SIO_CHANNEL_A].tx_shift_empty == false);
+    write_control(&sio, Z80SIO_CHANNEL_A, 0x01); // point to RR1
+    CHECK((read_control(&sio, Z80SIO_CHANNEL_A) & 0x01u) == 0u);
+    z80sio_tx_complete(&sio, Z80SIO_CHANNEL_A);
+    write_control(&sio, Z80SIO_CHANNEL_A, 0x01);
+    CHECK((read_control(&sio, Z80SIO_CHANNEL_A) & 0x01u) != 0u);
 
     sio.chn[Z80SIO_CHANNEL_A].parity_error = true;
     write_control(&sio, Z80SIO_CHANNEL_A, 0x01); // point to RR1
@@ -168,6 +174,77 @@ static int test_receive_interrupt_modes()
     return fails;
 }
 
+static int test_channel_a_rr0_reports_either_channel_interrupt()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+
+    z80sio_t sio{};
+    z80sio_init(&sio);
+    write_wr(&sio, Z80SIO_CHANNEL_B, 3, 0xC1); // RX enable, 8-bit
+    write_wr(&sio, Z80SIO_CHANNEL_B, 1, 0x10); // RX interrupt on all chars
+    z80sio_rx_data(&sio, Z80SIO_CHANNEL_B, 0x42);
+
+    CHECK((read_control(&sio, Z80SIO_CHANNEL_A) & 0x02u) != 0u);
+    CHECK((read_control(&sio, Z80SIO_CHANNEL_B) & 0x02u) == 0u);
+
+#undef CHECK
+    return fails;
+}
+
+static int test_three_character_receive_fifo_and_overrun()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+
+    z80sio_t sio{};
+    z80sio_init(&sio);
+    write_wr(&sio, Z80SIO_CHANNEL_A, 3, 0xC1); // RX enable, 8-bit
+
+    z80sio_rx_data(&sio, Z80SIO_CHANNEL_A, 0x11);
+    z80sio_rx_data(&sio, Z80SIO_CHANNEL_A, 0x22);
+    z80sio_rx_data(&sio, Z80SIO_CHANNEL_A, 0x33);
+    CHECK(sio.chn[Z80SIO_CHANNEL_A].rx_fifo_count == 3u);
+    CHECK(sio.chn[Z80SIO_CHANNEL_A].rx_overrun == false);
+
+    z80sio_rx_data(&sio, Z80SIO_CHANNEL_A, 0x44);
+    CHECK(sio.chn[Z80SIO_CHANNEL_A].rx_fifo_count == 3u);
+    CHECK(sio.chn[Z80SIO_CHANNEL_A].rx_overrun == true);
+    CHECK(read_data(&sio, Z80SIO_CHANNEL_A) == 0x11u);
+    CHECK(read_data(&sio, Z80SIO_CHANNEL_A) == 0x22u);
+    CHECK(read_data(&sio, Z80SIO_CHANNEL_A) == 0x44u);
+    CHECK(sio.chn[Z80SIO_CHANNEL_A].rx_ready == false);
+    CHECK(sio.chn[Z80SIO_CHANNEL_A].rx_fifo_count == 0u);
+
+    write_control(&sio, Z80SIO_CHANNEL_A, 0x30); // error reset
+    CHECK(sio.chn[Z80SIO_CHANNEL_A].rx_overrun == false);
+
+#undef CHECK
+    return fails;
+}
+
+static int test_receive_error_latches_until_error_reset()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+
+    z80sio_t sio{};
+    z80sio_init(&sio);
+    write_wr(&sio, Z80SIO_CHANNEL_A, 4, 0x47); // x16, one stop, even parity
+    write_wr(&sio, Z80SIO_CHANNEL_A, 3, 0x41); // RX enable, 7-bit
+    z80sio_rx_data(&sio, Z80SIO_CHANNEL_A, 0xB5); // wrong parity
+    CHECK(read_data(&sio, Z80SIO_CHANNEL_A) == 0xB5u);
+
+    write_control(&sio, Z80SIO_CHANNEL_A, 0x01);
+    CHECK((read_control(&sio, Z80SIO_CHANNEL_A) & 0x10u) != 0u);
+    write_control(&sio, Z80SIO_CHANNEL_A, 0x30);
+    write_control(&sio, Z80SIO_CHANNEL_A, 0x01);
+    CHECK((read_control(&sio, Z80SIO_CHANNEL_A) & 0x10u) == 0u);
+
+#undef CHECK
+    return fails;
+}
+
 static int test_status_affects_vector_and_parity_modes()
 {
     int fails = 0;
@@ -235,6 +312,73 @@ static int test_tx_interrupt_on_buffer_empty()
     return fails;
 }
 
+static int test_rts_deasserts_after_last_character()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+
+    z80sio_t sio{};
+    z80sio_init(&sio);
+    write_wr(&sio, Z80SIO_CHANNEL_B, 5, 0xEA); // DTR, RTS, TX enable, 8-bit
+    write_data(&sio, Z80SIO_CHANNEL_B, 0xA5);
+    CHECK(z80sio_tx_data(&sio, Z80SIO_CHANNEL_B) == 0xA5);
+    CHECK(sio.chn[Z80SIO_CHANNEL_B].rts == true);
+
+    write_wr(&sio, Z80SIO_CHANNEL_B, 5, 0xE8); // request RTS low
+    CHECK(sio.chn[Z80SIO_CHANNEL_B].rts == true);
+    z80sio_tx_complete(&sio, Z80SIO_CHANNEL_B);
+    CHECK(sio.chn[Z80SIO_CHANNEL_B].rts == false);
+    CHECK(sio.chn[Z80SIO_CHANNEL_B].dtr == true);
+
+#undef CHECK
+    return fails;
+}
+
+static int test_chip_owned_line_timing()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+    z80sio_t sio{};
+    z80sio_init(&sio);
+    write_wr(&sio, Z80SIO_CHANNEL_A, 4, 0x04); // x1, one stop
+    write_wr(&sio, Z80SIO_CHANNEL_A, 5, 0x68); // TX enable, 8-bit
+    write_wr(&sio, Z80SIO_CHANNEL_A, 3, 0xC1); // RX enable, 8-bit
+    write_data(&sio, Z80SIO_CHANNEL_A, 0xA5);
+
+    const uint64_t tx_ticks = z80sio_character_ticks(
+        &sio, Z80SIO_CHANNEL_A, true, 4000000, 153600);
+    z80sio_line_tick(&sio, Z80SIO_CHANNEL_A, 100, 4000000, 153600);
+    CHECK(z80sio_line_tx_busy(&sio, Z80SIO_CHANNEL_A));
+    CHECK(sio.chn[Z80SIO_CHANNEL_A].tx_ready);
+    uint8_t data = 0;
+    CHECK(!z80sio_line_take_tx(&sio, Z80SIO_CHANNEL_A, &data));
+    z80sio_line_tick(&sio, Z80SIO_CHANNEL_A, 100 + tx_ticks - 1,
+                     4000000, 153600);
+    CHECK(!z80sio_line_take_tx(&sio, Z80SIO_CHANNEL_A, &data));
+    z80sio_line_tick(&sio, Z80SIO_CHANNEL_A, 100 + tx_ticks,
+                     4000000, 153600);
+    CHECK(z80sio_line_take_tx(&sio, Z80SIO_CHANNEL_A, &data));
+    CHECK(data == 0xA5);
+    CHECK(!z80sio_line_tx_busy(&sio, Z80SIO_CHANNEL_A));
+    CHECK(sio.chn[Z80SIO_CHANNEL_A].tx_shift_empty);
+
+    const uint64_t rx_start = 100 + tx_ticks;
+    const uint64_t rx_ticks = z80sio_character_ticks(
+        &sio, Z80SIO_CHANNEL_A, false, 4000000, 153600);
+    CHECK(z80sio_line_receive(&sio, Z80SIO_CHANNEL_A, 0x5A, rx_start,
+                              4000000, 153600));
+    CHECK(z80sio_line_rx_busy(&sio, Z80SIO_CHANNEL_A));
+    z80sio_line_tick(&sio, Z80SIO_CHANNEL_A, rx_start + rx_ticks - 1,
+                     4000000, 153600);
+    CHECK(!z80sio_rx_ready(&sio, Z80SIO_CHANNEL_A));
+    z80sio_line_tick(&sio, Z80SIO_CHANNEL_A, rx_start + rx_ticks,
+                     4000000, 153600);
+    CHECK(z80sio_rx_ready(&sio, Z80SIO_CHANNEL_A));
+    CHECK(read_data(&sio, Z80SIO_CHANNEL_A) == 0x5A);
+#undef CHECK
+    return fails;
+}
+
 } // namespace
 
 int main()
@@ -244,8 +388,13 @@ int main()
     fails += test_modem_input_output_and_rr0_layout();
     fails += test_wr0_commands_error_reset_and_channel_reset();
     fails += test_receive_interrupt_modes();
+    fails += test_channel_a_rr0_reports_either_channel_interrupt();
+    fails += test_three_character_receive_fifo_and_overrun();
+    fails += test_receive_error_latches_until_error_reset();
     fails += test_status_affects_vector_and_parity_modes();
     fails += test_tx_interrupt_on_buffer_empty();
+    fails += test_rts_deasserts_after_last_character();
+    fails += test_chip_owned_line_timing();
 
     if (fails == 0) {
         std::printf("test_z80sio: all tests passed\n");

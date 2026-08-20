@@ -305,6 +305,8 @@ void z80pio_init(z80pio_t* pio);
 void z80pio_reset(z80pio_t* pio);
 /* tick the Z80 PIO instance */
 uint64_t z80pio_tick(z80pio_t* pio, uint64_t pins);
+/* clock only the interrupt daisy-chain pins */
+uint64_t z80pio_daisychain(z80pio_t* pio, uint64_t pins);
 
 #ifdef __cplusplus
 } /* extern "C" */
@@ -629,6 +631,13 @@ uint64_t _z80pio_int(z80pio_t* pio, uint64_t pins) {
     return pins;
 }
 
+uint64_t z80pio_daisychain(z80pio_t* pio, uint64_t pins) {
+    CHIPS_ASSERT(pio);
+    pins = _z80pio_int(pio, pins);
+    pio->pins = pins;
+    return pins;
+}
+
 void _z80pio_read_port_inputs(z80pio_t* pio, uint64_t pins) {
     for (int i = 0; i < Z80PIO_NUM_PORTS; i++) {
         z80pio_port_t* p = &pio->port[i];
@@ -746,7 +755,7 @@ uint64_t z80pio_tick(z80pio_t* pio, uint64_t pins) {
     }
     _z80pio_read_port_inputs(pio, pins);
     pins = _z80pio_set_port_output_pins(pio, pins);
-    pins = _z80pio_int(pio, pins);
+    pins = z80pio_daisychain(pio, pins);
     pio->pins = pins;
     return pins;
 }

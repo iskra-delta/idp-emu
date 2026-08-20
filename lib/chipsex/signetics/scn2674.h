@@ -8,7 +8,7 @@
     - 8-bit data bus D0..D7
     - 4-bit register select A0..A3 (maps to ports 0x34..0x3F)
     - CS/RD/WR control
-    - RESET and IRQ placeholder
+    - RESET, IRQ, vertical-blank and horizontal-sync outputs
 
     ## Emulated Pins
 
@@ -47,12 +47,24 @@ extern "C" {
 #define SCN2674_PIN_CS          (26)
 #define SCN2674_PIN_RESET       (27)
 #define SCN2674_PIN_IRQ         (28)
+#define SCN2674_PIN_VBLANK      (29)
+#define SCN2674_PIN_HSYNC       (30)
+#define SCN2674_PIN_CHAR_LOAD   (31)
+#define SCN2674_PIN_ATTR_LOAD   (32)
+#define SCN2674_PIN_CHAR_OE     (33)
+#define SCN2674_PIN_ATTR_OE     (34)
 
 #define SCN2674_RD              (1ULL << SCN2674_PIN_RD)
 #define SCN2674_WR              (1ULL << SCN2674_PIN_WR)
 #define SCN2674_CS              (1ULL << SCN2674_PIN_CS)
 #define SCN2674_RESET           (1ULL << SCN2674_PIN_RESET)
 #define SCN2674_IRQ             (1ULL << SCN2674_PIN_IRQ)
+#define SCN2674_VBLANK          (1ULL << SCN2674_PIN_VBLANK)
+#define SCN2674_HSYNC           (1ULL << SCN2674_PIN_HSYNC)
+#define SCN2674_CHAR_LOAD       (1ULL << SCN2674_PIN_CHAR_LOAD)
+#define SCN2674_ATTR_LOAD       (1ULL << SCN2674_PIN_ATTR_LOAD)
+#define SCN2674_CHAR_OE         (1ULL << SCN2674_PIN_CHAR_OE)
+#define SCN2674_ATTR_OE         (1ULL << SCN2674_PIN_ATTR_OE)
 
 typedef struct {
     uint8_t ir[16];
@@ -439,6 +451,19 @@ uint64_t scn2674_tick(scn2674_t *avdc, uint64_t pins) {
         return pins;
     }
 
+    /* External character/attribute latches on the AVDC memory interface. */
+    if (pins & SCN2674_CHAR_LOAD) {
+        avdc->char_latch = SCN2674_GET_DATA(pins);
+    }
+    if (pins & SCN2674_ATTR_LOAD) {
+        avdc->attr_latch = SCN2674_GET_DATA(pins);
+    }
+    if (pins & SCN2674_CHAR_OE) {
+        SCN2674_SET_DATA(pins, avdc->char_latch);
+    } else if (pins & SCN2674_ATTR_OE) {
+        SCN2674_SET_DATA(pins, avdc->attr_latch);
+    }
+
     /* active-low CS/RD/WR */
     if ((pins & SCN2674_CS) == 0) {
         const uint8_t idx = SCN2674_GET_ADDR(pins);
@@ -537,6 +562,18 @@ uint64_t scn2674_tick(scn2674_t *avdc, uint64_t pins) {
         pins |= SCN2674_IRQ;
     } else {
         pins &= ~SCN2674_IRQ;
+    }
+    if (vblank_live) {
+        pins |= SCN2674_VBLANK;
+    } else {
+        pins &= ~SCN2674_VBLANK;
+    }
+    /* The exact dot clock is outside this character-level model.  Keep a
+       stable 1/8-scanline pulse so board glue observes a real changing pin. */
+    if (avdc->raster_tick_div < (ticks_per_scanline / 8u)) {
+        pins |= SCN2674_HSYNC;
+    } else {
+        pins &= ~SCN2674_HSYNC;
     }
     return pins;
 }

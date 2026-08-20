@@ -83,7 +83,42 @@ Run Partner G (GDP) with the minimal user-area-0 system disk:
 ./bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g-system.img
 ```
 
-In VS Code, `F5` defaults to the `Original Partner GDP CP/M` launch configuration from `.vscode/launch.json`. It boots the original Partner GDP ROM from `roms/partner_gdp.rom` with the minimal CP/M hard-disk image from `disks/hdd-partner-g-system.img` and keeps its CMOS settings in `partner_cmos.bin`, separate from PartOS. The disk contains only essential system tools in user area 0 and has no `PROFILE.SUB`. The PartOS launch remains available as `PartOS Boot (Unsafe Build Only)` when needed.
+### Invisible MCP mode
+
+`idp-mcp` runs the same chip-level machine without opening a window and exposes
+it as a stateful Model Context Protocol server over stdin/stdout. It defaults
+to the CRT model and its bundled ROM:
+
+```bash
+./bin/idp-mcp
+```
+
+Start a GDP machine with a hard disk:
+
+```bash
+./bin/idp-mcp --model gdp --hdd disks/hdd-partner-g-system.img
+```
+
+The server mirrors the applicable `zx-spectrum-mcp` workflow: loading, bounded
+run/run-until/step control, signal breakpoints, complete registers, memory and
+I/O bus access, timed keyboard input, PNG screens/screenshots, text/ASCII screen
+inspection, and YUV4MPEG2 recording. `measure_cycles` reports exact elapsed
+4 MHz chip clocks (Z80 T-states) for an instruction or routine. Partner media
+mounting remains available; cassette control is intentionally absent because
+there is no cassette chip in the Partner.
+It writes JSON-RPC only to stdout; diagnostics and media-load messages go to
+stderr, so it can be launched directly by an MCP client. For example:
+
+```toml
+[mcp_servers.iskra_partner]
+command = "/absolute/path/to/idp-emu/bin/idp-mcp"
+args = ["--model", "gdp", "--hdd", "/absolute/path/to/hdd.img"]
+```
+
+See the [command-line reference](docs/COMMAND-LINE.md#invisible-mcp-server)
+for startup options and the complete tool list.
+
+In VS Code, `F5` defaults to the `Original Partner GDP CP/M` launch configuration from `.vscode/launch.json`. It boots the original Partner GDP ROM from `roms/partner_gdp.rom` with the minimal CP/M hard-disk image from `disks/hdd-partner-g-system.img` and keeps its CMOS settings in `partner_cmos.bin`, separate from PartOS. The disk contains essential system tools and `PAKET.COM` in user area 0 and has no `PROFILE.SUB`. The PartOS launch remains available as `PartOS Boot (Unsafe Build Only)` when needed.
 
 ### Type commands after startup
 

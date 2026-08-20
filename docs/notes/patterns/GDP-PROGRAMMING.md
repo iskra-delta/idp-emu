@@ -46,10 +46,8 @@ define emulation rules that match ROM behavior.
   - In practice, this produces the expected stacked startup layout
     (`banner`, then `boot version`, then `TESTING MEMORY ...`) without the
     lines erasing each other.
-- Partner ROM uses EF command `0x05` as an **X-home / left-edge** operation.
-  - Generic EF9367 tables may describe `0x05` as resetting both `X` and `Y`.
-  - On Partner, preserving `Y` is required for the boot banner and subsequent
-    newline/scroll sequence to land in the correct rows.
+- Partner ROM uses EF command `0x05` as X-home while preserving `Y`.
+  - Partner ROM uses command `0x0D` when it needs to reset only `X`.
 
 ## Emulation Rules (Practical)
 

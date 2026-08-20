@@ -31,20 +31,43 @@ static inline uint64_t ef_bus_idle() {
     return EF9367_CS | EF9367_RD | EF9367_WR | EF9367_RESET;
 }
 
-static inline uint8_t ef_bus_read(ef9367_t* chip, uint8_t port) {
-    uint64_t pins = ef_bus_idle();
+constexpr uint64_t EF_BOARD_INPUTS = EF9367_RBNK | EF9367_WBNK |
+    EF9367_XORM | EF9367_FM0 | EF9367_FM1 | EF9367_SCRLM;
+
+static inline uint8_t ef_bus_read(ef9367_t* chip, uint8_t port, uint64_t &chip_pins) {
+    uint64_t pins = ef_bus_idle() | (chip_pins & EF_BOARD_INPUTS);
     pins |= (uint64_t)(port & 0x0F);
     pins &= ~(EF9367_CS | EF9367_RD);
-    pins = ef9367_tick(chip, pins);
+    chip_pins = pins = ef9367_tick(chip, pins);
     return EF9367_GET_DATA(pins);
 }
 
-static inline void ef_bus_write(ef9367_t* chip, uint8_t port, uint8_t data) {
-    uint64_t pins = ef_bus_idle();
+static inline void ef_bus_write(ef9367_t* chip, uint8_t port, uint8_t data,
+                                uint64_t &chip_pins) {
+    uint64_t pins = ef_bus_idle() | (chip_pins & EF_BOARD_INPUTS);
     pins |= (uint64_t)(port & 0x0F);
     EF9367_SET_DATA(pins, data);
     pins &= ~(EF9367_CS | EF9367_WR);
-    (void)ef9367_tick(chip, pins);
+    chip_pins = ef9367_tick(chip, pins);
+}
+
+static inline void ef_scroll_latch_write(ef9367_t* chip, uint8_t data,
+                                         uint64_t &chip_pins) {
+    uint64_t pins = ef_bus_idle() | (chip_pins & EF_BOARD_INPUTS) |
+                    EF9367_SCROLL_LOAD;
+    EF9367_SET_DATA(pins, data);
+    chip_pins = ef9367_tick(chip, pins);
+}
+
+static inline uint64_t ef_board_pins_from_pio(uint8_t pa) {
+    uint64_t pins = ef_bus_idle();
+    if (pa & 0x01u) pins |= EF9367_RBNK;
+    if (pa & 0x02u) pins |= EF9367_WBNK;
+    if (pa & 0x04u) pins |= EF9367_XORM;
+    if (pa & 0x08u) pins |= EF9367_FM0;
+    if (pa & 0x10u) pins |= EF9367_FM1;
+    if (pa & 0x80u) pins |= EF9367_SCRLM;
+    return pins;
 }
 
 static inline uint64_t avdc_bus_idle() {
@@ -89,40 +112,66 @@ static inline uint8_t avdc_map_port_index(uint8_t port) {
     }
 }
 
-static inline uint8_t avdc_bus_read(scn2674_t* chip, uint8_t port) {
+static inline uint8_t avdc_bus_read(scn2674_t* chip, uint8_t port,
+                                    uint64_t &chip_pins) {
     const uint8_t idx = avdc_map_port_index(port);
     if (idx == 0xFF) return 0xFF;
     uint64_t pins = avdc_bus_idle();
     pins |= (uint64_t)(idx & 0x0F);
     pins &= ~(SCN2674_CS | SCN2674_RD);
-    pins = scn2674_tick(chip, pins);
+    chip_pins = pins = scn2674_tick(chip, pins);
     return SCN2674_GET_DATA(pins);
 }
 
-static inline void avdc_bus_write(scn2674_t* chip, uint8_t port, uint8_t data) {
+static inline void avdc_bus_write(scn2674_t* chip, uint8_t port, uint8_t data,
+                                  uint64_t &chip_pins) {
     const uint8_t idx = avdc_map_port_index(port);
     if (idx == 0xFF) return;
     uint64_t pins = avdc_bus_idle();
     pins |= (uint64_t)(idx & 0x0F);
     SCN2674_SET_DATA(pins, data);
     pins &= ~(SCN2674_CS | SCN2674_WR);
-    (void)scn2674_tick(chip, pins);
+    chip_pins = scn2674_tick(chip, pins);
 }
 
-static inline uint8_t gdp_pio_read(z80pio_t* pio, uint8_t port) {
+static inline uint8_t avdc_latch_read(scn2674_t* chip, bool attribute,
+                                      uint64_t &chip_pins) {
+    uint64_t pins = avdc_bus_idle() |
+        (attribute ? SCN2674_ATTR_OE : SCN2674_CHAR_OE);
+    chip_pins = pins = scn2674_tick(chip, pins);
+    return SCN2674_GET_DATA(pins);
+}
+
+static inline void avdc_latch_write(scn2674_t* chip, bool attribute,
+                                    uint8_t data, uint64_t &chip_pins) {
+    uint64_t pins = avdc_bus_idle() |
+        (attribute ? SCN2674_ATTR_LOAD : SCN2674_CHAR_LOAD);
+    SCN2674_SET_DATA(pins, data);
+    chip_pins = scn2674_tick(chip, pins);
+}
+
+static inline uint64_t gdp_pio_external_pins(uint8_t external_pa) {
     uint64_t pins = Z80PIO_CE | Z80PIO_IORQ | Z80PIO_RD;
+    Z80PIO_SET_PA(pins, external_pa);
+    return pins;
+}
+
+static inline uint8_t gdp_pio_read(z80pio_t* pio, uint8_t port,
+                                   uint8_t external_pa, uint64_t &chip_pins) {
+    uint64_t pins = gdp_pio_external_pins(external_pa);
     if (port & 0x01) pins |= Z80PIO_CDSEL;
     if (port & 0x02) pins |= Z80PIO_BASEL;
-    pins = z80pio_tick(pio, pins);
+    chip_pins = pins = z80pio_tick(pio, pins);
     return Z80PIO_GET_DATA(pins);
 }
 
-static inline void gdp_pio_write(z80pio_t* pio, uint8_t port, uint8_t data) {
-    uint64_t pins = Z80PIO_CE | Z80PIO_IORQ;
+static inline void gdp_pio_write(z80pio_t* pio, uint8_t port, uint8_t data,
+                                 uint8_t external_pa, uint64_t &chip_pins) {
+    uint64_t pins = gdp_pio_external_pins(external_pa) & ~Z80PIO_RD;
     if (port & 0x01) pins |= Z80PIO_CDSEL;
     if (port & 0x02) pins |= Z80PIO_BASEL;
     Z80PIO_SET_DATA(pins, data);
-    (void)z80pio_tick(pio, pins);
+    chip_pins = z80pio_tick(pio, pins);
 }
 }
 
@@ -144,44 +193,18 @@ partner_gdp::partner_gdp(terminal_profile profile, const std::string &rtc_nvram_
     terminal_ = make_terminal_emulator(terminal_profile_);
 }
 
-void partner_gdp::sync_ef_mode_from_gdp_pio()
-{
-    const uint8_t pa = gdp_video_pio_.port[Z80PIO_PORT_A].output;
-    // GDP video PIO port A wiring (per board notes/schematic):
-    // A0=RBNK (display/read page), A1=WRNK (write page), A2=XORM.
-    // A3/A4 are FORMAT0/FORMAT1 lines:
-    //   00 -> 1024x256
-    //   11 -> 1024x512
-    // mixed states are transitional/undefined and keep prior mode.
-    ef9367_.read_bank = (uint8_t)(pa & 0x01u);
-    ef9367_.write_bank = (uint8_t)((pa >> 1) & 0x01u);
-    ef9367_.xor_mode = (pa & 0x04u) != 0;
-    const uint8_t fmt = (uint8_t)((pa >> 3) & 0x03u);
-    if (fmt == 0x0u) {
-        ef9367_.mode_512_lines = false;
-    } else if (fmt == 0x3u) {
-        ef9367_.mode_512_lines = true;
-    } else {
-        // Mixed FM0/FM1 states appear during transitions; follow FM0 line.
-        ef9367_.mode_512_lines = (fmt & 0x01u) != 0u;
-    }
-}
-
 void partner_gdp::reset()
 {
     partner::reset();
     raw_serial_.clear();
     ef9367_reset(&ef9367_);
-    std::memset(ef9367_.fb[0], 0, sizeof(ef9367_.fb[0]));
-    std::memset(ef9367_.fb[1], 0, sizeof(ef9367_.fb[1]));
+    ef9367_clear_framebuffers(&ef9367_);
     scn2674_reset(&avdc_);
     z80pio_reset(&gdp_video_pio_);
     text_col_ = 0;
     text_row_ = 0;
     expect_abs_x_ = false;
     expect_abs_y_ = false;
-    sync_div_ = 0;
-    sync_bit4_ = false;
     io_cnt_ = {};
     avdc_port_wr_cnt_.fill(0);
     avdc_cmd_cnt_.fill(0);
@@ -190,15 +213,18 @@ void partner_gdp::reset()
     avdc_char_hist_.fill(0);
     gdp_scroll_ = 0;
     avdc_takeover_ = false;
-    avdc_mem_acc_phase_ = false;
     avdc_rowtbl_base_cache_ = 0;
     avdc_rowtbl_base_cache_valid_ = false;
     avdc_rowtbl_be_cache_ = false;
     avdc_rowtbl_bias_cache_ = 0;
-    ef9367_.scroll_offset = 0;
     key_fifo_.clear();
     keyboard_.reset();
-    sync_ef_mode_from_gdp_pio();
+    avdc_pins_ = scn2674_tick(&avdc_, avdc_bus_idle());
+    uint64_t pio_idle = 0;
+    Z80PIO_SET_PA(pio_idle, 0);
+    gdp_video_pio_pins_ = z80pio_tick(&gdp_video_pio_, pio_idle);
+    ef9367_pins_ = ef9367_tick(&ef9367_, ef_bus_idle());
+    avdc_vb_edge_ = false;
     if (terminal_)
         terminal_->reset();
 }
@@ -210,10 +236,14 @@ void partner_gdp::tick()
     // Keep all serial TX channels drained so ROM/CP/M polling on TX-ready can
     // progress even when the GDP runtime moves console traffic to a different
     // SIO than the early bootstrap path.
-    auto drain_tx = [&](z80sio_t& chip, int channel, bool keyboard_path) {
-        if (chip.chn[channel].tx_ready)
+    auto drain_tx = [&](sio_port_id port, z80sio_t& chip, int channel,
+                        bool keyboard_path) {
+        if (!is_sio_port_locked(port) &&
+            get_sio_device_config(port).kind != sio_device_kind::none)
             return;
-        const uint8_t data = z80sio_tx_data(&chip, channel);
+        uint8_t data = 0;
+        if (!z80sio_line_take_tx(&chip, channel, &data))
+            return;
         if (keyboard_path) {
             keyboard_.host_write(data);
         }
@@ -222,67 +252,38 @@ void partner_gdp::tick()
     // video output. Drain transmit paths so firmware polling progresses, but
     // do not mirror any SIO TX bytes into the on-screen terminal/raw display
     // traces.
-    drain_tx(sio, Z80SIO_CHANNEL_A, true);
-    drain_tx(sio, Z80SIO_CHANNEL_B, false);
-    drain_tx(sio2, Z80SIO_CHANNEL_A, false);
-    drain_tx(sio2, Z80SIO_CHANNEL_B, false);
+    drain_tx(sio_port_id::sio1_a, sio, Z80SIO_CHANNEL_A, true);
+    drain_tx(sio_port_id::sio1_b, sio, Z80SIO_CHANNEL_B, false);
+    drain_tx(sio_port_id::sio2_a, sio2, Z80SIO_CHANNEL_A, false);
+    drain_tx(sio_port_id::sio2_b, sio2, Z80SIO_CHANNEL_B, false);
 
     // Feed queued keyboard input strictly through SIO RX path. Keyboard bytes
     // are hardware-serial input and must be consumed by firmware ISR/driver.
-    if (!key_fifo_.empty()) {
-        const uint8_t ch = key_fifo_.front();
-        bool delivered = false;
-        auto try_inject = [&](z80sio_t& chip, int channel) {
-            if (chip.chn[channel].rx_ready)
-                return;
-            const bool was_ready = chip.chn[channel].rx_ready;
-            z80sio_rx_data(&chip, channel, ch);
-            delivered = delivered || (!was_ready && chip.chn[channel].rx_ready);
-        };
+    if (!key_fifo_.empty() &&
+        z80sio_rx_enabled(&sio, Z80SIO_CHANNEL_A)) {
         // On Partner GDP the keyboard is a serial device on the first SIO,
         // channel A. Keep the key path on that real channel so the SIO's RX
         // interrupt machinery remains responsible for delivering characters.
-        try_inject(sio, Z80SIO_CHANNEL_A);
-        if (delivered) {
+        if (z80sio_line_receive(&sio, Z80SIO_CHANNEL_A, key_fifo_.front(),
+                                get_tick_count(), 4000000, 153600)) {
             key_fifo_.pop_front();
         }
     }
 
-    const uint64_t ef_idle = EF9367_CS | EF9367_RD | EF9367_WR | EF9367_RESET;
-    const uint64_t avdc_idle = SCN2674_CS | SCN2674_RD | SCN2674_WR | SCN2674_RESET;
+    const uint8_t pa = Z80PIO_GET_PA(gdp_video_pio_pins_);
+    ef9367_pins_ = ef9367_tick(&ef9367_, ef_board_pins_from_pio(pa));
 
-    ef9367_tick(&ef9367_, ef_idle);
-    {
-        const bool prev_vb = avdc_.prev_vblank_flag;
-        scn2674_tick(&avdc_, avdc_idle);
-        const bool cur_vb  = (avdc_.irq_live & 0x10u) != 0u;
-        avdc_vb_edge_ = cur_vb && !prev_vb;
-        // On each VB rising edge hold Z80_INT for 64 ticks. BIOS stage uses
-        // I=0xFA and waits for >=1 non-space AVDC write (past cold-boot fill).
-        // PartOS then hands off to its kernel IM2 table; recent builds place
-        // that table on page 0xFE (older layouts used 0xFD). Keep VBL-driven
-        // INT alive for either kernel page so the GDP scheduler and async FAT
-        // worker continue to run after the ROM stage.
-        if (avdc_vb_edge_) {
-            if (cpu.i == 0xFE || cpu.i == 0xFD ||
-                (cpu.i == 0xFA && avdc_char_nonspace_wr_cnt_ > 0))
-                avdint_hold_ticks_ = 64;
-        }
-        if (avdint_hold_ticks_ > 0) avdint_hold_ticks_--;
-    }
-    (void)z80pio_tick(&gdp_video_pio_, 0);
-    sync_ef_mode_from_gdp_pio();
+    const bool previous_vblank = (avdc_pins_ & SCN2674_VBLANK) != 0;
+    avdc_pins_ = scn2674_tick(&avdc_, avdc_bus_idle());
+    const bool current_vblank = (avdc_pins_ & SCN2674_VBLANK) != 0;
+    avdc_vb_edge_ = current_vblank && !previous_vblank;
 
-    const bool pio_a_output = (gdp_video_pio_.port[Z80PIO_PORT_A].mode == Z80PIO_MODE_OUTPUT);
-    const uint8_t pa = gdp_video_pio_.port[Z80PIO_PORT_A].output;
-    // SCRLM appears active-low on Partner board wiring.
-    const bool scroll_mode_enabled = !pio_a_output || ((pa & 0x80u) == 0u);
-    ef9367_.scroll_offset = scroll_mode_enabled ? (int8_t)gdp_scroll_ : 0;
-    sync_div_++;
-    if (sync_div_ >= 1024) {
-        sync_div_ = 0;
-        sync_bit4_ = !sync_bit4_;
-    }
+    uint8_t external_pa = 0;
+    if (ef9367_pins_ & EF9367_VBLANK) external_pa |= 0x20u;
+    if (avdc_pins_ & SCN2674_IRQ) external_pa |= 0x40u;
+    uint64_t pio_idle = 0;
+    Z80PIO_SET_PA(pio_idle, external_pa);
+    gdp_video_pio_pins_ = z80pio_tick(&gdp_video_pio_, pio_idle);
 }
 
 void partner_gdp::render_to(display &disp)
@@ -306,12 +307,7 @@ void partner_gdp::render_to(display &disp)
     constexpr int GFX_OFF_X = (FULL_W - GFX_W) / 2; // 16
     constexpr int GFX_OFF_Y = (FULL_H - GFX_H) / 2; // 56
 
-    const uint8_t pa = gdp_video_pio_.port[Z80PIO_PORT_A].output;
-    const bool pio_a_output = (gdp_video_pio_.port[Z80PIO_PORT_A].mode == Z80PIO_MODE_OUTPUT);
-    // SCRLM appears active-low on Partner board wiring.
-    const bool scroll_mode_enabled = !pio_a_output || ((pa & 0x80u) == 0u);
-
-    const uint8_t text_ctl = gdp_video_pio_.port[Z80PIO_PORT_B].output;
+    const uint8_t text_ctl = Z80PIO_GET_PB(gdp_video_pio_pins_);
     const bool text_dot_stretch = (text_ctl & 0x01u) != 0;
     const bool text_cursor_mode = (text_ctl & 0x02u) != 0;
     const bool text_color_mode = (text_ctl & 0x04u) != 0;
@@ -357,7 +353,7 @@ void partner_gdp::render_to(display &disp)
     };
 
     const uint8_t *ef_page = ef9367_.fb[ef9367_.read_bank & 1u];
-    const int scroll = scroll_mode_enabled ? (int)(int8_t)gdp_scroll_ : 0;
+    const int scroll = ef9367_.scroll_offset;
     for (int y = 0; y < 512; y++) {
         int phys_src_y = y - scroll;
         int src_y = 0;
@@ -530,10 +526,9 @@ void partner_gdp::render_to(display &disp)
     };
     const auto [avdc_cursor_scan0, avdc_cursor_scan1] = avdc_cursor_band();
     std::vector<uint16_t> rowtbl_line_bases;
-    std::vector<uint8_t> rowtbl_double_modes;
+    std::array<uint8_t, 26> rowtbl_double_modes{};
     if (use_row_table) {
         rowtbl_line_bases.resize((size_t)avdc_rows, linear_base);
-        rowtbl_double_modes.resize((size_t)avdc_rows, 0);
         for (int row = 0; row < avdc_rows; row++) {
             const uint16_t raw = read_row_table_raw(rowtbl_base, row, rowtbl_big_endian);
             rowtbl_line_bases[(size_t)row] = (uint16_t)(raw & 0x3FFFu);
@@ -561,7 +556,7 @@ void partner_gdp::render_to(display &disp)
         linear_line_bases[(size_t)row] =
             (uint16_t)((active_linear_base + (row - active_linear_origin_row) * avdc_stride) & 0x3FFFu);
     }
-    std::vector<uint8_t> chosen_row_double_modes((size_t)avdc_rows, 0);
+    std::array<uint8_t, 26> chosen_row_double_modes{};
     const auto avdc_char_addr = [&](const std::vector<uint16_t>& line_bases, int row, int col) -> uint16_t {
         return (uint16_t)((line_bases[(size_t)row] + col) & 0x3FFFu);
     };
@@ -904,7 +899,7 @@ void partner_gdp::render_to(display &disp)
         render_row_table ? rowtbl_line_bases : linear_line_bases;
     const bool per_row_double_mode_enable = (avdc_.ir[0] & 0x80u) != 0;
     if (per_row_double_mode_enable) {
-        if (render_row_table && !rowtbl_double_modes.empty()) {
+        if (render_row_table) {
             chosen_row_double_modes = rowtbl_double_modes;
         } else {
             std::fill(chosen_row_double_modes.begin(), chosen_row_double_modes.end(),
@@ -1035,14 +1030,6 @@ bool partner_gdp::key_input(uint8_t ch)
         ch = '\r';
     }
 
-    const bool was_ready = sio.chn[Z80SIO_CHANNEL_A].rx_ready;
-    if (!was_ready) {
-        z80sio_rx_data(&sio, Z80SIO_CHANNEL_A, ch);
-        if (!was_ready && sio.chn[Z80SIO_CHANNEL_A].rx_ready) {
-            keyboard_.local_keypress();
-            return true;
-        }
-    }
     if (key_fifo_.size() >= KEY_FIFO_CAPACITY) {
         return false;
     }
@@ -1053,13 +1040,14 @@ bool partner_gdp::key_input(uint8_t ch)
 
 bool partner_gdp::keyboard_input_ready() const
 {
-    return (sio.chn[Z80SIO_CHANNEL_A].wr[3] & 0x01u) != 0u;
+    return z80sio_rx_enabled(&sio, Z80SIO_CHANNEL_A);
 }
 
 size_t partner_gdp::pending_key_count() const
 {
     return key_fifo_.size() +
-        (sio.chn[Z80SIO_CHANNEL_A].rx_ready ? 1u : 0u);
+        (z80sio_line_rx_busy(&sio, Z80SIO_CHANNEL_A) ? 1u : 0u) +
+        (z80sio_rx_ready(&sio, Z80SIO_CHANNEL_A) ? 1u : 0u);
 }
 
 std::string partner_gdp::dump_terminal_text() const
@@ -1120,7 +1108,7 @@ void partner_gdp::gdp_command(uint8_t cmd)
         if (terminal_)
             terminal_->reset();
         break;
-    case 0x05: // Partner GDP uses this as X-home / left edge
+    case 0x05: // Partner ROM uses this as X-home / left edge
         text_col_ = 0;
         break;
     case 0x0D: // X=0
@@ -1160,82 +1148,55 @@ void partner_gdp::gdp_command(uint8_t cmd)
 uint8_t partner_gdp::io_read(uint16_t port)
 {
     port &= 0xFF;
-
-    // GDP common-control port is wired as a mirror of GDP-board PIO port A.
-    // Bits 5/6 are board interrupt inputs (read-only from CPU perspective).
-    auto read_common_ctrl_port = [&]() -> uint8_t {
-        uint8_t value = gdp_video_pio_.port[Z80PIO_PORT_A].output;
-        // GDPINT is modeled as EF vertical-blank status activity.
-        const bool gdpint = ef9367_.vblank;
-        // AVDINT follows the hardware INT pin: only high when an unmasked
-        // interrupt is pending. The boot code polls this bit and expects it
-        // LOW until the BIOS enables AVDC interrupts.
-        const bool avdint = (avdc_.irq_status != 0u);
-        value = (uint8_t)((value & ~(0x20u | 0x40u)) |
-                          (gdpint ? 0x20u : 0x00u) |
-                          (avdint ? 0x40u : 0x00u));
-        return value;
-    };
+    const uint8_t external_pa =
+        (uint8_t)(((ef9367_pins_ & EF9367_VBLANK) ? 0x20u : 0u) |
+                  ((avdc_pins_ & SCN2674_IRQ) ? 0x40u : 0u));
 
     if ((port >= 0x20 && port <= 0x2F))
     {
         io_cnt_.ef_rd++;
-        return ef_bus_read(&ef9367_, (uint8_t)port);
+        return ef_bus_read(&ef9367_, (uint8_t)port, ef9367_pins_);
     }
 
     if (port == 0x30) {
         io_cnt_.pio_rd++;
-        // Keep PIO timing/state progression in sync with CPU reads.
-        (void)gdp_pio_read(&gdp_video_pio_, 0);
-        return read_common_ctrl_port();
+        return gdp_pio_read(&gdp_video_pio_, 0, external_pa,
+                            gdp_video_pio_pins_);
     }
 
     if (port >= 0x31 && port <= 0x33) {
         io_cnt_.pio_rd++;
-        return gdp_pio_read(&gdp_video_pio_, (uint8_t)(port - 0x30));
+        return gdp_pio_read(&gdp_video_pio_, (uint8_t)(port - 0x30),
+                            external_pa, gdp_video_pio_pins_);
     }
 
     if (port == 0x36) {
-        // The GDP AVDC driver polls MEM_ACC as a short handshake pulse:
-        // first wait for bit4 high, then for it to drop low again. Modeling
-        // that as a long tick-based square wave makes every text-cell access
-        // artificially stall for thousands of CPU ticks, so large outputs like
-        // `ls` appear frozen. Keep the handshake edge-based instead.
-        avdc_mem_acc_phase_ = !avdc_mem_acc_phase_;
-        return avdc_mem_acc_phase_ ? 0x10 : 0x00;
+        return (avdc_pins_ & SCN2674_HSYNC) ? 0x10u : 0x00u;
     }
 
     if (port >= AVDC_BASE_PORT && port <= AVDC_LAST_PORT)
     {
-        if (port == 0x34) return avdc_.char_latch;
-        if (port == 0x35) return avdc_.attr_latch;
+        if (port == 0x34) return avdc_latch_read(&avdc_, false, avdc_pins_);
+        if (port == 0x35) return avdc_latch_read(&avdc_, true, avdc_pins_);
         if (port == 0x36 || port == 0x37) return 0xFF;
         io_cnt_.avdc_rd++;
-        return avdc_bus_read(&avdc_, (uint8_t)port);
+        return avdc_bus_read(&avdc_, (uint8_t)port, avdc_pins_);
     }
 
     return partner::io_read(port);
 }
 
-int partner_gdp::get_external_im2_vector() const
-{
-    // Assert INT for 64 ticks on each AVDC VB edge. 64 ticks covers the longest
-    // Z80 instruction (23 cycles) so the Z80 reliably catches the interrupt.
-    // The handler runs under DI so INT going low mid-handler is harmless.
-    if (avdint_hold_ticks_ > 0) {
-        return 0x8E;
-    }
-    return -1;
-}
-
 void partner_gdp::io_write(uint16_t port, uint8_t data)
 {
     port &= 0xFF;
+    const uint8_t external_pa =
+        (uint8_t)(((ef9367_pins_ & EF9367_VBLANK) ? 0x20u : 0u) |
+                  ((avdc_pins_ & SCN2674_IRQ) ? 0x40u : 0u));
 
     if (port == EF9367_CMD_PORT)
     {
         io_cnt_.ef_wr++;
-        ef_bus_write(&ef9367_, (uint8_t)port, data);
+        ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_);
         if (gdp_trace_enabled()) {
             std::fprintf(stderr,
                 "[gdp-ef] pc=%04x cmd=%02x x=%u y=%u dx=%u dy=%u chsz=%02x cr1=%02x cr2=%02x scroll=%02x\n",
@@ -1255,43 +1216,43 @@ void partner_gdp::io_write(uint16_t port, uint8_t data)
     {
     case EF9367_CR1_PORT:
         io_cnt_.ef_wr++;
-        ef_bus_write(&ef9367_, (uint8_t)port, data);
+        ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_);
         if (gdp_trace_enabled()) {
             std::fprintf(stderr, "[gdp-ef] pc=%04x cr1<=%02x\n", cpu.pc, data);
         }
         return;
     case EF9367_CR2_PORT:
         io_cnt_.ef_wr++;
-        ef_bus_write(&ef9367_, (uint8_t)port, data);
+        ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_);
         if (gdp_trace_enabled()) {
             std::fprintf(stderr, "[gdp-ef] pc=%04x cr2<=%02x\n", cpu.pc, data);
         }
         return;
     case EF9367_CHSZ_PORT:
         io_cnt_.ef_wr++;
-        ef_bus_write(&ef9367_, (uint8_t)port, data);
+        ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_);
         if (gdp_trace_enabled()) {
             std::fprintf(stderr, "[gdp-ef] pc=%04x chsz<=%02x\n", cpu.pc, data);
         }
         return;
-    case EF9367_DX_PORT: io_cnt_.ef_wr++; ef_bus_write(&ef9367_, (uint8_t)port, data); return;
-    case EF9367_DY_PORT: io_cnt_.ef_wr++; ef_bus_write(&ef9367_, (uint8_t)port, data); return;
+    case EF9367_DX_PORT: io_cnt_.ef_wr++; ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_); return;
+    case EF9367_DY_PORT: io_cnt_.ef_wr++; ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_); return;
     case EF9367_XH_PORT:
-        io_cnt_.ef_wr++; ef_bus_write(&ef9367_, (uint8_t)port, data);
+        io_cnt_.ef_wr++; ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_);
         return;
     case EF9367_XL_PORT:
         io_cnt_.ef_wr++;
-        ef_bus_write(&ef9367_, (uint8_t)port, data);
+        ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_);
         text_col_ = (int)(ef9367_.x / 8u);
         if (text_col_ < 0) text_col_ = 0;
         if (text_col_ >= text_cols_) text_col_ = text_cols_ - 1;
         return;
     case EF9367_YH_PORT:
-        io_cnt_.ef_wr++; ef_bus_write(&ef9367_, (uint8_t)port, data);
+        io_cnt_.ef_wr++; ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_);
         return;
     case EF9367_YL_PORT:
         io_cnt_.ef_wr++;
-        ef_bus_write(&ef9367_, (uint8_t)port, data);
+        ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_);
         if (gdp_trace_enabled()) {
             std::fprintf(stderr, "[gdp-ef] pc=%04x y<=%u\n", cpu.pc, ef9367_.y);
         }
@@ -1306,8 +1267,10 @@ void partner_gdp::io_write(uint16_t port, uint8_t data)
     if (port >= 0x30 && port <= 0x33)
     {
         io_cnt_.pio_wr++;
-        gdp_pio_write(&gdp_video_pio_, (uint8_t)(port - 0x30), data);
-        sync_ef_mode_from_gdp_pio();
+        gdp_pio_write(&gdp_video_pio_, (uint8_t)(port - 0x30), data,
+                      external_pa, gdp_video_pio_pins_);
+        ef9367_pins_ = ef9367_tick(
+            &ef9367_, ef_board_pins_from_pio(Z80PIO_GET_PA(gdp_video_pio_pins_)));
         return;
     }
 
@@ -1315,11 +1278,7 @@ void partner_gdp::io_write(uint16_t port, uint8_t data)
     if (port == 0x36)
     {
         gdp_scroll_ = data;
-        const bool pio_a_output = (gdp_video_pio_.port[Z80PIO_PORT_A].mode == Z80PIO_MODE_OUTPUT);
-        const uint8_t pa = gdp_video_pio_.port[Z80PIO_PORT_A].output;
-    // SCRLM appears active-low on Partner board wiring.
-    const bool scroll_mode_enabled = !pio_a_output || ((pa & 0x80u) == 0u);
-        ef9367_.scroll_offset = scroll_mode_enabled ? (int8_t)gdp_scroll_ : 0;
+        ef_scroll_latch_write(&ef9367_, data, ef9367_pins_);
         return;
     }
 
@@ -1344,7 +1303,7 @@ void partner_gdp::io_write(uint16_t port, uint8_t data)
                     cpu.pc, port, data, avdc_.cursor_addr, avdc_.addr_latch, avdc_.addr_latch_dirty ? 1 : 0,
                     avdc_.display_ptr_addr, avdc_.start1_addr, avdc_.start2_addr);
             }
-            avdc_.char_latch = data;
+            avdc_latch_write(&avdc_, false, data, avdc_pins_);
             return;
         }
         if (port == 0x35) {
@@ -1354,7 +1313,7 @@ void partner_gdp::io_write(uint16_t port, uint8_t data)
                     cpu.pc, port, data, avdc_.cursor_addr, avdc_.addr_latch, avdc_.addr_latch_dirty ? 1 : 0,
                     avdc_.display_ptr_addr, avdc_.start1_addr, avdc_.start2_addr);
             }
-            avdc_.attr_latch = data;
+            avdc_latch_write(&avdc_, true, data, avdc_pins_);
             return;
         }
         if (port == 0x36 || port == 0x37) {
@@ -1366,7 +1325,7 @@ void partner_gdp::io_write(uint16_t port, uint8_t data)
                 cpu.pc, port, data, avdc_.cursor_addr, avdc_.addr_latch, avdc_.addr_latch_dirty ? 1 : 0,
                 avdc_.display_ptr_addr, avdc_.start1_addr, avdc_.start2_addr);
         }
-        avdc_bus_write(&avdc_, (uint8_t)port, data);
+        avdc_bus_write(&avdc_, (uint8_t)port, data, avdc_pins_);
         return;
     }
 

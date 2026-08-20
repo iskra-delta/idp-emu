@@ -171,7 +171,8 @@ typedef struct {
 typedef enum {
     Z80DMA_STATE_IDLE,          // Waiting for enable
     Z80DMA_STATE_WAIT_BUS,      // Waiting for BUSACK
-    Z80DMA_STATE_READ,          // Reading from source
+    Z80DMA_STATE_READ,          // Driving source address/read strobe
+    Z80DMA_STATE_READ_LATCH,    // Sampling source data after the bus responds
     Z80DMA_STATE_WRITE,         // Writing to destination
     Z80DMA_STATE_SEARCH,        // Searching/comparing data
     Z80DMA_STATE_VERIFY,        // Verify mode
@@ -233,6 +234,15 @@ void z80dma_reset(z80dma_t *dma);
 
 /* Tick DMA (call every system clock) */
 uint64_t z80dma_tick(z80dma_t *dma, uint64_t pins);
+
+/*
+    Clock only the interrupt daisy-chain section of the chip.  Board models
+    use this when a CPU core exposes the interrupt-acknowledge bus cycle at a
+    different point from its normal peripheral tick.  The vector is still
+    selected and driven by the DMA through M1/IORQ/IEI pins; callers must not
+    inspect or edit the DMA's interrupt state.
+*/
+uint64_t z80dma_daisychain(z80dma_t *dma, uint64_t pins);
 
 /* Write to DMA register (from CPU) */
 uint64_t z80dma_write(z80dma_t *dma, uint8_t data);
@@ -634,9 +644,14 @@ uint64_t z80dma_write(z80dma_t *dma, uint8_t data)
                 return dma->pins;
             case 11:
                 /*
-                    The fixed trailer's middle byte is a mode/control literal.
-                    Swallow it so it cannot be re-decoded as WR0.
+                    The fixed trailer's middle byte is a compact WR0 direction
+                    selector in the Partner BIOS tables: 0x01 selects B->A
+                    (device to RAM), while 0x05 selects A->B (RAM to device).
+                    Decode bit 2 here without restarting the compatibility
+                    parser; dropping this byte leaves every floppy write in
+                    read direction and the 8272 waits forever for its sector.
                 */
+                dma->direction_ab = (data & 0x04u) != 0u;
                 dma->compat_state = 12;
                 return dma->pins;
             case 12:
@@ -786,7 +801,9 @@ static uint64_t _z80dma_transfer_byte(z80dma_t *dma, uint64_t pins)
     z80dma_port_t *src = dma->direction_ab ? &dma->port_a : &dma->port_b;
     z80dma_port_t *dst = dma->direction_ab ? &dma->port_b : &dma->port_a;
 
-    // Read phase
+    // Read phase: first drive a complete source bus cycle.  Data is sampled
+    // on the following tick, after the motherboard and selected chip have had
+    // a chance to respond to the address and RD strobe.
     if (dma->state == Z80DMA_STATE_READ) {
         Z80DMA_SET_ADDR(pins, src->address);
         if (src->is_memory) {
@@ -795,7 +812,13 @@ static uint64_t _z80dma_transfer_byte(z80dma_t *dma, uint64_t pins)
             pins |= Z80DMA_IORQ | Z80DMA_RD;
         }
 
+        dma->state = Z80DMA_STATE_READ_LATCH;
+        return pins;
+    }
+
+    if (dma->state == Z80DMA_STATE_READ_LATCH) {
         dma->data_latch = Z80DMA_GET_DATA(pins);
+        pins &= ~(Z80DMA_MREQ | Z80DMA_IORQ | Z80DMA_RD);
 
         // Update source address
         if (src->increment) {
@@ -889,6 +912,14 @@ static uint64_t _z80dma_int(z80dma_t *dma, uint64_t pins)
     return pins;
 }
 
+uint64_t z80dma_daisychain(z80dma_t *dma, uint64_t pins)
+{
+    CHIPS_ASSERT(dma);
+    pins = _z80dma_int(dma, pins);
+    dma->pins = pins;
+    return pins;
+}
+
 /* Main tick function */
 uint64_t z80dma_tick(z80dma_t *dma, uint64_t pins)
 {
@@ -920,7 +951,7 @@ uint64_t z80dma_tick(z80dma_t *dma, uint64_t pins)
 
     // If not enabled, nothing to do
     if (!dma->enabled) {
-        pins = _z80dma_int(dma, pins);
+        pins = z80dma_daisychain(dma, pins);
         dma->pins = pins;
         return pins;
     }
@@ -957,6 +988,7 @@ uint64_t z80dma_tick(z80dma_t *dma, uint64_t pins)
     // Perform transfer if bus is granted
     if ((pins & Z80DMA_BUSACK) &&
         (((dma->state == Z80DMA_STATE_READ) && (pins & Z80DMA_RDY)) ||
+         (dma->state == Z80DMA_STATE_READ_LATCH) ||
          (dma->state == Z80DMA_STATE_WRITE))) {
         pins = _z80dma_transfer_byte(dma, pins);
 
@@ -967,7 +999,7 @@ uint64_t z80dma_tick(z80dma_t *dma, uint64_t pins)
     }
 
     // Handle interrupts
-    pins = _z80dma_int(dma, pins);
+    pins = z80dma_daisychain(dma, pins);
 
     dma->pins = pins;
     return pins;
