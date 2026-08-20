@@ -15,6 +15,9 @@ constexpr int TEXT_H = vt52_terminal::rows * CELL_H;
 constexpr int CURVED_MARGIN_X = 24;
 constexpr int CURVED_MARGIN_Y = 12;
 
+static_assert(sizeof(display) < 64 * 1024,
+              "display must keep full-resolution framebuffers off the stack");
+
 int cell_max(const display &disp, int col, int row)
 {
     int result = 0;

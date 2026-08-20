@@ -517,7 +517,7 @@ void display::update()
     if (phosphor_ == phosphor_type::color || phosphor_ == phosphor_type::flat) {
         // Preserve pixel codes exactly: color mode keeps indexed values,
         // flat mode has no phosphor persistence by design.
-        memcpy(ghost_fb_, fb_, sizeof(fb_));
+        memcpy(ghost_fb_.data(), fb_.data(), fb_.size());
     } else {
         const uint16_t base_decay = (phosphor_ == phosphor_type::lcd) ? 214u : 224u;
         const float persistence = clampf(monitor_persistence_, 0.20f, 1.15f);
@@ -541,7 +541,7 @@ void display::update()
 
     glBindTexture(GL_TEXTURE_2D, source_tex_);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, FB_W, FB_H,
-                    GL_RED, GL_UNSIGNED_BYTE, ghost_fb_);
+                    GL_RED, GL_UNSIGNED_BYTE, ghost_fb_.data());
 
     if (shader_)
         apply_crt();
@@ -776,13 +776,13 @@ void display::set_index_pixel(int x, int y, uint8_t index4)
 
 void display::clear()
 {
-    memset(fb_, 0, sizeof(fb_));
+    memset(fb_.data(), 0, fb_.size());
 }
 
 void display::clear_all()
 {
-    memset(fb_, 0, sizeof(fb_));
-    memset(ghost_fb_, 0, sizeof(ghost_fb_));
+    memset(fb_.data(), 0, fb_.size());
+    memset(ghost_fb_.data(), 0, ghost_fb_.size());
 }
 
 void display::draw_char(int col, int row, char c, uint8_t fg_level, uint8_t bg_level)

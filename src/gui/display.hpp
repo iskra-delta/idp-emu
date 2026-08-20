@@ -52,7 +52,7 @@ public:
 
     GLuint get_texture() const { return shader_ ? crt_tex_ : source_tex_; }
     float aspect_ratio() const { return (float)content_w_ / (float)content_h_; }
-    const uint8_t* data() const { return fb_; }
+    const uint8_t* data() const { return fb_.data(); }
     void set_content_area(int width, int height);
     void set_content_origin(int x, int y);
     int content_width() const { return content_w_; }
@@ -86,8 +86,10 @@ public:
                               bool reverse_video, bool force_background);
 
 private:
-    uint8_t fb_[FB_W * FB_H]{};
-    uint8_t ghost_fb_[FB_W * FB_H]{};
+    // Keep the full-resolution buffers off the stack. Together they occupy
+    // more than Windows' default 1 MiB thread stack.
+    std::vector<uint8_t> fb_ = std::vector<uint8_t>(FB_W * FB_H);
+    std::vector<uint8_t> ghost_fb_ = std::vector<uint8_t>(FB_W * FB_H);
     uint8_t font_5x7_[96][7]{}; // 96 chars, 7 rows, 5 bits per row
     bool font_loaded_ = false;
 
