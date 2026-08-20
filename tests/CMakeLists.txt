@@ -10,6 +10,10 @@ add_executable(test_z80dma test_z80dma.cpp)
 target_link_libraries(test_z80dma PRIVATE chipsex)
 add_test(NAME z80dma_unit COMMAND test_z80dma)
 
+add_executable(test_udap_util test_udap_util.cpp)
+target_link_libraries(test_udap_util PRIVATE udap_sdcc)
+add_test(NAME udap_util_unit COMMAND test_udap_util)
+
 add_executable(test_partner_sio
     test_partner_sio.cpp
     ../src/chips_impl.cpp

@@ -7,19 +7,20 @@ BIN_DIR := bin
 # library. It is fetched, never committed, and pinned to a tested revision.
 UDAP_DIR := third_party/udap
 UDAP_REPO := https://github.com/retro-vault/udap.git
-UDAP_REF := 41385b81191bcff03442934f0757ceb803ffc11a
-UDAP_PATCH := patches/udap-macos-format.patch
+UDAP_REF := 0bde11227670f22971a4771b0646718ab66badd2
+UDAP_STAMP := $(UDAP_DIR)/.git/idp-ref-$(UDAP_REF)
 
 all: build
 
-fetch: $(UDAP_DIR)/CMakeLists.txt
-	@git -C $(UDAP_DIR) apply --reverse --check ../../$(UDAP_PATCH) 2>/dev/null || \
-		git -C $(UDAP_DIR) apply ../../$(UDAP_PATCH)
+fetch: $(UDAP_STAMP)
 
-$(UDAP_DIR)/CMakeLists.txt:
-	git clone --depth 1 $(UDAP_REPO) $(UDAP_DIR)
+$(UDAP_STAMP):
+	@if [ ! -d $(UDAP_DIR)/.git ]; then \
+		git clone --no-checkout --depth 1 $(UDAP_REPO) $(UDAP_DIR); \
+	fi
 	git -C $(UDAP_DIR) fetch --depth 1 origin $(UDAP_REF)
 	git -C $(UDAP_DIR) checkout --detach $(UDAP_REF)
+	@touch $@
 
 configure: $(BUILD_DIR)/CMakeCache.txt
 

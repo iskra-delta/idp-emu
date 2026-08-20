@@ -14,7 +14,7 @@ concurrency:
 
 env:
   VCPKG_COMMIT: 45f9f39362a4c52e2b1fbe57b7e649db7f3d96d4
-  UDAP_COMMIT: 41385b81191bcff03442934f0757ceb803ffc11a
+  UDAP_COMMIT: 0bde11227670f22971a4771b0646718ab66badd2
 
 jobs:
   linux:
@@ -110,8 +110,6 @@ jobs:
           repository: retro-vault/udap
           ref: ${{ env.UDAP_COMMIT }}
           path: third_party/udap
-      - name: Apply udap compatibility patches
-        run: git -C third_party/udap apply ../../patches/udap-macos-format.patch
       - name: Prepare pinned vcpkg
         uses: lukka/run-vcpkg@v11
         with:
