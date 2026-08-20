@@ -3,10 +3,10 @@
 Run the emulator as:
 
 ```bash
-./bin/idp-emu [options]
+./bin/bin/idp-emu [options]
 ```
 
-`./bin/idp-emu --help` prints the same complete option list. Unknown options,
+`./bin/bin/idp-emu --help` prints the same complete option list. Unknown options,
 missing values, invalid enumerated values, invalid ports, and malformed command
 escapes stop startup with an error.
 
@@ -15,12 +15,12 @@ escapes stop startup with an error.
 | Option | Accepted value | Default | Description |
 | --- | --- | --- | --- |
 | `--help` | none | — | Print every supported option and exit. |
-| `--rom FILE` | ROM image path | PartOS ROM when available; otherwise `roms/partner_crt.rom` | Select the system ROM. |
+| `--rom FILE` | ROM image path | `roms/partner_crt.rom` | Select the system ROM. |
 | `--fd0 FILE` | disk-image path | Selected for the ROM and model | Attach a floppy image to drive 0. |
 | `--disk FILE` | disk-image path | — | Alias for `--fd0`. |
 | `--fd1 FILE` | disk-image path | no disk | Attach a floppy image to drive 1. |
 | `--disk-b FILE` | disk-image path | — | Alias for `--fd1`. |
-| `--hdd FILE` | disk-image path | PartOS HDD for the default PartOS ROM; otherwise no disk | Attach a Xebec/SASI hard-disk image. |
+| `--hdd FILE` | disk-image path | no disk | Attach a Xebec/SASI hard-disk image. |
 | `--boot TYPE` | `default`, `floppy` | `default` | Use normal firmware boot selection, or automatically select floppy boot when the firmware prompts. |
 | `--nvram FILE` | file path | Selected for the ROM | Choose the MM58167 shadow NVRAM backing file. |
 | `--terminal TYPE` | `vt52`, `vt100`, `ansi` | VT52 for CRT; VT100 for GDP | Select terminal emulation. `ansi` is an alias for `vt100`. |
@@ -36,7 +36,8 @@ escapes stop startup with an error.
 | `--type-enter-delay MS` | non-negative integer | key interval | Delay after Enter when another startup key follows. |
 
 Relative file paths are resolved from the current directory, the executable
-directory, and the project directory when the executable is in `bin/`.
+directory, the release-tree root, the macOS application Resources directory,
+and the source directory in development builds.
 
 ## Covox audio
 
@@ -44,7 +45,7 @@ Attach a Covox to main PIO port A and pass the corresponding port number to a
 guest program:
 
 ```bash
-./bin/idp-emu --model gdp --hdd disks/music.img \
+./bin/bin/idp-emu --model gdp --hdd disks/music.img \
   --covox-port 1 --commands 'player 1\n'
 ```
 
@@ -90,7 +91,7 @@ the order supplied. They do not add separators automatically.
 For example, boot a GDP Partner and run `dir` at the CP/M prompt:
 
 ```bash
-./bin/idp-emu \
+./bin/bin/idp-emu \
   --model gdp \
   --rom roms/partner_gdp.rom \
   --hdd disks/hdd-partner-g-system.img \
@@ -101,7 +102,7 @@ For example, boot a GDP Partner and run `dir` at the CP/M prompt:
 Send two command lines using repeated options:
 
 ```bash
-./bin/idp-emu \
+./bin/bin/idp-emu \
   --commands 'b:\n' \
   --commands 'test\n'
 ```
@@ -110,14 +111,14 @@ Override the safe 350 ms typing interval only when the guest is known to
 accept input faster:
 
 ```bash
-./bin/idp-emu --commands 'dir\n' --type-interval 100
+./bin/bin/idp-emu --commands 'dir\n' --type-interval 100
 ```
 
 Keep normal typing speed but allow a drive-change command to finish before the
 next command starts:
 
 ```bash
-./bin/idp-emu --commands 'b:\nmavrica\n' \
+./bin/bin/idp-emu --commands 'b:\nmavrica\n' \
   --type-interval 350 --type-enter-delay 2000
 ```
 
@@ -126,7 +127,7 @@ next command starts:
 Partner P/CRT with a floppy in drive 0:
 
 ```bash
-./bin/idp-emu \
+./bin/bin/idp-emu \
   --model crt \
   --rom roms/partner_crt.rom \
   --fd0 disks/fdd-partner-p.img
@@ -135,7 +136,7 @@ Partner P/CRT with a floppy in drive 0:
 Partner G/GDP with a hard disk and VT100 terminal behavior:
 
 ```bash
-./bin/idp-emu \
+./bin/bin/idp-emu \
   --model gdp \
   --rom roms/partner_gdp.rom \
   --hdd disks/hdd-partner-g.img \
@@ -145,7 +146,7 @@ Partner G/GDP with a hard disk and VT100 terminal behavior:
 Attach two floppy images and start the debug server:
 
 ```bash
-./bin/idp-emu \
+./bin/bin/idp-emu \
   --fd0 disks/system.img \
   --fd1 disks/data.img \
   --dap 4711
@@ -159,7 +160,7 @@ SDL window. Protocol output is the only content written to stdout; `--verbose`
 and all emulator diagnostics use stderr.
 
 ```bash
-./bin/idp-mcp [options]
+./bin/bin/idp-mcp [options]
 ```
 
 | Option | Accepted value | Default | Description |
@@ -227,6 +228,6 @@ Example MCP client configuration:
 
 ```toml
 [mcp_servers.iskra_partner]
-command = "/home/user/idp-emu/bin/idp-mcp"
+command = "/home/user/idp-emu/bin/bin/idp-mcp"
 args = ["--model", "gdp", "--hdd", "/home/user/disks/partner.img"]
 ```

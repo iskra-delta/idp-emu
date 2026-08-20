@@ -18,6 +18,7 @@
 #include "custom_title_bar.hpp"
 #include "terminal_keymap.hpp"
 #include "window_chrome.hpp"
+#include "../runtime_paths.hpp"
 #include "../partner.hpp"
 #include "../partner_gdp.hpp"
 #include "../dap/dap_debugger.hpp"
@@ -28,7 +29,6 @@
 #include <imgui_impl_opengl3.h>
 #include <png.h>
 #include <SDL.h>
-#include <SDL_opengl.h>
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -52,30 +52,7 @@ static inline void push_cstr(std::vector<uint8_t>& out, const char* s)
 
 static std::string resolve_asset_path(const std::string& relative)
 {
-    namespace fs = std::filesystem;
-    std::vector<fs::path> candidates;
-    std::error_code ec;
-
-    candidates.push_back(fs::current_path(ec) / relative);
-
-    char* base = SDL_GetBasePath();
-    if (base)
-    {
-        fs::path exe_dir(base);
-        SDL_free(base);
-        exe_dir = exe_dir.lexically_normal();
-        candidates.push_back(exe_dir / relative);
-        if (exe_dir.filename() == "bin")
-            candidates.push_back(exe_dir.parent_path() / relative);
-    }
-
-    for (const fs::path& p : candidates)
-    {
-        ec.clear();
-        if (fs::exists(p, ec) && !ec)
-            return p.lexically_normal().string();
-    }
-    return relative;
+    return runtime_paths::find_resource(relative);
 }
 
 static const char *host_label_for_special_key(SDL_Keycode key)
@@ -789,6 +766,9 @@ void gui::render_remote_debugger_dialog()
 
 bool gui::init(const std::string &title, int width, int height)
 {
+#ifdef _WIN32
+    SDL_SetMainReady();
+#endif
     // Let debuggers and the OS deliver SIGINT/SIGTERM normally instead of
     // having SDL translate them into SDL_QUIT events.
     SDL_SetHint(SDL_HINT_NO_SIGNAL_HANDLERS, "1");
@@ -799,10 +779,22 @@ bool gui::init(const std::string &title, int width, int height)
         return false;
     }
 
+#if defined(__APPLE__)
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS,
+                        SDL_GL_CONTEXT_FORWARD_COMPATIBLE_FLAG);
+#else
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_FLAGS, 0);
+#endif
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_CORE);
+#if defined(__APPLE__)
+    // macOS exposes core OpenGL as 3.2 or 4.1, but not 3.3. GLSL 330 is
+    // accepted by its 4.1 context and keeps the shader sources identical.
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 4);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 1);
+#else
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
     SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 3);
+#endif
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
     SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
     SDL_GL_SetAttribute(SDL_GL_STENCIL_SIZE, 8);
@@ -834,6 +826,19 @@ bool gui::init(const std::string &title, int width, int height)
         std::cerr << "[error] SDL_GL_MakeCurrent failed: " << SDL_GetError() << "\n";
         return false;
     }
+#if defined(_WIN32)
+    glewExperimental = GL_TRUE;
+    const GLenum glew_status = glewInit();
+    // GLEW may leave GL_INVALID_ENUM behind while probing a core profile.
+    (void)glGetError();
+    if (glew_status != GLEW_OK)
+    {
+        std::cerr << "[error] GLEW initialization failed: "
+                  << reinterpret_cast<const char *>(glewGetErrorString(glew_status))
+                  << "\n";
+        return false;
+    }
+#endif
     const bool enable_vsync = [] {
         const char *s = std::getenv("IDP_EMU_VSYNC");
         return s && s[0] && s[0] != '0';
@@ -845,10 +850,11 @@ bool gui::init(const std::string &title, int width, int height)
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
-    file_dialog_.set_recent_storage_path("idp-emu.recent");
+    file_dialog_.set_recent_storage_path(runtime_paths::user_file("idp-emu.recent"));
     ImGuiIO &io = ImGui::GetIO();
     // Keep Dear ImGui settings in a dedicated app-specific config file.
-    io.IniFilename = "idp-emu.config";
+    imgui_ini_path_ = runtime_paths::user_file("idp-emu.config").string();
+    io.IniFilename = imgui_ini_path_.c_str();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
     io.ConfigFlags |= ImGuiConfigFlags_DockingEnable;
     const bool request_viewports = [] {

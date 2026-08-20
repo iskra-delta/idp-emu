@@ -116,6 +116,7 @@ private:
     std::array<bool, 2> covox_audio_attached_{{false, false}};
 
     std::vector<uint8_t> key_buf_;
+    std::string imgui_ini_path_;
     terminal_key_repeat_limiter key_repeat_limiter_{};
     std::unordered_map<std::string, uint32_t> key_blink_until_ms_{};
     dap_debugger *remote_debugger_ = nullptr;

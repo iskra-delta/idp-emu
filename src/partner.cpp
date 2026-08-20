@@ -10,12 +10,6 @@
 #include <cstdlib>
 #include <ctime>
 
-#include <fcntl.h>
-#include <unistd.h>
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <sys/socket.h>
-
 namespace {
 constexpr uint64_t PARTNER_HDD_SIZE = 1224ULL * 32 * 256;
 constexpr uint8_t FDC_INT_NEEDED = 1 << 0;
@@ -196,65 +190,62 @@ static int clamp_tcp_port(int port)
     return port;
 }
 
-static bool set_nonblocking(int fd)
+static bool set_nonblocking(idp_socket_t fd)
 {
-    if (fd < 0)
-        return false;
-    const int flags = fcntl(fd, F_GETFL, 0);
-    if (flags < 0)
-        return false;
-    return fcntl(fd, F_SETFL, flags | O_NONBLOCK) == 0;
+    return fd >= 0 && idp_socket_set_nonblocking(fd);
 }
 
-static int make_tcp_listener(int port)
+static idp_socket_t make_tcp_listener(int port)
 {
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (!idp_socket_initialize())
+        return idp_invalid_socket;
+    const idp_socket_t fd = (idp_socket_t)::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
-        return -1;
+        return idp_invalid_socket;
 
-    int one = 1;
-    (void)::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    idp_socket_set_reuse_address(fd);
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons((uint16_t)clamp_tcp_port(port));
-    if (::bind(fd, reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
-        ::close(fd);
-        return -1;
+    if (::bind(idp_native_socket(fd), reinterpret_cast<sockaddr*>(&addr), sizeof(addr)) != 0) {
+        idp_socket_close(fd);
+        return idp_invalid_socket;
     }
-    if (::listen(fd, 1) != 0) {
-        ::close(fd);
-        return -1;
+    if (::listen(idp_native_socket(fd), 1) != 0) {
+        idp_socket_close(fd);
+        return idp_invalid_socket;
     }
     if (!set_nonblocking(fd)) {
-        ::close(fd);
-        return -1;
+        idp_socket_close(fd);
+        return idp_invalid_socket;
     }
     return fd;
 }
 
-static int accept_nonblocking(int listen_fd)
+static idp_socket_t accept_nonblocking(idp_socket_t listen_fd)
 {
     if (listen_fd < 0)
-        return -1;
+        return idp_invalid_socket;
     sockaddr_in client{};
-    socklen_t len = sizeof(client);
-    int fd = ::accept(listen_fd, reinterpret_cast<sockaddr*>(&client), &len);
+    idp_socklen_t len = sizeof(client);
+    const idp_socket_t fd = (idp_socket_t)::accept(
+        idp_native_socket(listen_fd), reinterpret_cast<sockaddr*>(&client), &len);
     if (fd < 0)
-        return -1;
+        return idp_invalid_socket;
     if (!set_nonblocking(fd)) {
-        ::close(fd);
-        return -1;
+        idp_socket_close(fd);
+        return idp_invalid_socket;
     }
     return fd;
 }
 
-static void close_fd_if_open(int &fd)
+static void close_fd_if_open(idp_socket_t &fd)
 {
     if (fd >= 0) {
-        ::close(fd);
-        fd = -1;
+        idp_socket_close(fd);
+        fd = idp_invalid_socket;
     }
 }
 
@@ -553,8 +544,9 @@ void partner::tcp_bridge_send_modem_state(tcp_bridge_runtime &tcp, const char *n
         return;
     char line[64];
     std::snprintf(line, sizeof(line), "%s %d\n", name, value ? 1 : 0);
-    const ssize_t n = ::send(tcp.control_client_fd, line, std::strlen(line), MSG_NOSIGNAL);
-    if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK)
+    const idp_socket_count_t n = idp_socket_send(
+        tcp.control_client_fd, line, std::strlen(line));
+    if (n < 0 && !idp_socket_would_block())
         close_fd_if_open(tcp.control_client_fd);
 }
 
@@ -563,7 +555,7 @@ void partner::tcp_bridge_parse_control_line(tcp_bridge_runtime &tcp, const std::
     auto send_reply = [&](const char *msg) {
         if (tcp.control_client_fd < 0)
             return;
-        (void)::send(tcp.control_client_fd, msg, std::strlen(msg), MSG_NOSIGNAL);
+        (void)idp_socket_send(tcp.control_client_fd, msg, std::strlen(msg));
     };
 
     std::string cmd;
@@ -689,14 +681,15 @@ void partner::poll_tcp_bridge(sio_port_id port, z80sio_channel_t &ch)
         uint8_t buf[512];
         for (;;)
         {
-            const ssize_t n = ::recv(tcp.data_client_fd, buf, sizeof(buf), 0);
+            const idp_socket_count_t n = idp_socket_recv(
+                tcp.data_client_fd, buf, sizeof(buf));
             if (n > 0) {
                 // RTS gates the emulated receiver, not a future receiver.
                 // Retaining bytes received while RTS is low releases stale
                 // traffic into the next program that opens this port.
                 if (!discard_socket_rx &&
                     (!cfg.tcp_require_rts || ch.rts)) {
-                    for (ssize_t i = 0; i < n; i++) {
+                    for (idp_socket_count_t i = 0; i < n; i++) {
                         if (tcp.data_rx_fifo.size() >= MAX_TCP_RX_FIFO_BYTES)
                             tcp.data_rx_fifo.pop_front();
                         tcp.data_rx_fifo.push_back(buf[i]);
@@ -706,7 +699,7 @@ void partner::poll_tcp_bridge(sio_port_id port, z80sio_channel_t &ch)
             }
             if (n == 0) {
                 disconnect_data_client();
-            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            } else if (!idp_socket_would_block()) {
                 disconnect_data_client();
             }
             break;
@@ -718,7 +711,8 @@ void partner::poll_tcp_bridge(sio_port_id port, z80sio_channel_t &ch)
         char buf[256];
         for (;;)
         {
-            const ssize_t n = ::recv(tcp.control_client_fd, buf, sizeof(buf), 0);
+            const idp_socket_count_t n = idp_socket_recv(
+                tcp.control_client_fd, buf, sizeof(buf));
             if (n > 0) {
                 tcp.control_rx_buf.append(buf, (size_t)n);
                 for (;;) {
@@ -736,7 +730,7 @@ void partner::poll_tcp_bridge(sio_port_id port, z80sio_channel_t &ch)
             if (n == 0) {
                 close_fd_if_open(tcp.control_client_fd);
                 tcp.control_rx_buf.clear();
-            } else if (errno != EAGAIN && errno != EWOULDBLOCK) {
+            } else if (!idp_socket_would_block()) {
                 close_fd_if_open(tcp.control_client_fd);
                 tcp.control_rx_buf.clear();
             }
@@ -751,14 +745,15 @@ void partner::poll_tcp_bridge(sio_port_id port, z80sio_channel_t &ch)
         for (size_t i = 0; i < out_n; i++)
             out_buf[i] = tcp.data_tx_fifo[i];
 
-        const ssize_t sent = ::send(tcp.data_client_fd, out_buf, out_n, MSG_NOSIGNAL);
+        const idp_socket_count_t sent = idp_socket_send(
+            tcp.data_client_fd, out_buf, out_n);
         if (sent > 0)
         {
-            for (ssize_t i = 0; i < sent; i++)
+            for (idp_socket_count_t i = 0; i < sent; i++)
                 tcp.data_tx_fifo.pop_front();
             continue;
         }
-        if (sent < 0 && (errno == EAGAIN || errno == EWOULDBLOCK))
+        if (sent < 0 && idp_socket_would_block())
             break;
         disconnect_data_client();
         break;

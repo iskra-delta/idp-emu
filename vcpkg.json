@@ -1,0 +1,14 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "idp-emu",
+  "version-semver": "1.1.0",
+  "builtin-baseline": "45f9f39362a4c52e2b1fbe57b7e649db7f3d96d4",
+  "dependencies": [
+    "libpng",
+    "sdl2",
+    {
+      "name": "glew",
+      "platform": "windows"
+    }
+  ]
+}

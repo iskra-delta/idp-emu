@@ -1,0 +1,11 @@
+Iskra Delta Partner Emulator @PROJECT_VERSION@
+
+Runtime layout:
+  bin/       Native executables
+  shared/    Bundled non-system runtime libraries
+  roms/      Original Partner CRT and GDP ROM images
+  disks/     Writable seed floppy/hard-disk images (copied per user on first use)
+  assets/    Fonts and UI assets
+  docs/      Command-line and hardware documentation
+
+Package version: @PROJECT_VERSION@

@@ -6,6 +6,7 @@
 #include "gui/gui.hpp"
 #include "gui/display.hpp"
 #include "startup_input.hpp"
+#include "runtime_paths.hpp"
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -27,7 +28,6 @@ static constexpr auto STARTUP_INPUT_SETTLE_TIME = std::chrono::milliseconds(400)
 
 namespace {
 
-constexpr const char *DEFAULT_PARTOS_ROM = "" PARTOS_ROOT "/bin/partos.rom";
 constexpr const char *DEFAULT_PARTOS_NVRAM = "partos/partos_shadow_nvram.bin";
 constexpr const char *DEFAULT_PARTNER_NVRAM = "partner_cmos.bin";
 constexpr const char *DEFAULT_LEGACY_CRT_ROM = "roms/partner_crt.rom";
@@ -103,7 +103,7 @@ void print_usage(const char *prog)
     std::cerr << "Usage: " << prog << " [options]\n";
     std::cerr << "All options:\n";
     std::cerr << "  --help                 Show this help\n";
-    std::cerr << "  --rom FILE             ROM file (default: " << DEFAULT_PARTOS_ROM << ")\n";
+    std::cerr << "  --rom FILE             ROM file (default: " << DEFAULT_LEGACY_CRT_ROM << ")\n";
     std::cerr << "  --fd0 FILE             Floppy drive 0 image\n";
     std::cerr << "  --disk FILE            Alias for --fd0\n";
     std::cerr << "  --fd1 FILE             Floppy drive 1 image\n";
@@ -131,7 +131,7 @@ void print_usage(const char *prog)
 
 int main(int argc, char **argv)
 {
-    std::string rom_file  = DEFAULT_PARTOS_ROM;
+    std::string rom_file = DEFAULT_LEGACY_CRT_ROM;
     std::string fd0_file = "disks/fdd-partner-p.img";
     std::string fd1_file;
     std::string hdd_file;
@@ -142,7 +142,6 @@ int main(int argc, char **argv)
     int sio_tcp_port = 0;
     int sio_tcp_data_port = 0;
     int sio_tcp_control_port = 0;
-    bool rom_explicit = false;
     bool fd0_explicit = false;
     bool fd1_explicit = false;
     bool nvram_explicit = false;
@@ -166,7 +165,6 @@ int main(int argc, char **argv)
         {
             if ((i + 1) >= argc) { std::cerr << "Error: --rom requires a value\n"; return 1; }
             rom_file = argv[++i];
-            rom_explicit = true;
         }
         else if (strcmp(argv[i], "--fd0") == 0 || strcmp(argv[i], "--disk") == 0)
         {
@@ -346,75 +344,18 @@ int main(int argc, char **argv)
 
     try
     {
-        auto resolve_existing_path = [&](const std::string &input) -> std::string {
-            if (input.empty())
-                return input;
-
-            namespace fs = std::filesystem;
-            fs::path p(input);
-            if (p.is_absolute())
-                return p.lexically_normal().string();
-
-            const fs::path exe_path = fs::absolute(fs::path(argv[0])).lexically_normal();
-            const fs::path exe_dir = exe_path.parent_path();
-
-            std::vector<fs::path> candidates;
-            candidates.push_back(fs::current_path() / p);
-            candidates.push_back(exe_dir / p);
-            if (exe_dir.filename() == "bin")
-                candidates.push_back(exe_dir.parent_path() / p);
-
-            std::error_code ec;
-            for (const fs::path &candidate : candidates)
-            {
-                ec.clear();
-                if (fs::exists(candidate, ec) && !ec)
-                    return candidate.lexically_normal().string();
-            }
-            return input;
-        };
-
-        auto resolve_runtime_path = [&](const std::string &input) -> std::string {
-            if (input.empty())
-                return input;
-
-            namespace fs = std::filesystem;
-            fs::path p(input);
-            if (p.is_absolute())
-                return p.lexically_normal().string();
-
-            const fs::path exe_path = fs::absolute(fs::path(argv[0])).lexically_normal();
-            const fs::path exe_dir = exe_path.parent_path();
-
-            std::vector<fs::path> candidates;
-            candidates.push_back(fs::current_path() / p);
-            candidates.push_back(exe_dir / p);
-            if (exe_dir.filename() == "bin")
-                candidates.push_back(exe_dir.parent_path() / p);
-
-            std::error_code ec;
-            for (const fs::path &candidate : candidates)
-            {
-                fs::path parent = candidate.parent_path();
-                if (parent.empty())
-                    parent = fs::current_path();
-                ec.clear();
-                if (fs::exists(parent, ec) && !ec)
-                    return candidate.lexically_normal().string();
-            }
-
-            return (fs::current_path() / p).lexically_normal().string();
+        auto resolve_existing_path = [](const std::string &input) {
+            return runtime_paths::find_resource(input);
         };
 
         rom_file = resolve_existing_path(rom_file);
-        if (!rom_explicit && !std::filesystem::exists(rom_file))
-            rom_file = resolve_existing_path(DEFAULT_LEGACY_CRT_ROM);
         fd0_file = resolve_existing_path(fd0_file);
         if (!fd1_file.empty())
             fd1_file = resolve_existing_path(fd1_file);
         if (!hdd_file.empty())
             hdd_file = resolve_existing_path(hdd_file);
-        nvram_file = resolve_runtime_path(nvram_file);
+        if (nvram_explicit)
+            nvram_file = std::filesystem::absolute(nvram_file).lexically_normal().string();
 
         bool gdp_model = false;
         if (model == "gdp")
@@ -459,16 +400,18 @@ int main(int argc, char **argv)
             if (fd0_explicit)
                 return fd0_file;
             if (is_partos_rom_path(rom_file))
-                return resolve_existing_path(DEFAULT_PARTOS_FD0);
-            const std::string preferred = resolve_existing_path(
-                want_gdp ? "disks/fdd-partner-g.img" : "disks/fdd-partner-p.img");
-            const std::string fallback = resolve_existing_path(
-                want_gdp ? "disks/fdd-partner-p.img" : "disks/fdd-partner-g.img");
+                return runtime_paths::mutable_resource_copy(DEFAULT_PARTOS_FD0);
+            const std::string preferred_name =
+                want_gdp ? "disks/fdd-partner-g.img" : "disks/fdd-partner-p.img";
+            const std::string fallback_name =
+                want_gdp ? "disks/fdd-partner-p.img" : "disks/fdd-partner-g.img";
+            const std::string preferred = resolve_existing_path(preferred_name);
+            const std::string fallback = resolve_existing_path(fallback_name);
             if (std::filesystem::exists(preferred)) {
-                return preferred;
+                return runtime_paths::mutable_resource_copy(preferred_name);
             }
             if (std::filesystem::exists(fallback)) {
-                return fallback;
+                return runtime_paths::mutable_resource_copy(fallback_name);
             }
             return preferred;
         };
@@ -479,13 +422,12 @@ int main(int argc, char **argv)
             const std::string selected_fd1 = fd1_explicit ? fd1_file : std::string{};
             const std::string selected_hdd =
                 !hdd_file.empty() ? hdd_file :
-                (is_partos_rom_path(selected_rom) ? resolve_existing_path(DEFAULT_PARTOS_HDD)
+                (is_partos_rom_path(selected_rom) ? runtime_paths::mutable_resource_copy(DEFAULT_PARTOS_HDD)
                                                   : std::string{});
             const std::string selected_nvram =
                 nvram_explicit ? nvram_file :
-                resolve_existing_path(is_partos_rom_path(selected_rom)
-                    ? DEFAULT_PARTOS_NVRAM
-                    : DEFAULT_PARTNER_NVRAM);
+                runtime_paths::user_file(is_partos_rom_path(selected_rom)
+                    ? DEFAULT_PARTOS_NVRAM : DEFAULT_PARTNER_NVRAM).string();
             const bool auto_insert_floppy = selected_hdd.empty() || fd0_explicit || is_partos_rom_path(selected_rom);
             std::cout << "[info] model=" << (want_gdp ? "gdp" : "crt")
                       << " rom=" << selected_rom

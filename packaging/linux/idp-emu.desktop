@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=Iskra Delta Partner Emulator
+Comment=Chip-level Iskra Delta Partner emulator
+Exec=/opt/iskra-delta-partner/bin/idp-emu
+Terminal=false
+Categories=System;Emulator;

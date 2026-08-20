@@ -1,6 +1,7 @@
 #include "mcp/idp_mcp_server.hpp"
 #include "partner_crt.hpp"
 #include "partner_gdp.hpp"
+#include "runtime_paths.hpp"
 
 #include <cstring>
 #include <iostream>
@@ -8,6 +9,10 @@
 #include <stdexcept>
 #include <string>
 #include <vector>
+
+#ifndef IDP_VERSION
+#define IDP_VERSION "dev"
+#endif
 
 namespace {
 struct options {
@@ -95,7 +100,7 @@ int main(int argc, char **argv)
             return 0;
         }
         if (settings.version) {
-            std::cout << "idp-mcp 1.1.0\n";
+            std::cout << "idp-mcp " IDP_VERSION "\n";
             return 0;
         }
 
@@ -108,16 +113,16 @@ int main(int argc, char **argv)
                                                      settings.nvram);
 
         if (!settings.no_rom) {
-            const std::string rom = settings.rom.empty()
-                ? std::string(IDP_SOURCE_ROOT) + "/roms/partner_" +
-                      settings.model + ".rom"
-                : settings.rom;
+            const std::string rom = runtime_paths::find_resource(
+                settings.rom.empty()
+                    ? "roms/partner_" + settings.model + ".rom"
+                    : settings.rom);
             machine->load_rom(rom);
         }
         for (const auto &[drive, path] : settings.floppies)
-            machine->load_disk(drive, path);
+            machine->load_disk(drive, runtime_paths::find_resource(path));
         if (!settings.hdd.empty())
-            machine->load_hdd(settings.hdd);
+            machine->load_hdd(runtime_paths::find_resource(settings.hdd));
         machine->reset();
 
         idp_mcp_server server(*machine, settings.model);

@@ -1,0 +1,13 @@
+file(GLOB idp_bundled_libraries
+    "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/shared/*.so*")
+
+foreach(idp_library IN LISTS idp_bundled_libraries)
+    execute_process(
+        COMMAND "@IDP_PATCHELF_EXECUTABLE@" --set-rpath "$ORIGIN" "${idp_library}"
+        RESULT_VARIABLE idp_patchelf_result
+        ERROR_VARIABLE idp_patchelf_error)
+    if(NOT idp_patchelf_result EQUAL 0)
+        message(FATAL_ERROR
+            "Could not make ${idp_library} relocatable: ${idp_patchelf_error}")
+    endif()
+endforeach()

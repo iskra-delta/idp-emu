@@ -8,6 +8,7 @@
 #include "s1410.h"
 #include "idpartner_sasi.h"
 #include "mm58167.h"
+#include "platform/socket_compat.hpp"
 #include <array>
 #include <string>
 #include <cstdint>
@@ -307,10 +308,10 @@ protected:
 
 private:
     struct tcp_bridge_runtime {
-        int listen_fd = -1;
-        int control_listen_fd = -1;
-        int data_client_fd = -1;
-        int control_client_fd = -1;
+        idp_socket_t listen_fd = idp_invalid_socket;
+        idp_socket_t control_listen_fd = idp_invalid_socket;
+        idp_socket_t data_client_fd = idp_invalid_socket;
+        idp_socket_t control_client_fd = idp_invalid_socket;
         uint64_t next_poll_tick = 0;
         bool control_cts_override_active = false;
         bool control_cts_override_value = false;

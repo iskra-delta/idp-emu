@@ -16,6 +16,10 @@
 #include <stdexcept>
 #include <vector>
 
+#ifndef IDP_VERSION
+#define IDP_VERSION "dev"
+#endif
+
 namespace {
 using json = nlohmann::json;
 
@@ -1128,7 +1132,7 @@ std::optional<json> idp_mcp_server::handle(const json &message)
         return rpc_response(id, {
             {"protocolVersion", version},
             {"capabilities", {{"tools", {{"listChanged", false}}}}},
-            {"serverInfo", {{"name", "idp-mcp"}, {"version", "1.1.0"}}}});
+            {"serverInfo", {{"name", "idp-mcp"}, {"version", IDP_VERSION}}}});
     }
     if (method == "ping") return rpc_response(id, json::object());
     if (method == "tools/list") return rpc_response(id, {{"tools", list_tools()}});

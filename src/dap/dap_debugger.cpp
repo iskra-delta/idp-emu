@@ -6,12 +6,6 @@
 #include <ostream>
 #include <streambuf>
 
-#include <arpa/inet.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
-#include <unistd.h>
-
 #include "dap_debugger.hpp"
 #include "dap_target.hpp"
 
@@ -22,7 +16,7 @@ namespace {
 class fd_streambuf : public std::streambuf
 {
 public:
-    explicit fd_streambuf(int fd) : fd_(fd)
+    explicit fd_streambuf(idp_socket_t fd) : fd_(fd)
     {
         setg(in_buf_, in_buf_, in_buf_);
         setp(out_buf_, out_buf_ + kBufSize);
@@ -33,7 +27,7 @@ protected:
     {
         if (gptr() < egptr())
             return traits_type::to_int_type(*gptr());
-        ssize_t n = ::recv(fd_, in_buf_, kBufSize, 0);
+        const idp_socket_count_t n = idp_socket_recv(fd_, in_buf_, kBufSize);
         if (n <= 0)
             return traits_type::eof();
         setg(in_buf_, in_buf_, in_buf_ + n);
@@ -55,7 +49,8 @@ protected:
     {
         const char *p = pbase();
         while (p < pptr()) {
-            ssize_t n = ::send(fd_, p, static_cast<size_t>(pptr() - p), MSG_NOSIGNAL);
+            const idp_socket_count_t n = idp_socket_send(
+                fd_, p, static_cast<size_t>(pptr() - p));
             if (n <= 0)
                 return -1;
             p += n;
@@ -66,7 +61,7 @@ protected:
 
 private:
     static constexpr size_t kBufSize = 4096;
-    int fd_;
+    idp_socket_t fd_;
     char in_buf_[kBufSize];
     char out_buf_[kBufSize];
 };
@@ -80,12 +75,12 @@ dap_debugger::~dap_debugger()
     stop();
 }
 
-void dap_debugger::close_fd(int &fd)
+void dap_debugger::close_fd(idp_socket_t &fd)
 {
     if (fd >= 0) {
-        ::shutdown(fd, SHUT_RDWR);
-        ::close(fd);
-        fd = -1;
+        idp_socket_shutdown(fd);
+        idp_socket_close(fd);
+        fd = idp_invalid_socket;
     }
 }
 
@@ -104,6 +99,9 @@ bool dap_debugger::start(partner &emu, const std::string &host, uint16_t port,
             return fail("Debug server is already running.");
     }
 
+    if (!idp_socket_initialize())
+        return fail("could not initialize the host socket API");
+
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
     addr.sin_port = htons(port);
@@ -111,21 +109,20 @@ bool dap_debugger::start(partner &emu, const std::string &host, uint16_t port,
     if (::inet_pton(AF_INET, bind_addr.c_str(), &addr.sin_addr) != 1)
         return fail("Invalid bind address: " + bind_addr);
 
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    const idp_socket_t fd = (idp_socket_t)::socket(AF_INET, SOCK_STREAM, 0);
     if (fd < 0)
-        return fail(std::string("socket() failed: ") + std::strerror(errno));
+        return fail(std::string("socket() failed: ") + idp_socket_error_text());
 
-    int one = 1;
-    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, sizeof(one));
+    idp_socket_set_reuse_address(fd);
 
-    if (::bind(fd, reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
-        std::string msg = std::string("bind() failed: ") + std::strerror(errno);
-        ::close(fd);
+    if (::bind(idp_native_socket(fd), reinterpret_cast<sockaddr *>(&addr), sizeof(addr)) < 0) {
+        std::string msg = std::string("bind() failed: ") + idp_socket_error_text();
+        idp_socket_close(fd);
         return fail(msg);
     }
-    if (::listen(fd, 1) < 0) {
-        std::string msg = std::string("listen() failed: ") + std::strerror(errno);
-        ::close(fd);
+    if (::listen(idp_native_socket(fd), 1) < 0) {
+        std::string msg = std::string("listen() failed: ") + idp_socket_error_text();
+        idp_socket_close(fd);
         return fail(msg);
     }
 
@@ -173,7 +170,7 @@ bool dap_debugger::stop(std::string *error_out)
 void dap_debugger::server_loop()
 {
     while (true) {
-        int lfd;
+        idp_socket_t lfd;
         {
             std::lock_guard<std::mutex> lock(state_mutex_);
             if (!enabled_)
@@ -184,8 +181,9 @@ void dap_debugger::server_loop()
             break;
 
         sockaddr_in peer{};
-        socklen_t peer_len = sizeof(peer);
-        int client = ::accept(lfd, reinterpret_cast<sockaddr *>(&peer), &peer_len);
+        idp_socklen_t peer_len = sizeof(peer);
+        const idp_socket_t client = (idp_socket_t)::accept(
+            idp_native_socket(lfd), reinterpret_cast<sockaddr *>(&peer), &peer_len);
         if (client < 0) {
             std::lock_guard<std::mutex> lock(state_mutex_);
             if (!enabled_)
@@ -193,8 +191,7 @@ void dap_debugger::server_loop()
             continue;
         }
 
-        int one = 1;
-        ::setsockopt(client, IPPROTO_TCP, TCP_NODELAY, &one, sizeof(one));
+        idp_socket_set_no_delay(client);
 
         char peer_str[INET_ADDRSTRLEN] = "?";
         ::inet_ntop(AF_INET, &peer.sin_addr, peer_str, sizeof(peer_str));

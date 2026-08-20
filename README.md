@@ -15,7 +15,8 @@ For deep technical details, check out:
 - [Iskra Delta Partner: The Complete Reference](docs/books/PARTNER-COMPLETE-REFERENCE.md)
 - [IDP-DEV: The Iskra Delta Partner Development Repository](http://github.com/tstih/idp-dev)
 
-> This emulator targets **Linux** only and is under active development. Binary releases are not yet available.
+The emulator builds and ships natively for Ubuntu Linux, macOS (Apple Silicon
+and Intel), and 64-bit Windows.
 
 ---
 
@@ -28,6 +29,11 @@ It’s also a **second-generation emulator**: rather than relying solely on peri
 ---
 
 ## Installing and Using
+
+Tagged releases provide a native Ubuntu `.deb`, macOS `.pkg`, and Windows
+Setup `.exe`, plus a portable archive for each platform. Third-party runtime
+libraries are linked statically where supported; the remaining non-system
+libraries are carried inside the package.
 
 ## Clone
 
@@ -46,6 +52,7 @@ Equivalent raw CMake commands:
 ```bash
 cmake -S . -B build
 cmake --build build
+cmake --install build --prefix "$PWD/bin"
 ```
 
 ## Clean
@@ -62,25 +69,25 @@ option, alias, accepted value, default, escape sequence, and additional example.
 Run Partner P (CRT) with floppy:
 
 ```bash
-./bin/idp-emu --model crt --rom roms/partner_crt.rom --disk disks/fdd-partner-p.img
+./bin/bin/idp-emu --model crt --rom roms/partner_crt.rom --disk disks/fdd-partner-p.img
 ```
 
 Run Partner G (GDP) with HDD:
 
 ```bash
-./bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g.img
+./bin/bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g.img
 ```
 
 Run Partner G (GDP) with empty HDD:
 
 ```bash
-./bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g-empty.img
+./bin/bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g-empty.img
 ```
 
 Run Partner G (GDP) with the minimal user-area-0 system disk:
 
 ```bash
-./bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g-system.img
+./bin/bin/idp-emu --model gdp --rom roms/partner_gdp.rom --hdd disks/hdd-partner-g-system.img
 ```
 
 ### Invisible MCP mode
@@ -90,13 +97,13 @@ it as a stateful Model Context Protocol server over stdin/stdout. It defaults
 to the CRT model and its bundled ROM:
 
 ```bash
-./bin/idp-mcp
+./bin/bin/idp-mcp
 ```
 
 Start a GDP machine with a hard disk:
 
 ```bash
-./bin/idp-mcp --model gdp --hdd disks/hdd-partner-g-system.img
+./bin/bin/idp-mcp --model gdp --hdd disks/hdd-partner-g-system.img
 ```
 
 The server mirrors the applicable `zx-spectrum-mcp` workflow: loading, bounded
@@ -111,7 +118,7 @@ stderr, so it can be launched directly by an MCP client. For example:
 
 ```toml
 [mcp_servers.iskra_partner]
-command = "/absolute/path/to/idp-emu/bin/idp-mcp"
+command = "/absolute/path/to/idp-emu/bin/bin/idp-mcp"
 args = ["--model", "gdp", "--hdd", "/absolute/path/to/hdd.img"]
 ```
 
@@ -127,14 +134,14 @@ the guest keyboard and display have settled. Both literal newlines and `\n`
 escapes are converted to the Enter key:
 
 ```bash
-./bin/idp-emu --model crt --commands 'b:\ntest\n'
+./bin/bin/idp-emu --model crt --commands 'b:\ntest\n'
 ```
 
 The default delay is 1000 ms before the first key and 350 ms between keys. Slow
 boots can be given more time, and `--commands` can be repeated:
 
 ```bash
-./bin/idp-emu --commands 'b:\n' --commands 'test\n' \
+./bin/bin/idp-emu --commands 'b:\n' --commands 'test\n' \
   --type-delay 3000 --type-interval 350
 ```
 
@@ -147,7 +154,7 @@ The emulator can attach a real-time 8-bit Covox DAC to either free port of the
 main PIO (`D0h`–`D3h`). Port `1` is A and port `2` is B:
 
 ```bash
-./bin/idp-emu --model gdp --hdd disks/music.img \
+./bin/bin/idp-emu --model gdp --hdd disks/music.img \
   --covox-port 1 --commands 'player 1\n'
 ```
 
@@ -177,9 +184,24 @@ python3 tools/run_partner_software_matrix.py \
   --test-xcc-binaries
 ```
 
-# Dependencies
+# Portable release layout
 
-...todo...
+The generated `bin/` directory is a complete copyable runtime tree:
+
+```text
+bin/
+  bin/       idp-emu and idp-mcp
+  shared/    bundled dynamic libraries, when static linking is unavailable
+  roms/      CRT and GDP firmware
+  disks/     original and initial boot media
+  assets/    UI fonts and other runtime data
+  docs/      command-line help and release manifest
+```
+
+Default disks are copied into the platform's per-user application-data
+directory before the emulator writes them. Installed seed images therefore
+remain reusable. See [Packaging and releases](docs/PACKAGING.md) for build,
+installer, architecture, and tagging details.
 
 ## Acknowledgments
 

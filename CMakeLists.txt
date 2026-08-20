@@ -1,12 +1,42 @@
-cmake_minimum_required(VERSION 3.16)
-project(idp-emu LANGUAGES C CXX)
+cmake_minimum_required(VERSION 3.21)
+set(IDP_VERSION "1.1.0" CACHE STRING "Release version embedded in packages")
+project(idp-emu VERSION ${IDP_VERSION} LANGUAGES C CXX)
+
+option(IDP_STATIC_RUNTIME
+    "Link the compiler runtime statically where the platform supports it" ON)
+
+if(IDP_STATIC_RUNTIME AND MSVC)
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+endif()
 
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_C_STANDARD 17)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-# Set output directory for all builds
-set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
+# Keep every intermediate, test, and probe in the build tree. Only
+# cmake --install populates the clean, copyable bin/ release tree.
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/runtime")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/shared-runtime")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/lib")
+foreach(config Debug Release RelWithDebInfo MinSizeRel)
+    string(TOUPPER "${config}" config_upper)
+    set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/runtime")
+    set(CMAKE_LIBRARY_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/shared-runtime")
+    set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY_${config_upper} "${CMAKE_BINARY_DIR}/lib")
+endforeach()
+
+if(APPLE)
+    set(CMAKE_INSTALL_RPATH "@loader_path/../shared")
+elseif(UNIX)
+    set(CMAKE_INSTALL_RPATH "$ORIGIN/../shared")
+endif()
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+
+if(UNIX AND NOT APPLE)
+    find_program(IDP_PATCHELF_EXECUTABLE patchelf REQUIRED)
+    configure_file(packaging/fix-linux-rpaths.cmake.in
+                   "${CMAKE_BINARY_DIR}/fix-linux-rpaths.cmake" @ONLY)
+endif()
 
 # Set default build type to Debug if none specified
 if(NOT CMAKE_BUILD_TYPE)
@@ -18,44 +48,45 @@ message(STATUS "Build type: ${CMAKE_BUILD_TYPE}")
 # Enable debug symbols and useful flags in Debug mode
 if(CMAKE_BUILD_TYPE STREQUAL "Debug")
     add_compile_definitions(DEBUG)
-    add_compile_options(-g -O0 -Wall -Wextra -Wno-unused-parameter)
+    if(MSVC)
+        add_compile_options(/W4 /Od /Zi)
+    else()
+        add_compile_options(-g -O0 -Wall -Wextra -Wno-unused-parameter)
+    endif()
 endif()
 
-set(PARTOS_ROOT "$ENV{HOME}/data/iskra-delta/partos")
-set(PARTOS_LAYOUT_HEADER ${PARTOS_ROOT}/build/partos_layout.hpp)
-add_compile_definitions(PARTOS_ROOT="${PARTOS_ROOT}")
-file(GLOB_RECURSE PARTOS_LAYOUT_DEPENDS CONFIGURE_DEPENDS
-    ${PARTOS_ROOT}/src/*.s
-    ${PARTOS_ROOT}/src/*.c
-    ${PARTOS_ROOT}/src/*.inc
-    ${PARTOS_ROOT}/include/*.h
-    ${PARTOS_ROOT}/Makefile
-    ${PARTOS_ROOT}/tools/check_partos_layout.py
-)
+set(PARTOS_ROOT "" CACHE PATH "Optional PartOS checkout used to refresh its layout contract")
+option(IDP_REFRESH_PARTOS_LAYOUT
+    "Regenerate partos_layout.hpp from PARTOS_ROOT instead of using the release snapshot" OFF)
+set(PARTOS_LAYOUT_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/src/generated")
 
-# CMake 3.28+ can tell GNU Make that this nested PartOS build participates in
-# the parent's jobserver.  Without this, parallel F5 builds warn and force the
-# nested make invocation to run serially.
-set(PARTOS_LAYOUT_JOB_SERVER_ARGS)
-if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.28)
-    set(PARTOS_LAYOUT_JOB_SERVER_ARGS JOB_SERVER_AWARE TRUE)
+if(IDP_REFRESH_PARTOS_LAYOUT)
+    if(NOT PARTOS_ROOT OR NOT EXISTS "${PARTOS_ROOT}/Makefile")
+        message(FATAL_ERROR
+            "IDP_REFRESH_PARTOS_LAYOUT requires -DPARTOS_ROOT=/path/to/partos")
+    endif()
+    set(PARTOS_LAYOUT_HEADER "${PARTOS_ROOT}/build/partos_layout.hpp")
+    file(GLOB_RECURSE PARTOS_LAYOUT_DEPENDS CONFIGURE_DEPENDS
+        "${PARTOS_ROOT}/src/*.s" "${PARTOS_ROOT}/src/*.c"
+        "${PARTOS_ROOT}/src/*.inc" "${PARTOS_ROOT}/include/*.h"
+        "${PARTOS_ROOT}/Makefile" "${PARTOS_ROOT}/tools/check_partos_layout.py")
+    add_custom_command(
+        OUTPUT "${PARTOS_LAYOUT_HEADER}"
+        COMMAND "${CMAKE_MAKE_PROGRAM}" -C "${PARTOS_ROOT}" build/partos_layout.hpp
+        DEPENDS ${PARTOS_LAYOUT_DEPENDS}
+        COMMENT "Refreshing the PartOS layout contract"
+        VERBATIM)
+    add_custom_target(partos_layout_header DEPENDS "${PARTOS_LAYOUT_HEADER}")
+    set(PARTOS_LAYOUT_INCLUDE_DIR "${PARTOS_ROOT}/build")
+else()
+    add_custom_target(partos_layout_header)
 endif()
-
-add_custom_command(
-    OUTPUT ${PARTOS_LAYOUT_HEADER}
-    COMMAND ${CMAKE_MAKE_PROGRAM} -C ${PARTOS_ROOT} build/partos_layout.hpp
-    DEPENDS ${PARTOS_LAYOUT_DEPENDS}
-    COMMENT "Generating PartOS layout header"
-    VERBATIM
-    ${PARTOS_LAYOUT_JOB_SERVER_ARGS}
-)
-add_custom_target(partos_layout_header DEPENDS ${PARTOS_LAYOUT_HEADER})
 
 function(idp_require_partos_layout target_name)
     add_dependencies(${target_name} partos_layout_header)
     target_include_directories(${target_name} PRIVATE
         ${CMAKE_SOURCE_DIR}/src
-        ${PARTOS_ROOT}/build
+        ${PARTOS_LAYOUT_INCLUDE_DIR}
     )
 endfunction()
 
@@ -68,13 +99,21 @@ find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
 
+if(WIN32)
+    find_package(GLEW REQUIRED)
+    add_compile_definitions(SDL_MAIN_HANDLED WIN32_LEAN_AND_MEAN NOMINMAX)
+    # Winsock is a platform service; vcpkg provides the remaining libraries as
+    # static archives for release builds.
+    link_libraries(GLEW::GLEW ws2_32)
+endif()
+
 # --- Dear ImGui via FetchContent ---
 include(FetchContent)
 set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
-    GIT_TAG        docking
+    GIT_TAG        fd13a1e8923a0a7077b404fc36fd063b25a0c0b5
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(imgui)
@@ -132,3 +171,6 @@ add_subdirectory(src)
 
 enable_testing()
 add_subdirectory(tests)
+
+configure_file(packaging/release-manifest.txt.in
+               "${CMAKE_BINARY_DIR}/release-manifest.txt" @ONLY)

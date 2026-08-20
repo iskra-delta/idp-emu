@@ -4,6 +4,7 @@ set(IDP_CORE_SOURCES
     partner_crt.cpp
     partner_gdp.cpp
     partner_gdp_keyboard.cpp
+    runtime_paths.cpp
     terminal/terminal_factory.cpp
     terminal/vt52_terminal.cpp
     gui/display.cpp
@@ -62,10 +63,64 @@ target_link_libraries(idp-mcp PRIVATE
     chipsex SDL2::SDL2 PNG::PNG OpenGL::GL nlohmann_json::nlohmann_json)
 target_compile_definitions(idp-mcp PRIVATE
     IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+    IDP_VERSION="${PROJECT_VERSION}"
     GL_GLEXT_PROTOTYPES
     $<$<CONFIG:Debug>:IDP_DEBUG>
 )
 idp_require_partos_layout(idp-mcp)
+
+install(TARGETS idp-emu idp-mcp
+    RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
+    RUNTIME DESTINATION bin
+    BUNDLE DESTINATION bin)
+
+if(WIN32)
+    install(RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
+        DESTINATION shared
+        PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
+        POST_EXCLUDE_REGEXES ".*[\\/]System32[\\/].*" ".*[\\/]SysWOW64[\\/].*")
+elseif(APPLE)
+    install(RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
+        DESTINATION shared
+        POST_EXCLUDE_REGEXES "^/System/Library/.*" "^/usr/lib/.*")
+else()
+    install(RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
+        DESTINATION shared
+        POST_EXCLUDE_REGEXES
+            ".*/ld-linux[^/]*\\.so.*"
+            ".*/lib(c|m|pthread|dl|rt|resolv|util|gcc_s|stdc\\+\\+)\\.so.*"
+            ".*/lib(GL|OpenGL|GLX|EGL|drm|gbm)\\.so.*")
+    install(SCRIPT "${CMAKE_BINARY_DIR}/fix-linux-rpaths.cmake")
+endif()
+
+if(IDP_STATIC_RUNTIME AND UNIX AND NOT APPLE
+   AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang")
+    target_link_options(idp-emu PRIVATE -static-libgcc -static-libstdc++)
+    target_link_options(idp-mcp PRIVATE -static-libgcc -static-libstdc++)
+endif()
+
+if(UNIX AND NOT APPLE)
+    # DT_RPATH is intentional for the portable tree: unlike DT_RUNPATH it is
+    # also used for transitive libraries copied into the sibling shared dir.
+    target_link_options(idp-emu PRIVATE -Wl,--disable-new-dtags)
+    target_link_options(idp-mcp PRIVATE -Wl,--disable-new-dtags)
+endif()
+
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/assets" DESTINATION .)
+install(FILES
+    "${CMAKE_SOURCE_DIR}/roms/partner_crt.rom"
+    "${CMAKE_SOURCE_DIR}/roms/partner_gdp.rom"
+    DESTINATION roms)
+install(DIRECTORY "${CMAKE_SOURCE_DIR}/disks/" DESTINATION disks
+        FILES_MATCHING PATTERN "*.img")
+install(FILES
+    "${CMAKE_SOURCE_DIR}/README.md"
+    "${CMAKE_SOURCE_DIR}/docs/COMMAND-LINE.md"
+    "${CMAKE_SOURCE_DIR}/docs/PACKAGING.md"
+    "${CMAKE_BINARY_DIR}/release-manifest.txt"
+    DESTINATION docs)
+install(FILES "${CMAKE_SOURCE_DIR}/packaging/shared-README.txt"
+        DESTINATION shared RENAME README.txt)
 
 # Optional: define your own debug macro if needed
 target_compile_definitions(idp-emu PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)

@@ -103,7 +103,7 @@ def main():
         replies = {reply["id"]: reply for reply in replies_list}
 
         server_info = replies[1]["result"]["serverInfo"]
-        if server_info != {"name": "idp-mcp", "version": "1.1.0"}:
+        if server_info.get("name") != "idp-mcp" or not server_info.get("version"):
             raise AssertionError(f"bad initialize result: {server_info}")
 
         names = {entry["name"] for entry in replies[2]["result"]["tools"]}

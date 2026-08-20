@@ -1,8 +1,12 @@
 #pragma once
+#if defined(_WIN32)
+#include <GL/glew.h>
+#else
 #ifndef GL_GLEXT_PROTOTYPES
 #define GL_GLEXT_PROTOTYPES
 #endif
 #include <SDL_opengl.h>
+#endif
 #include <cstdint>
 #include <string>
 #include <vector>

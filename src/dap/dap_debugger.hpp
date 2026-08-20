@@ -14,6 +14,8 @@
 //    boundaries and calls notify_stopped() when the machine stops.
 #pragma once
 
+#include "../platform/socket_compat.hpp"
+
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -80,7 +82,7 @@ public:
 
 private:
     void server_loop();
-    void close_fd(int &fd);
+    void close_fd(idp_socket_t &fd);
 
     std::recursive_mutex emu_mutex_;
 
@@ -97,8 +99,8 @@ private:
     std::thread server_thread_;
     std::string host_ = "127.0.0.1";
     uint16_t port_ = 4711;
-    int listen_fd_ = -1;
-    int client_fd_ = -1;
+    idp_socket_t listen_fd_ = idp_invalid_socket;
+    idp_socket_t client_fd_ = idp_invalid_socket;
     pending_command pending_command_ = pending_command::none;
     bool enabled_ = false;
     bool client_connected_ = false;

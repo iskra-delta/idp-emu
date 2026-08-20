@@ -1,0 +1,233 @@
+name: Release native installers
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  VCPKG_COMMIT: 45f9f39362a4c52e2b1fbe57b7e649db7f3d96d4
+  UDAP_COMMIT: 41385b81191bcff03442934f0757ceb803ffc11a
+
+jobs:
+  linux:
+    name: Ubuntu x86_64
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and extract version
+        id: version
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must have the form v1.2.3" >&2
+            exit 2
+          fi
+          echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Fetch pinned udap sources
+        uses: actions/checkout@v4
+        with:
+          repository: retro-vault/udap
+          ref: ${{ env.UDAP_COMMIT }}
+          path: third_party/udap
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            ninja-build patchelf pkg-config autoconf automake autoconf-archive libtool \
+            libx11-dev libxext-dev libxrandr-dev libxrender-dev libxfixes-dev \
+            libxi-dev libxinerama-dev libxcursor-dev libwayland-dev \
+            libxkbcommon-dev libegl1-mesa-dev libgl1-mesa-dev libibus-1.0-dev
+      - name: Prepare pinned vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT }}
+          runVcpkgInstall: false
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DIDP_VERSION=${{ steps.version.outputs.value }}
+          -DIDP_STATIC_RUNTIME=ON
+          -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=x64-linux
+      - name: Build and test
+        run: |
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Stage and verify relocatable tree
+        run: |
+          cmake --install build --prefix "$PWD/dist/tree"
+          python3 scripts/package/verify_bundle.py \
+            --root dist/tree --platform linux --version "${{ steps.version.outputs.value }}"
+      - name: Build Ubuntu and portable packages
+        run: |
+          scripts/package/make_deb.sh dist/tree "${{ steps.version.outputs.value }}" dist/packages
+          mv dist/tree "dist/Iskra-Delta-Partner-${{ steps.version.outputs.value }}-Ubuntu-x86_64"
+          tar -C dist -czf \
+            "dist/packages/Iskra-Delta-Partner-${{ steps.version.outputs.value }}-Ubuntu-x86_64.tar.gz" \
+            "Iskra-Delta-Partner-${{ steps.version.outputs.value }}-Ubuntu-x86_64"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ubuntu-installers
+          path: dist/packages/*
+          if-no-files-found: error
+
+  macos:
+    name: macOS ${{ matrix.arch }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: macos-15-intel
+            triplet: x64-osx
+          - arch: arm64
+            runner: macos-15
+            triplet: arm64-osx
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and extract version
+        id: version
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must have the form v1.2.3" >&2
+            exit 2
+          fi
+          echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Fetch pinned udap sources
+        uses: actions/checkout@v4
+        with:
+          repository: retro-vault/udap
+          ref: ${{ env.UDAP_COMMIT }}
+          path: third_party/udap
+      - name: Prepare pinned vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT }}
+          runVcpkgInstall: false
+      - name: Configure
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DIDP_VERSION=${{ steps.version.outputs.value }}
+          -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
+          -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+      - name: Build and test
+        run: |
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Stage and verify relocatable tree
+        run: |
+          cmake --install build --prefix "$PWD/dist/tree"
+          python3 scripts/package/verify_bundle.py \
+            --root dist/tree --platform macos --version "${{ steps.version.outputs.value }}"
+      - name: Build macOS and portable packages
+        run: |
+          scripts/package/make_macos_pkg.sh \
+            dist/tree "${{ steps.version.outputs.value }}" dist/packages "${{ matrix.arch }}"
+          mv dist/tree "dist/Iskra-Delta-Partner-${{ steps.version.outputs.value }}-macOS-${{ matrix.arch }}"
+          tar -C dist -czf \
+            "dist/packages/Iskra-Delta-Partner-${{ steps.version.outputs.value }}-macOS-${{ matrix.arch }}.tar.gz" \
+            "Iskra-Delta-Partner-${{ steps.version.outputs.value }}-macOS-${{ matrix.arch }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-${{ matrix.arch }}-installers
+          path: dist/packages/*
+          if-no-files-found: error
+
+  windows:
+    name: Windows x86_64
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate and extract version
+        id: version
+        shell: bash
+        run: |
+          if [[ ! "$GITHUB_REF_NAME" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Release tags must have the form v1.2.3" >&2
+            exit 2
+          fi
+          echo "value=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+      - name: Fetch pinned udap sources
+        uses: actions/checkout@v4
+        with:
+          repository: retro-vault/udap
+          ref: ${{ env.UDAP_COMMIT }}
+          path: third_party/udap
+      - name: Install installer toolchain
+        shell: pwsh
+        run: choco install innosetup --no-progress -y
+      - name: Prepare pinned vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT }}
+          runVcpkgInstall: false
+      - name: Configure
+        shell: pwsh
+        run: >-
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DIDP_VERSION=${{ steps.version.outputs.value }}
+          -DIDP_STATIC_RUNTIME=ON
+          -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
+          -DVCPKG_TARGET_TRIPLET=x64-windows-static
+      - name: Build and test
+        shell: pwsh
+        run: |
+          cmake --build build --parallel 2
+          ctest --test-dir build --output-on-failure
+      - name: Stage and verify relocatable tree
+        shell: pwsh
+        run: |
+          cmake --install build --prefix "$PWD/dist/tree"
+          python scripts/package/verify_bundle.py `
+            --root dist/tree --platform windows --version "${{ steps.version.outputs.value }}"
+      - name: Build Windows and portable packages
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist/packages | Out-Null
+          $source = (Resolve-Path dist/tree).Path
+          $destination = (Resolve-Path dist/packages).Path
+          iscc packaging/windows/idp-emu.iss `
+            "/DSourceDir=$source" `
+            "/DAppVersion=${{ steps.version.outputs.value }}" `
+            "/DOutputDir=$destination"
+          Rename-Item dist/tree "Iskra-Delta-Partner-${{ steps.version.outputs.value }}-Windows-x86_64"
+          Compress-Archive `
+            -Path "dist/Iskra-Delta-Partner-${{ steps.version.outputs.value }}-Windows-x86_64" `
+            -DestinationPath "dist/packages/Iskra-Delta-Partner-${{ steps.version.outputs.value }}-Windows-x86_64.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-installers
+          path: dist/packages/*
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub release
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+      - name: Create checksums
+        run: cd release-assets && sha256sum * > SHA256SUMS
+      - name: Publish tag assets
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          fail_on_unmatched_files: true
+          files: release-assets/*
