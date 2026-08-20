@@ -82,7 +82,11 @@ install(TARGETS idp-emu idp-mcp
 if(WIN32)
     install(RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
         DESTINATION shared
-        PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
+        PRE_EXCLUDE_REGEXES
+            "^api-ms-.*"
+            "^ext-ms-.*"
+            "^hvsifiletrust\\.dll$"
+            "^wpaxholder\\.dll$"
         POST_EXCLUDE_REGEXES ".*[\\/]System32[\\/].*" ".*[\\/]SysWOW64[\\/].*")
 elseif(APPLE)
     install(RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
