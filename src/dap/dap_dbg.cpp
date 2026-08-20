@@ -3,7 +3,6 @@
 // Port of udap's dbg class onto the partner machine.
 #include <algorithm>
 #include <filesystem>
-#include <format>
 #include <iomanip>
 #include <regex>
 #include <sstream>
@@ -434,7 +433,10 @@ void dap_dbg::build_full_listing()
 
 std::string dap_dbg::format_hex(uint16_t value, int width)
 {
-    return std::format("0x{:0{}X}", value, width);
+    std::ostringstream formatted;
+    formatted << "0x" << std::uppercase << std::hex << std::setfill('0')
+              << std::setw(width) << value;
+    return formatted.str();
 }
 
 // Replace a single regex match group with its MAP symbol name (if exact hit).

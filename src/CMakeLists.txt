@@ -42,17 +42,22 @@ set(IDP_GUI_SOURCES
 add_executable(idp-emu ${IDP_CORE_SOURCES} ${IDP_GUI_SOURCES})
 target_link_libraries(idp-emu PRIVATE chipsex imgui_lib SDL2::SDL2 PNG::PNG OpenGL::GL Threads::Threads udap_dap udap_sdcc)
 target_compile_definitions(idp-emu PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
-idp_require_partos_layout(idp-emu)
 
-add_executable(idp-probe probe_floppy.cpp ${IDP_CORE_SOURCES})
-target_link_libraries(idp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
-target_compile_definitions(idp-probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
-idp_require_partos_layout(idp-probe)
+if(IDP_BUILD_PROBES)
+    add_executable(idp-probe probe_floppy.cpp ${IDP_CORE_SOURCES})
+    target_link_libraries(idp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
+    target_compile_definitions(idp-probe PRIVATE
+        IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+        GL_GLEXT_PROTOTYPES
+        $<$<CONFIG:Debug>:IDP_DEBUG>)
 
-add_executable(idp-gdp-probe probe_gdp.cpp ${IDP_CORE_SOURCES})
-target_link_libraries(idp-gdp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
-target_compile_definitions(idp-gdp-probe PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
-idp_require_partos_layout(idp-gdp-probe)
+    add_executable(idp-gdp-probe probe_gdp.cpp ${IDP_CORE_SOURCES})
+    target_link_libraries(idp-gdp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
+    target_compile_definitions(idp-gdp-probe PRIVATE
+        IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+        GL_GLEXT_PROTOTYPES
+        $<$<CONFIG:Debug>:IDP_DEBUG>)
+endif()
 
 add_executable(idp-mcp
     mcp_main.cpp
@@ -67,7 +72,6 @@ target_compile_definitions(idp-mcp PRIVATE
     GL_GLEXT_PROTOTYPES
     $<$<CONFIG:Debug>:IDP_DEBUG>
 )
-idp_require_partos_layout(idp-mcp)
 
 install(TARGETS idp-emu idp-mcp
     RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
@@ -124,5 +128,3 @@ install(FILES "${CMAKE_SOURCE_DIR}/packaging/shared-README.txt"
 
 # Optional: define your own debug macro if needed
 target_compile_definitions(idp-emu PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)
-target_compile_definitions(idp-probe PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)
-target_compile_definitions(idp-gdp-probe PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)

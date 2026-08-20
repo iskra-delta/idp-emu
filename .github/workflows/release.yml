@@ -41,7 +41,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            ninja-build patchelf pkg-config autoconf automake autoconf-archive libtool \
+            ninja-build patchelf pkg-config autoconf automake autoconf-archive libtool libltdl-dev \
             libx11-dev libxext-dev libxrandr-dev libxrender-dev libxfixes-dev \
             libxi-dev libxinerama-dev libxcursor-dev libwayland-dev \
             libxkbcommon-dev libegl1-mesa-dev libgl1-mesa-dev libibus-1.0-dev
@@ -110,6 +110,8 @@ jobs:
           repository: retro-vault/udap
           ref: ${{ env.UDAP_COMMIT }}
           path: third_party/udap
+      - name: Apply udap compatibility patches
+        run: git -C third_party/udap apply ../../patches/udap-macos-format.patch
       - name: Prepare pinned vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -169,6 +171,10 @@ jobs:
       - name: Install installer toolchain
         shell: pwsh
         run: choco install innosetup --no-progress -y
+      - name: Set up MSVC command-line environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
       - name: Prepare pinned vcpkg
         uses: lukka/run-vcpkg@v11
         with:
@@ -176,13 +182,21 @@ jobs:
           runVcpkgInstall: false
       - name: Configure
         shell: pwsh
-        run: >-
-          cmake -S . -B build -G Ninja
-          -DCMAKE_BUILD_TYPE=Release
-          -DIDP_VERSION=${{ steps.version.outputs.value }}
-          -DIDP_STATIC_RUNTIME=ON
-          -DCMAKE_TOOLCHAIN_FILE=$env:VCPKG_ROOT/scripts/buildsystems/vcpkg.cmake
-          -DVCPKG_TARGET_TRIPLET=x64-windows-static
+        env:
+          IDP_RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          $toolchain = Join-Path $env:VCPKG_ROOT "scripts/buildsystems/vcpkg.cmake"
+          $cmakeArgs = @(
+            "-S", ".",
+            "-B", "build",
+            "-G", "Ninja",
+            "-DCMAKE_BUILD_TYPE=Release",
+            "-DIDP_VERSION=$env:IDP_RELEASE_VERSION",
+            "-DIDP_STATIC_RUNTIME=ON",
+            "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
+            "-DVCPKG_TARGET_TRIPLET=x64-windows-static"
+          )
+          cmake @cmakeArgs
       - name: Build and test
         shell: pwsh
         run: |

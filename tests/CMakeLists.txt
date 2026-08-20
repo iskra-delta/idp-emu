@@ -18,7 +18,6 @@ add_executable(test_partner_sio
 
 target_include_directories(test_partner_sio PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_partner_sio PRIVATE chipsex)
-idp_require_partos_layout(test_partner_sio)
 
 add_test(NAME partner_sio_unit COMMAND test_partner_sio)
 
@@ -70,7 +69,6 @@ add_executable(test_partner_crt_terminal
 target_include_directories(test_partner_crt_terminal PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(test_partner_crt_terminal PRIVATE GL_GLEXT_PROTOTYPES)
 target_link_libraries(test_partner_crt_terminal PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
-idp_require_partos_layout(test_partner_crt_terminal)
 
 add_test(NAME partner_crt_terminal COMMAND test_partner_crt_terminal)
 
@@ -105,7 +103,6 @@ add_executable(test_partner_gdp_memacc
 target_include_directories(test_partner_gdp_memacc PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_compile_definitions(test_partner_gdp_memacc PRIVATE GL_GLEXT_PROTOTYPES)
 target_link_libraries(test_partner_gdp_memacc PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
-idp_require_partos_layout(test_partner_gdp_memacc)
 
 add_test(NAME partner_gdp_memacc_unit COMMAND test_partner_gdp_memacc)
 
@@ -126,7 +123,6 @@ target_compile_definitions(test_partner_gdp_boot PRIVATE
     IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
 )
 target_link_libraries(test_partner_gdp_boot PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
-idp_require_partos_layout(test_partner_gdp_boot)
 
 add_test(NAME partner_gdp_boot_integration COMMAND test_partner_gdp_boot)
 
@@ -138,7 +134,6 @@ add_executable(test_partner_external_im2
 
 target_include_directories(test_partner_external_im2 PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_partner_external_im2 PRIVATE chipsex)
-idp_require_partos_layout(test_partner_external_im2)
 
 add_test(NAME partner_external_im2_unit COMMAND test_partner_external_im2)
 
@@ -150,7 +145,6 @@ add_executable(test_partner_covox
 
 target_include_directories(test_partner_covox PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_partner_covox PRIVATE chipsex)
-idp_require_partos_layout(test_partner_covox)
 
 add_test(NAME partner_covox_unit COMMAND test_partner_covox)
 
@@ -196,7 +190,6 @@ add_executable(test_rtc_nvram_shadow
 
 target_include_directories(test_rtc_nvram_shadow PRIVATE ${CMAKE_SOURCE_DIR}/src)
 target_link_libraries(test_rtc_nvram_shadow PRIVATE chipsex)
-idp_require_partos_layout(test_rtc_nvram_shadow)
 
 add_test(NAME rtc_nvram_shadow COMMAND test_rtc_nvram_shadow)
 

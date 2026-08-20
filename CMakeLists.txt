@@ -4,6 +4,8 @@ project(idp-emu VERSION ${IDP_VERSION} LANGUAGES C CXX)
 
 option(IDP_STATIC_RUNTIME
     "Link the compiler runtime statically where the platform supports it" ON)
+option(IDP_BUILD_PROBES
+    "Build developer-only floppy and GDP diagnostic probes" OFF)
 
 if(IDP_STATIC_RUNTIME AND MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -54,41 +56,6 @@ if(CMAKE_BUILD_TYPE STREQUAL "Debug")
         add_compile_options(-g -O0 -Wall -Wextra -Wno-unused-parameter)
     endif()
 endif()
-
-set(PARTOS_ROOT "" CACHE PATH "Optional PartOS checkout used to refresh its layout contract")
-option(IDP_REFRESH_PARTOS_LAYOUT
-    "Regenerate partos_layout.hpp from PARTOS_ROOT instead of using the release snapshot" OFF)
-set(PARTOS_LAYOUT_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/src/generated")
-
-if(IDP_REFRESH_PARTOS_LAYOUT)
-    if(NOT PARTOS_ROOT OR NOT EXISTS "${PARTOS_ROOT}/Makefile")
-        message(FATAL_ERROR
-            "IDP_REFRESH_PARTOS_LAYOUT requires -DPARTOS_ROOT=/path/to/partos")
-    endif()
-    set(PARTOS_LAYOUT_HEADER "${PARTOS_ROOT}/build/partos_layout.hpp")
-    file(GLOB_RECURSE PARTOS_LAYOUT_DEPENDS CONFIGURE_DEPENDS
-        "${PARTOS_ROOT}/src/*.s" "${PARTOS_ROOT}/src/*.c"
-        "${PARTOS_ROOT}/src/*.inc" "${PARTOS_ROOT}/include/*.h"
-        "${PARTOS_ROOT}/Makefile" "${PARTOS_ROOT}/tools/check_partos_layout.py")
-    add_custom_command(
-        OUTPUT "${PARTOS_LAYOUT_HEADER}"
-        COMMAND "${CMAKE_MAKE_PROGRAM}" -C "${PARTOS_ROOT}" build/partos_layout.hpp
-        DEPENDS ${PARTOS_LAYOUT_DEPENDS}
-        COMMENT "Refreshing the PartOS layout contract"
-        VERBATIM)
-    add_custom_target(partos_layout_header DEPENDS "${PARTOS_LAYOUT_HEADER}")
-    set(PARTOS_LAYOUT_INCLUDE_DIR "${PARTOS_ROOT}/build")
-else()
-    add_custom_target(partos_layout_header)
-endif()
-
-function(idp_require_partos_layout target_name)
-    add_dependencies(${target_name} partos_layout_header)
-    target_include_directories(${target_name} PRIVATE
-        ${CMAKE_SOURCE_DIR}/src
-        ${PARTOS_LAYOUT_INCLUDE_DIR}
-    )
-endfunction()
 
 # --- SDL2 (system) ---
 find_package(SDL2 REQUIRED)

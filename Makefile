@@ -8,10 +8,13 @@ BIN_DIR := bin
 UDAP_DIR := third_party/udap
 UDAP_REPO := https://github.com/retro-vault/udap.git
 UDAP_REF := 41385b81191bcff03442934f0757ceb803ffc11a
+UDAP_PATCH := patches/udap-macos-format.patch
 
 all: build
 
 fetch: $(UDAP_DIR)/CMakeLists.txt
+	@git -C $(UDAP_DIR) apply --reverse --check ../../$(UDAP_PATCH) 2>/dev/null || \
+		git -C $(UDAP_DIR) apply ../../$(UDAP_PATCH)
 
 $(UDAP_DIR)/CMakeLists.txt:
 	git clone --depth 1 $(UDAP_REPO) $(UDAP_DIR)
