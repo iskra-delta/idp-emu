@@ -838,15 +838,37 @@ bool gui::init(const std::string &title, int width, int height)
                   << "\n";
         return false;
     }
+
+    const auto *gl_version = reinterpret_cast<const char *>(glGetString(GL_VERSION));
+    const auto *gl_renderer = reinterpret_cast<const char *>(glGetString(GL_RENDERER));
+    if (!gl_version)
+    {
+        std::cerr << "[error] OpenGL context returned no version string\n";
+        return false;
+    }
+    std::cout << "[info] OpenGL version=" << gl_version
+              << " renderer=" << (gl_renderer ? gl_renderer : "(unknown)") << "\n";
 #endif
     const bool enable_vsync = [] {
         const char *s = std::getenv("IDP_EMU_VSYNC");
         return s && s[0] && s[0] != '0';
     }();
+#if defined(_WIN32)
+    // The emulator already paces itself to 60 Hz. Some Windows OpenGL
+    // implementations (notably remote/compatibility drivers) do not expose
+    // WGL_EXT_swap_control, so leave the driver's default alone unless VSync
+    // was explicitly requested.
+    if (enable_vsync && SDL_GL_SetSwapInterval(1) != 0)
+    {
+        std::cerr << "[info] OpenGL VSync control is unavailable; "
+                     "continuing with host-clock pacing\n";
+    }
+#else
     if (SDL_GL_SetSwapInterval(enable_vsync ? 1 : 0) != 0)
     {
         std::cerr << "[warning] SDL_GL_SetSwapInterval failed: " << SDL_GetError() << "\n";
     }
+#endif
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
