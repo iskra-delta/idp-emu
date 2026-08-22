@@ -31,6 +31,8 @@ namespace {
 constexpr const char *DEFAULT_PARTOS_NVRAM = "partos/partos_shadow_nvram.bin";
 constexpr const char *DEFAULT_PARTNER_NVRAM = "partner_cmos.bin";
 constexpr const char *DEFAULT_LEGACY_CRT_ROM = "roms/partner_crt.rom";
+constexpr const char *DEFAULT_PARTNER_SYSTEM_FD0 = "disks/fdd-partner-p.img";
+constexpr const char *DEFAULT_PARTNER_G_SYSTEM_HDD = "disks/hdd-partner-g-system.img";
 constexpr const char *DEFAULT_PARTOS_FD0 = "disks/fdd-dos.img";
 constexpr const char *DEFAULT_PARTOS_HDD = "disks/hdd-dos.img";
 
@@ -110,6 +112,8 @@ void print_usage(const char *prog)
     std::cerr << "  --disk-b FILE          Alias for --fd1\n";
     std::cerr << "  --hdd FILE             Hard disk image for Xebec/SASI controller\n";
     std::cerr << "                         (auto-attached for the default PartOS ROM)\n";
+    std::cerr << "  --system-floppy        Writable copy of the Partner P system floppy\n";
+    std::cerr << "  --system-hdd           Writable copy of the Partner G system hard disk\n";
     std::cerr << "  --boot TYPE            Firmware boot target: default|floppy\n";
     std::cerr << "  --nvram FILE           Shadow MM58167 NVRAM backing file\n";
     std::cerr << "                         (default selected by ROM)\n";
@@ -132,7 +136,7 @@ void print_usage(const char *prog)
 int main(int argc, char **argv)
 {
     std::string rom_file = DEFAULT_LEGACY_CRT_ROM;
-    std::string fd0_file = "disks/fdd-partner-p.img";
+    std::string fd0_file = DEFAULT_PARTNER_SYSTEM_FD0;
     std::string fd1_file;
     std::string hdd_file;
     std::string nvram_file = DEFAULT_PARTOS_NVRAM;
@@ -144,6 +148,8 @@ int main(int argc, char **argv)
     int sio_tcp_control_port = 0;
     bool fd0_explicit = false;
     bool fd1_explicit = false;
+    bool packaged_system_fd0 = false;
+    bool packaged_system_hdd = false;
     bool nvram_explicit = false;
     bool auto_boot_floppy = false;
     bool terminal_explicit = false;
@@ -171,6 +177,7 @@ int main(int argc, char **argv)
             if ((i + 1) >= argc) { std::cerr << "Error: --fd0 requires a value\n"; return 1; }
             fd0_file = argv[++i];
             fd0_explicit = true;
+            packaged_system_fd0 = false;
         }
         else if (strcmp(argv[i], "--fd1") == 0 || strcmp(argv[i], "--disk-b") == 0)
         {
@@ -182,6 +189,18 @@ int main(int argc, char **argv)
         {
             if ((i + 1) >= argc) { std::cerr << "Error: --hdd requires a value\n"; return 1; }
             hdd_file = argv[++i];
+            packaged_system_hdd = false;
+        }
+        else if (strcmp(argv[i], "--system-floppy") == 0)
+        {
+            fd0_file = DEFAULT_PARTNER_SYSTEM_FD0;
+            fd0_explicit = true;
+            packaged_system_fd0 = true;
+        }
+        else if (strcmp(argv[i], "--system-hdd") == 0)
+        {
+            hdd_file = DEFAULT_PARTNER_G_SYSTEM_HDD;
+            packaged_system_hdd = true;
         }
         else if (strcmp(argv[i], "--boot") == 0)
         {
@@ -349,11 +368,16 @@ int main(int argc, char **argv)
         };
 
         rom_file = resolve_existing_path(rom_file);
-        fd0_file = resolve_existing_path(fd0_file);
+        fd0_file = packaged_system_fd0
+            ? runtime_paths::mutable_resource_copy(DEFAULT_PARTNER_SYSTEM_FD0)
+            : resolve_existing_path(fd0_file);
         if (!fd1_file.empty())
             fd1_file = resolve_existing_path(fd1_file);
-        if (!hdd_file.empty())
-            hdd_file = resolve_existing_path(hdd_file);
+        if (!hdd_file.empty()) {
+            hdd_file = packaged_system_hdd
+                ? runtime_paths::mutable_resource_copy(DEFAULT_PARTNER_G_SYSTEM_HDD)
+                : resolve_existing_path(hdd_file);
+        }
         if (nvram_explicit)
             nvram_file = std::filesystem::absolute(nvram_file).lexically_normal().string();
 
@@ -402,9 +426,9 @@ int main(int argc, char **argv)
             if (is_partos_rom_path(rom_file))
                 return runtime_paths::mutable_resource_copy(DEFAULT_PARTOS_FD0);
             const std::string preferred_name =
-                want_gdp ? "disks/fdd-partner-g.img" : "disks/fdd-partner-p.img";
+                want_gdp ? "disks/fdd-partner-g.img" : DEFAULT_PARTNER_SYSTEM_FD0;
             const std::string fallback_name =
-                want_gdp ? "disks/fdd-partner-p.img" : "disks/fdd-partner-g.img";
+                want_gdp ? DEFAULT_PARTNER_SYSTEM_FD0 : "disks/fdd-partner-g.img";
             const std::string preferred = resolve_existing_path(preferred_name);
             const std::string fallback = resolve_existing_path(fallback_name);
             if (std::filesystem::exists(preferred)) {
@@ -418,18 +442,20 @@ int main(int argc, char **argv)
 
         auto make_emu = [&](bool want_gdp) -> std::unique_ptr<partner> {
             const std::string selected_rom = pick_rom_for_model(want_gdp);
-            const std::string selected_fd0 = pick_disk_for_model(want_gdp);
             const std::string selected_fd1 = fd1_explicit ? fd1_file : std::string{};
             const std::string selected_hdd =
                 !hdd_file.empty() ? hdd_file :
                 (is_partos_rom_path(selected_rom) ? runtime_paths::mutable_resource_copy(DEFAULT_PARTOS_HDD)
                                                   : std::string{});
+            const bool auto_insert_floppy =
+                selected_hdd.empty() || fd0_explicit || is_partos_rom_path(selected_rom);
+            const std::string selected_fd0 =
+                auto_insert_floppy ? pick_disk_for_model(want_gdp) : std::string{};
             const std::string selected_nvram =
                 nvram_explicit ? nvram_file :
                 (is_partos_rom_path(selected_rom)
                     ? runtime_paths::user_file(DEFAULT_PARTOS_NVRAM).string()
                     : runtime_paths::mutable_resource_copy(DEFAULT_PARTNER_NVRAM));
-            const bool auto_insert_floppy = selected_hdd.empty() || fd0_explicit || is_partos_rom_path(selected_rom);
             std::cout << "[info] model=" << (want_gdp ? "gdp" : "crt")
                       << " rom=" << selected_rom
                       << " fd0=" << (auto_insert_floppy ? selected_fd0 : std::string("(none)"))

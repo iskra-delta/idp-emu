@@ -71,6 +71,27 @@ def verify_png_icon(path: Path, expected_size: int) -> None:
         fail("application icon PNG must carry an alpha channel")
 
 
+def verify_ico_icon(path: Path) -> None:
+    data = path.read_bytes()
+    if len(data) < 6:
+        fail(f"application ICO is truncated: {path}")
+    reserved, image_type, count = struct.unpack("<HHH", data[:6])
+    if reserved != 0 or image_type != 1 or count != len(ICON_SIZES):
+        fail(f"invalid multi-resolution application ICO: {path}")
+    if len(data) < 6 + count * 16:
+        fail(f"application ICO directory is truncated: {path}")
+    sizes: set[int] = set()
+    for index in range(count):
+        offset = 6 + index * 16
+        width = data[offset] or 256
+        height = data[offset + 1] or 256
+        if width != height:
+            fail(f"application ICO contains a non-square image: {path}")
+        sizes.add(width)
+    if sizes != set(ICON_SIZES):
+        fail(f"application ICO has wrong image sizes {sorted(sizes)}: {path}")
+
+
 def verify_linux_dependencies(executable: Path, root: Path) -> None:
     output = run(["ldd", str(executable)], root).stdout
     if "not found" in output:
@@ -107,17 +128,19 @@ def verify_macos_dependencies(executable: Path, root: Path) -> None:
 
 
 def verify_windows_dependencies(executable: Path, root: Path) -> None:
-    nested_dlls = sorted(
+    packaged_dlls = sorted(
         str(path.relative_to(root))
-        for path in root.rglob("*.dll")
-        if path.parent != root
+        for path in root.rglob("*")
+        if path.is_file() and path.suffix.lower() == ".dll"
     )
-    if nested_dlls:
-        fail(f"Windows DLLs must be beside partner.exe: {nested_dlls}")
+    if packaged_dlls:
+        fail(
+            "the static Windows release must not package operating-system "
+            f"DLLs: {packaged_dlls}"
+        )
 
-    # Loading the executable from an unrelated directory catches missing DLLs.
-    # Release CI uses the x64-windows-static vcpkg triplet and static MSVC CRT;
-    # dumpbin adds an explicit check when it is available in the runner image.
+    # Release CI uses the x64-windows-static vcpkg triplet and static MSVC CRT.
+    # Every remaining import must therefore be supplied by Windows itself.
     dumpbin = shutil.which("dumpbin")
     if not dumpbin:
         return
@@ -128,11 +151,10 @@ def verify_windows_dependencies(executable: Path, root: Path) -> None:
         if line.strip().lower().endswith(".dll")
     }
     system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
-    local_names = {path.name.upper() for path in root.glob("*.dll")}
     unexpected = sorted(
         dependency
         for dependency in dependencies
-        if dependency not in local_names and not (system32 / dependency).exists()
+        if not (system32 / dependency).exists()
     )
     if unexpected:
         fail(f"non-system Windows DLL dependencies: {', '.join(unexpected)}")
@@ -182,6 +204,10 @@ def main() -> int:
     for size in ICON_SIZES:
         name = "partner.png" if size == 256 else f"partner-{size}.png"
         verify_png_icon(root / "assets/icons" / name, size)
+        mcp_name = "mcp.png" if size == 256 else f"mcp-{size}.png"
+        verify_png_icon(root / "assets/icons" / mcp_name, size)
+    verify_ico_icon(root / "assets/icons/partner.ico")
+    verify_ico_icon(root / "assets/icons/mcp.ico")
 
     suffix = ".exe" if args.platform == "windows" else ""
     if args.platform == "windows":
@@ -214,7 +240,11 @@ def main() -> int:
         required_tools = {"status", "run", "step", "measure_cycles", "press_keys", "screen"}
         if not required_tools.issubset(names):
             fail(f"MCP bundle is missing tools: {sorted(required_tools - names)}")
-        run([str(gui), "--help"], work)
+        gui_help = run([str(gui), "--help"], work)
+        help_text = gui_help.stdout + gui_help.stderr
+        for option in ("--system-floppy", "--system-hdd"):
+            if option not in help_text:
+                fail(f"GUI bundle is missing shortcut media option: {option}")
 
     checker = {
         "linux": verify_linux_dependencies,
@@ -225,6 +255,7 @@ def main() -> int:
         checker(executable, root)
     if args.platform == "windows":
         verify_windows_icon(gui)
+        verify_windows_icon(mcp)
 
     print(f"verified {args.platform} release tree at {root}")
     return 0

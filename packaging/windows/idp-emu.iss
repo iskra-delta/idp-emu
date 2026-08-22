@@ -23,19 +23,30 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-SetupIconFile=assets\partner.ico
+SetupIconFile=..\..\assets\icons\partner.ico
 UninstallDisplayIcon={app}\partner.exe
 ChangesEnvironment=no
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[InstallDelete]
+; v0.0.2 accidentally installed copies of the build runner's Windows system
+; DLLs. Remove those and obsolete pre-flat layouts before installing the clean
+; static build. Writable media lives under the user's application-data folder.
+Type: files; Name: "{app}\*.dll"
+Type: files; Name: "{app}\idp-emu.exe"
+Type: filesandordirs; Name: "{app}\bin"
+Type: filesandordirs; Name: "{app}\shared"
+
 [Icons]
-Name: "{autoprograms}\Iskra Delta Partner Emulator"; Filename: "{app}\partner.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\Iskra Delta Partner Emulator"; Filename: "{app}\partner.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\partnerg"; Filename: "{app}\partner.exe"; Parameters: "--model gdp --system-hdd"; WorkingDir: "{app}"
+Name: "{autoprograms}\partner"; Filename: "{app}\partner.exe"; Parameters: "--model crt --system-floppy"; WorkingDir: "{app}"
+Name: "{autodesktop}\partnerg"; Filename: "{app}\partner.exe"; Parameters: "--model gdp --system-hdd"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autodesktop}\partner"; Filename: "{app}\partner.exe"; Parameters: "--model crt --system-floppy"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Tasks]
-Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
+Name: "desktopicon"; Description: "Create &desktop shortcuts"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Run]
-Filename: "{app}\partner.exe"; Description: "Launch Iskra Delta Partner Emulator"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\partner.exe"; Parameters: "--model crt --system-floppy"; Description: "Launch partner"; Flags: nowait postinstall skipifsilent

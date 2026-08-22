@@ -47,7 +47,7 @@ if(WIN32)
     # Keep the user-facing executable name and icon consistent across the
     # installer, portable archive, Start Menu, and desktop shortcut.
     set(IDP_WINDOWS_ICON
-        "${CMAKE_SOURCE_DIR}/packaging/windows/assets/partner.ico")
+        "${CMAKE_SOURCE_DIR}/assets/icons/partner.ico")
     configure_file(
         "${CMAKE_SOURCE_DIR}/packaging/windows/partner.rc.in"
         "${CMAKE_CURRENT_BINARY_DIR}/partner.rc"
@@ -80,6 +80,22 @@ add_executable(idp-mcp
     mcp/idp_mcp_server.cpp
     ${IDP_CORE_SOURCES}
 )
+
+if(WIN32)
+    # Give the headless MCP component its own identity in Explorer, MCP client
+    # pickers, and the installed Program Files directory.
+    set(IDP_WINDOWS_MCP_ICON
+        "${CMAKE_SOURCE_DIR}/assets/icons/mcp.ico")
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/packaging/windows/mcp.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/mcp.rc"
+        @ONLY)
+    set_source_files_properties(
+        "${CMAKE_CURRENT_BINARY_DIR}/mcp.rc"
+        PROPERTIES OBJECT_DEPENDS "${IDP_WINDOWS_MCP_ICON}")
+    target_sources(idp-mcp PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/mcp.rc")
+endif()
+
 target_include_directories(idp-mcp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(idp-mcp PRIVATE
     chipsex SDL2::SDL2 PNG::PNG OpenGL::GL nlohmann_json::nlohmann_json)
@@ -92,30 +108,27 @@ target_compile_definitions(idp-mcp PRIVATE
 
 set(IDP_PROGRAM_INSTALL_DIRECTORY bin)
 if(WIN32)
-    # Windows resolves application DLLs most reliably beside the executable.
-    # The installer copies this staged root directly into Program Files.
+    # Keep both statically linked programs together in Program Files. Windows
+    # system DLLs must be resolved from the target machine, never copied from
+    # the CI runner beside the executables.
     set(IDP_PROGRAM_INSTALL_DIRECTORY .)
 endif()
 
-install(TARGETS idp-emu idp-mcp
-    RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
-    RUNTIME DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}"
-    BUNDLE DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}")
-
 if(WIN32)
-    install(RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
-        DESTINATION .
-        PRE_EXCLUDE_REGEXES
-            "^api-ms-.*"
-            "^ext-ms-.*"
-            "^hvsifiletrust\\.dll$"
-            "^wpaxholder\\.dll$"
-        POST_EXCLUDE_REGEXES ".*[\\/]System32[\\/].*" ".*[\\/]SysWOW64[\\/].*")
-elseif(APPLE)
+    install(TARGETS idp-emu idp-mcp
+        RUNTIME DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}")
+else()
+    install(TARGETS idp-emu idp-mcp
+        RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
+        RUNTIME DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}"
+        BUNDLE DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}")
+endif()
+
+if(APPLE)
     install(RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
         DESTINATION shared
         POST_EXCLUDE_REGEXES "^/System/Library/.*" "^/usr/lib/.*")
-else()
+elseif(UNIX)
     install(RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
         DESTINATION shared
         POST_EXCLUDE_REGEXES

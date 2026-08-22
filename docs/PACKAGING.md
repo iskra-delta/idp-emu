@@ -10,7 +10,7 @@ bin/
   partner_cmos.bin  Initial eight-byte Partner CMOS image
   bin/       idp-emu[.exe], idp-mcp[.exe]
   shared/    bundled non-system dynamic libraries, if any
-  assets/    fonts, application icon, and UI data
+  assets/    fonts, Partner/MCP component icons, and UI data
   roms/      original CRT and GDP 2 KiB ROMs
   disks/     floppy images and initial/system hard-disk images
   docs/      usage and release metadata
@@ -19,19 +19,31 @@ bin/
 Copy the outer `bin/` directory to another machine with a compatible OS and
 architecture. The executables find resources relative to themselves, not the
 checkout or current directory. Default writable media and settings are placed
-in the user's platform application-data directory.
+in the user's platform application-data directory. Every platform retains the
+original multi-resolution files as `assets/icons/partner.ico` and
+`assets/icons/mcp.ico`, in addition to its native icon representation.
 
-Windows uses a deliberately flatter version of the same tree. `partner.exe`,
-`idp-mcp.exe`, and any non-system DLLs all live at the root copied to
-`Program Files\Iskra Delta Partner Emulator`; `roms`, `disks`, `assets`, and
-`docs` remain resource subdirectories. `partner_cmos.bin` is installed at the
-root and copied to the user's application-data directory on first launch.
+Windows uses a deliberately flatter version of the same tree. `partner.exe`
+and `idp-mcp.exe` live at the root copied to `Program Files\Iskra Delta Partner
+Emulator`; `roms`, `disks`, `assets`, and `docs` remain resource
+subdirectories. Third-party libraries and the MSVC runtime are linked
+statically. Windows system DLLs are never packaged, because local copies would
+override the target machine's compatible versions. `partner_cmos.bin` is
+installed at the root and copied to the user's application-data directory on
+first launch. The installer creates `partner` and `partnerg` Start Menu
+shortcuts. `partner` boots the CRT model with `fdd-partner-p.img` in drive 0;
+`partnerg` boots the GDP model with `hdd-partner-g-system.img` attached. The
+optional desktop-shortcut task creates the same pair.
 
-The Ubuntu package registers the icon in the freedesktop `hicolor` theme and
-references it by name from the desktop entry. The macOS package compiles the
-same artwork into `partner.icns`, places it in the app's Resources directory,
-and declares it through `CFBundleIconFile`. Package construction validates the
-launchers, icon, and byte-for-byte CMOS seed before producing an installer.
+The Ubuntu package installs `partner` and `partnerg` commands in `/usr/bin`
+and matching desktop entries. The macOS package installs the same command
+names in `/usr/local/bin`, plus Partner and Partner G app launchers. Both use
+the writable system-media profiles described above. The macOS MCP component
+has its own app and icon as well. All three macOS apps delegate to the single
+resource-bearing Partner bundle, so libraries and 41 MiB of disk images are
+not duplicated. Windows provides the two equivalent Start Menu and optional
+desktop shortcuts. Package construction validates the launchers, icons, and
+byte-for-byte CMOS seed before producing an installer.
 
 To stage a clean release tree explicitly:
 

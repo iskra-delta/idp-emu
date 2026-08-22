@@ -21,6 +21,8 @@ escapes stop startup with an error.
 | `--fd1 FILE` | disk-image path | no disk | Attach a floppy image to drive 1. |
 | `--disk-b FILE` | disk-image path | — | Alias for `--fd1`. |
 | `--hdd FILE` | disk-image path | no disk | Attach a Xebec/SASI hard-disk image. |
+| `--system-floppy` | none | off | Attach a writable per-user copy of the bundled Partner P system floppy. |
+| `--system-hdd` | none | off | Attach a writable per-user copy of the bundled Partner G system hard disk. |
 | `--boot TYPE` | `default`, `floppy` | `default` | Use normal firmware boot selection, or automatically select floppy boot when the firmware prompts. |
 | `--nvram FILE` | file path | Selected for the ROM | Choose the MM58167 shadow NVRAM backing file. |
 | `--terminal TYPE` | `vt52`, `vt100`, `ansi` | VT52 for CRT; VT100 for GDP | Select terminal emulation. `ansi` is an alias for `vt100`. |

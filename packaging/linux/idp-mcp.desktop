@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Iskra Delta Partner MCP Component
+Comment=Model Context Protocol server for the Iskra Delta Partner emulator
+Exec=/opt/iskra-delta-partner/bin/idp-mcp
+Icon=iskra-delta-partner-mcp
+Terminal=true
+Categories=System;Emulator;
+Keywords=MCP;Model Context Protocol;Emulator;

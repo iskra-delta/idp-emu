@@ -204,10 +204,17 @@ directory before the emulator writes them. Installed seed images therefore
 remain reusable. See [Packaging and releases](docs/PACKAGING.md) for build,
 installer, architecture, and tagging details.
 
-The Windows package is flat where loader discovery matters: `partner.exe`,
-`idp-mcp.exe`, and bundled DLLs are installed together in the application
-folder under Program Files. The CMOS seed is copied from that folder into the
-user's application-data directory on first launch.
+Installed Linux and macOS packages provide two convenient commands:
+`partner` boots the classic CRT model from a writable copy of the Partner P
+system floppy, while `partnerg` boots the GDP model from a writable copy of
+the Partner G system hard disk. The Windows installer provides matching Start
+Menu shortcuts, with an optional matching pair on the desktop.
+
+The Windows package keeps `partner.exe` and `idp-mcp.exe` together in the
+application folder under Program Files. Third-party libraries are statically
+linked; Windows system DLLs are loaded from the target operating system and
+are never copied into the application folder. The CMOS seed is copied from
+that folder into the user's application-data directory on first launch.
 
 ## Acknowledgments
 
