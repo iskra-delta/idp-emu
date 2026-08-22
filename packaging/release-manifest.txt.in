@@ -10,7 +10,7 @@ Runtime layout:
   docs/      Command-line and hardware documentation
 
 Windows layout:
-  ./         partner.exe, idp-mcp.exe, and partner_cmos.bin (system DLLs stay in Windows)
+  ./         partner.exe, idp-mcp.exe, partner-classic.bat, partner-graphical.bat, and CMOS seed
   roms/      Original Partner CRT and GDP ROM images
   disks/     Writable seed floppy/hard-disk images (copied per user on first use)
   assets/    Fonts, UI assets, and icons (including partner.ico and mcp.ico)

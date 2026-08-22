@@ -159,6 +159,12 @@ install(FILES
 install(FILES "${CMAKE_SOURCE_DIR}/partner_cmos.bin" DESTINATION .)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/disks/" DESTINATION disks
         FILES_MATCHING PATTERN "*.img")
+if(WIN32)
+    install(FILES
+        "${CMAKE_SOURCE_DIR}/packaging/windows/partner-classic.bat"
+        "${CMAKE_SOURCE_DIR}/packaging/windows/partner-graphical.bat"
+        DESTINATION .)
+endif()
 install(FILES
     "${CMAKE_SOURCE_DIR}/README.md"
     "${CMAKE_SOURCE_DIR}/docs/COMMAND-LINE.md"

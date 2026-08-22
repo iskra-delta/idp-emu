@@ -26,6 +26,10 @@ REQUIRED_MEDIA = (
     "disks/fdd-partner-g.img",
     "disks/hdd-partner-g-system.img",
 )
+WINDOWS_LAUNCHERS = {
+    "partner-classic.bat": "--model crt --system-floppy",
+    "partner-graphical.bat": "--model gdp --system-hdd",
+}
 
 
 def fail(message: str) -> None:
@@ -216,6 +220,14 @@ def main() -> int:
         for obsolete_directory in ("bin", "shared"):
             if (root / obsolete_directory).exists():
                 fail(f"Windows programs and DLLs must not use {obsolete_directory}/")
+        for name, arguments in WINDOWS_LAUNCHERS.items():
+            launcher = root / name
+            if not launcher.is_file():
+                fail(f"missing Windows launcher: {launcher}")
+            launcher_text = launcher.read_text(encoding="utf-8")
+            expected_command = f'"%~dp0partner.exe" {arguments} %*'
+            if expected_command not in launcher_text:
+                fail(f"Windows launcher has wrong command: {launcher}")
     else:
         gui = root / "bin" / f"idp-emu{suffix}"
         mcp = root / "bin" / f"idp-mcp{suffix}"

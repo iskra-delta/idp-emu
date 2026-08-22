@@ -207,14 +207,16 @@ installer, architecture, and tagging details.
 Installed Linux and macOS packages provide two convenient commands:
 `partner` boots the classic CRT model from a writable copy of the Partner P
 system floppy, while `partnerg` boots the GDP model from a writable copy of
-the Partner G system hard disk. The Windows installer provides matching Start
-Menu shortcuts, with an optional matching pair on the desktop.
+the Partner G system hard disk. On Windows, `partner-classic.bat` and
+`partner-graphical.bat` provide the same profiles. The installer creates
+matching Start Menu shortcuts, with an optional matching pair on the desktop.
 
-The Windows package keeps `partner.exe` and `idp-mcp.exe` together in the
-application folder under Program Files. Third-party libraries are statically
-linked; Windows system DLLs are loaded from the target operating system and
-are never copied into the application folder. The CMOS seed is copied from
-that folder into the user's application-data directory on first launch.
+The Windows package keeps `partner.exe`, `idp-mcp.exe`, and both batch runners
+together in the application folder under Program Files. Third-party libraries
+are statically linked; Windows system DLLs are loaded from the target operating
+system and are never copied into the application folder. The CMOS seed is
+copied from that folder into the user's application-data directory on first
+launch.
 
 ## Acknowledgments
 

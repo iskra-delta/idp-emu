@@ -38,15 +38,20 @@ Type: files; Name: "{app}\*.dll"
 Type: files; Name: "{app}\idp-emu.exe"
 Type: filesandordirs; Name: "{app}\bin"
 Type: filesandordirs; Name: "{app}\shared"
+; Retire the old ambiguously named shortcuts when upgrading an installation.
+Type: files; Name: "{autoprograms}\partner.lnk"
+Type: files; Name: "{autoprograms}\partnerg.lnk"
+Type: files; Name: "{autodesktop}\partner.lnk"
+Type: files; Name: "{autodesktop}\partnerg.lnk"
 
 [Icons]
-Name: "{autoprograms}\partnerg"; Filename: "{app}\partner.exe"; Parameters: "--model gdp --system-hdd"; WorkingDir: "{app}"
-Name: "{autoprograms}\partner"; Filename: "{app}\partner.exe"; Parameters: "--model crt --system-floppy"; WorkingDir: "{app}"
-Name: "{autodesktop}\partnerg"; Filename: "{app}\partner.exe"; Parameters: "--model gdp --system-hdd"; WorkingDir: "{app}"; Tasks: desktopicon
-Name: "{autodesktop}\partner"; Filename: "{app}\partner.exe"; Parameters: "--model crt --system-floppy"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\partner-classic"; Filename: "{app}\partner-classic.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"
+Name: "{autoprograms}\partner-graphical"; Filename: "{app}\partner-graphical.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"
+Name: "{autodesktop}\partner-classic"; Filename: "{app}\partner-classic.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"; Tasks: desktopicon
+Name: "{autodesktop}\partner-graphical"; Filename: "{app}\partner-graphical.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create &desktop shortcuts"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Run]
-Filename: "{app}\partner.exe"; Parameters: "--model crt --system-floppy"; Description: "Launch partner"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\partner-classic.bat"; WorkingDir: "{app}"; Description: "Launch partner-classic"; Flags: nowait postinstall skipifsilent

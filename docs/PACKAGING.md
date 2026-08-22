@@ -23,17 +23,18 @@ in the user's platform application-data directory. Every platform retains the
 original multi-resolution files as `assets/icons/partner.ico` and
 `assets/icons/mcp.ico`, in addition to its native icon representation.
 
-Windows uses a deliberately flatter version of the same tree. `partner.exe`
-and `idp-mcp.exe` live at the root copied to `Program Files\Iskra Delta Partner
-Emulator`; `roms`, `disks`, `assets`, and `docs` remain resource
-subdirectories. Third-party libraries and the MSVC runtime are linked
-statically. Windows system DLLs are never packaged, because local copies would
-override the target machine's compatible versions. `partner_cmos.bin` is
-installed at the root and copied to the user's application-data directory on
-first launch. The installer creates `partner` and `partnerg` Start Menu
-shortcuts. `partner` boots the CRT model with `fdd-partner-p.img` in drive 0;
-`partnerg` boots the GDP model with `hdd-partner-g-system.img` attached. The
-optional desktop-shortcut task creates the same pair.
+Windows uses a deliberately flatter version of the same tree. `partner.exe`,
+`idp-mcp.exe`, `partner-classic.bat`, and `partner-graphical.bat` live at the
+root copied to `Program Files\Iskra Delta Partner Emulator`; `roms`, `disks`,
+`assets`, and `docs` remain resource subdirectories. Third-party libraries and
+the MSVC runtime are linked statically. Windows system DLLs are never packaged,
+because local copies would override the target machine's compatible versions.
+`partner_cmos.bin` is installed at the root and copied to the user's
+application-data directory on first launch. `partner-classic` boots the CRT
+model with `fdd-partner-p.img` in drive 0; `partner-graphical` boots the GDP
+model with `hdd-partner-g-system.img` attached. The installer creates matching
+Start Menu shortcuts, and its optional desktop-shortcut task creates the same
+pair.
 
 The Ubuntu package installs `partner` and `partnerg` commands in `/usr/bin`
 and matching desktop entries. The macOS package installs the same command
@@ -42,8 +43,8 @@ the writable system-media profiles described above. The macOS MCP component
 has its own app and icon as well. All three macOS apps delegate to the single
 resource-bearing Partner bundle, so libraries and 41 MiB of disk images are
 not duplicated. Windows provides the two equivalent Start Menu and optional
-desktop shortcuts. Package construction validates the launchers, icons, and
-byte-for-byte CMOS seed before producing an installer.
+desktop shortcuts. Package construction validates the batch launchers, icons,
+and byte-for-byte CMOS seed before producing an installer.
 
 To stage a clean release tree explicitly:
 

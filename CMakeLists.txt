@@ -85,6 +85,17 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
+set(IDP_IMGUI_OPENGL3_BACKEND
+    "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp")
+if(WIN32)
+    # The application already initializes GLEW after creating its OpenGL
+    # context. Reuse that loader in Dear ImGui as well: ImGui's private GL3W
+    # loader can fail on otherwise valid fresh Windows installations even
+    # after GLEW has loaded the same context successfully.
+    set(IDP_IMGUI_OPENGL3_BACKEND
+        "${CMAKE_SOURCE_DIR}/src/gui/imgui_impl_opengl3_glew.cpp")
+endif()
+
 add_library(imgui_lib STATIC
     ${imgui_SOURCE_DIR}/imgui.cpp
     ${imgui_SOURCE_DIR}/imgui_demo.cpp
@@ -92,13 +103,16 @@ add_library(imgui_lib STATIC
     ${imgui_SOURCE_DIR}/imgui_tables.cpp
     ${imgui_SOURCE_DIR}/imgui_widgets.cpp
     ${imgui_SOURCE_DIR}/backends/imgui_impl_sdl2.cpp
-    ${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp
+    ${IDP_IMGUI_OPENGL3_BACKEND}
 )
 target_include_directories(imgui_lib PUBLIC
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
 )
 target_link_libraries(imgui_lib PUBLIC SDL2::SDL2 OpenGL::GL)
+if(WIN32)
+    target_link_libraries(imgui_lib PUBLIC GLEW::GLEW)
+endif()
 
 # --- udap DAP debugger (https://github.com/retro-vault/udap) ---
 # Sources are fetched by the Makefile into third_party/udap (gitignored,
