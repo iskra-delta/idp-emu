@@ -31,8 +31,9 @@ the MSVC runtime are linked statically. Windows system DLLs are never packaged,
 because local copies would override the target machine's compatible versions.
 `partner_cmos.bin` is installed at the root and copied to the user's
 application-data directory on first launch. `partner-classic` boots the CRT
-model with `fdd-partner-p.img` in drive 0; `partner-graphical` boots the GDP
-model with `hdd-partner-g-system.img` attached. The installer creates matching
+model with `fdd-partner-p.img` in drive 0 and selects firmware floppy boot;
+`partner-graphical` boots the GDP model with `hdd-partner-g-system.img`
+attached. The installer creates matching
 Start Menu shortcuts, and its optional desktop-shortcut task creates the same
 pair.
 

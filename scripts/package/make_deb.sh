@@ -50,6 +50,10 @@ test -x "$install_root/bin/partner"
 test -x "$install_root/bin/partnerg"
 "$install_root/bin/partner" --help >/dev/null 2>&1
 "$install_root/bin/partnerg" --help >/dev/null 2>&1
+grep -Fq -- '--model crt --system-floppy --boot floppy "$@"' \
+    "$install_root/bin/partner"
+grep -Fq -- '--model gdp --system-hdd "$@"' \
+    "$install_root/bin/partnerg"
 for size in 16 24 32 48 64 128 256; do
     test -s "$icon_theme_root/${size}x${size}/apps/iskra-delta-partner.png"
     test -s "$icon_theme_root/${size}x${size}/apps/iskra-delta-partner-mcp.png"

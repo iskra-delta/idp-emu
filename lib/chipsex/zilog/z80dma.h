@@ -599,24 +599,13 @@ uint64_t z80dma_write(z80dma_t *dma, uint8_t data)
                 return dma->pins;
             case 7:
                 /*
-                    The next byte is the fixed-I/O timing/control value (0x8A
-                    in the ROM tables). Swallow it here so the generic decoder
-                    doesn't reinterpret it as WR2 and accidentally switch port
-                    B back to memory mode.
+                    The 0x95 form used by the CRT boot ROM has two filler bytes
+                    after the fixed I/O port. Swallow the second one here; the
+                    following byte is the fixed-I/O timing/control value 0x8A.
+                    The shorter 0x85 form enters state 9 directly.
                 */
-                dma->port_b.timing = data;
                 dma->port_b.is_memory = false;
-                /*
-                    Partner DMA tables continue with the trailer:
-
-                        CF 01 CF 87
-
-                    Keep consuming that sequence here instead of dropping back
-                    into the generic decoder, otherwise the literal 0x01 is
-                    treated as WR0 and silently flips A->B write transfers
-                    back into B->A reads.
-                */
-                dma->compat_state = 10;
+                dma->compat_state = 9;
                 return dma->pins;
             case 8:
                 /*
@@ -633,6 +622,16 @@ uint64_t z80dma_write(z80dma_t *dma, uint8_t data)
                 dma->compat_state = 9;
                 return dma->pins;
             case 9:
+                /*
+                    Fixed-I/O timing/control, followed by the Partner trailer:
+
+                        CF 01 CF 87   (device -> RAM)
+                        CF 05 CF 87   (RAM -> device)
+
+                    Keep consuming the trailer here instead of dropping into
+                    the generic decoder, where its literals look like unrelated
+                    register commands.
+                */
                 dma->port_b.timing = data;
                 dma->port_b.is_memory = false;
                 dma->compat_state = 10;

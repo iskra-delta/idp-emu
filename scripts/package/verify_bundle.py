@@ -27,7 +27,7 @@ REQUIRED_MEDIA = (
     "disks/hdd-partner-g-system.img",
 )
 WINDOWS_LAUNCHERS = {
-    "partner-classic.bat": "--model crt --system-floppy",
+    "partner-classic.bat": "--model crt --system-floppy --boot floppy",
     "partner-graphical.bat": "--model gdp --system-hdd",
 }
 

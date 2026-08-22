@@ -375,6 +375,25 @@ static int test_partner_dma_compat_direction_trailer()
     CHECK(dma.port_a.block_length == 256u);
     CHECK(dma.enabled);
 
+    const uint8_t crt_prefix[] = {
+        0x79, 0x00, 0xE0, 0xFF, 0x00, // RAM address 0xE000, 256 bytes
+        0x14, 0x28, 0x95, 0xF1, 0x0C, 0xFF, 0x8A, // CRT ROM long form
+        0xCF
+    };
+    z80dma_reset(&dma);
+    for (uint8_t byte : crt_prefix)
+        z80dma_write(&dma, byte);
+    z80dma_write(&dma, 0x01); // CRT floppy read: port B -> port A
+    z80dma_write(&dma, 0xCF);
+    z80dma_write(&dma, 0x87);
+    CHECK(!dma.direction_ab);
+    CHECK(dma.port_a.is_memory);
+    CHECK(!dma.port_b.is_memory);
+    CHECK(dma.port_b.address == 0x00F1u);
+    CHECK(dma.port_a.address == 0xE000u);
+    CHECK(dma.port_a.block_length == 256u);
+    CHECK(dma.enabled);
+
 #undef CHECK
     return fails;
 }

@@ -76,6 +76,25 @@ target_link_libraries(test_partner_crt_terminal PRIVATE chipsex SDL2::SDL2 OpenG
 
 add_test(NAME partner_crt_terminal COMMAND test_partner_crt_terminal)
 
+add_executable(test_partner_crt_boot
+    test_partner_crt_boot.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_crt.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partner_crt_boot PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partner_crt_boot PRIVATE
+    GL_GLEXT_PROTOTYPES
+    IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+)
+target_link_libraries(test_partner_crt_boot PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
+
+add_test(NAME partner_crt_boot_integration COMMAND test_partner_crt_boot)
+
 add_executable(test_z80pio
     test_z80pio.cpp
 )

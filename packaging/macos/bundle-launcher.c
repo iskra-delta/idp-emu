@@ -51,7 +51,9 @@ int main(int argc, char **argv)
         return 127;
     }
 
-    const size_t default_count = IDP_LAUNCH_PROFILE == 0 ? 0U : 3U;
+    const size_t default_count = IDP_LAUNCH_PROFILE == 0 ? 0U
+                               : IDP_LAUNCH_PROFILE == 1 ? 5U
+                                                        : 3U;
     char **target_argv = calloc((size_t)argc + default_count + 1U,
                                 sizeof(*target_argv));
     if (!target_argv) {
@@ -65,6 +67,8 @@ int main(int argc, char **argv)
         target_argv[next++] = "--model";
         target_argv[next++] = "crt";
         target_argv[next++] = "--system-floppy";
+        target_argv[next++] = "--boot";
+        target_argv[next++] = "floppy";
     } else if (IDP_LAUNCH_PROFILE == 2) {
         target_argv[next++] = "--model";
         target_argv[next++] = "gdp";
