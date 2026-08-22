@@ -1,11 +1,19 @@
 Iskra Delta Partner Emulator @PROJECT_VERSION@
 
 Runtime layout:
+  ./         Partner CMOS seed (partner_cmos.bin)
   bin/       Native executables
   shared/    Bundled non-system runtime libraries
   roms/      Original Partner CRT and GDP ROM images
   disks/     Writable seed floppy/hard-disk images (copied per user on first use)
-  assets/    Fonts and UI assets
+  assets/    Fonts, application icon, and UI assets
+  docs/      Command-line and hardware documentation
+
+Windows layout:
+  ./         partner.exe, idp-mcp.exe, partner_cmos.bin, and bundled DLLs
+  roms/      Original Partner CRT and GDP ROM images
+  disks/     Writable seed floppy/hard-disk images (copied per user on first use)
+  assets/    Fonts, application icon, and UI assets
   docs/      Command-line and hardware documentation
 
 Package version: @PROJECT_VERSION@

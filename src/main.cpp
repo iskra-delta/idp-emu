@@ -426,8 +426,9 @@ int main(int argc, char **argv)
                                                   : std::string{});
             const std::string selected_nvram =
                 nvram_explicit ? nvram_file :
-                runtime_paths::user_file(is_partos_rom_path(selected_rom)
-                    ? DEFAULT_PARTOS_NVRAM : DEFAULT_PARTNER_NVRAM).string();
+                (is_partos_rom_path(selected_rom)
+                    ? runtime_paths::user_file(DEFAULT_PARTOS_NVRAM).string()
+                    : runtime_paths::mutable_resource_copy(DEFAULT_PARTNER_NVRAM));
             const bool auto_insert_floppy = selected_hdd.empty() || fd0_explicit || is_partos_rom_path(selected_rom);
             std::cout << "[info] model=" << (want_gdp ? "gdp" : "crt")
                       << " rom=" << selected_rom

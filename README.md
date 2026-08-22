@@ -190,11 +190,12 @@ The generated `bin/` directory is a complete copyable runtime tree:
 
 ```text
 bin/
+  partner_cmos.bin  initial Partner CMOS image
   bin/       idp-emu and idp-mcp
   shared/    bundled dynamic libraries, when static linking is unavailable
   roms/      CRT and GDP firmware
   disks/     original and initial boot media
-  assets/    UI fonts and other runtime data
+  assets/    application icon, UI fonts, and other runtime data
   docs/      command-line help and release manifest
 ```
 
@@ -202,6 +203,11 @@ Default disks are copied into the platform's per-user application-data
 directory before the emulator writes them. Installed seed images therefore
 remain reusable. See [Packaging and releases](docs/PACKAGING.md) for build,
 installer, architecture, and tagging details.
+
+The Windows package is flat where loader discovery matters: `partner.exe`,
+`idp-mcp.exe`, and bundled DLLs are installed together in the application
+folder under Program Files. The CMOS seed is copied from that folder into the
+user's application-data directory on first launch.
 
 ## Acknowledgments
 

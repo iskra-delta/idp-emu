@@ -43,6 +43,22 @@ add_executable(idp-emu ${IDP_CORE_SOURCES} ${IDP_GUI_SOURCES})
 target_link_libraries(idp-emu PRIVATE chipsex imgui_lib SDL2::SDL2 PNG::PNG OpenGL::GL Threads::Threads udap_dap udap_sdcc)
 target_compile_definitions(idp-emu PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
+if(WIN32)
+    # Keep the user-facing executable name and icon consistent across the
+    # installer, portable archive, Start Menu, and desktop shortcut.
+    set(IDP_WINDOWS_ICON
+        "${CMAKE_SOURCE_DIR}/packaging/windows/assets/partner.ico")
+    configure_file(
+        "${CMAKE_SOURCE_DIR}/packaging/windows/partner.rc.in"
+        "${CMAKE_CURRENT_BINARY_DIR}/partner.rc"
+        @ONLY)
+    set_source_files_properties(
+        "${CMAKE_CURRENT_BINARY_DIR}/partner.rc"
+        PROPERTIES OBJECT_DEPENDS "${IDP_WINDOWS_ICON}")
+    target_sources(idp-emu PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/partner.rc")
+    set_target_properties(idp-emu PROPERTIES OUTPUT_NAME partner)
+endif()
+
 if(IDP_BUILD_PROBES)
     add_executable(idp-probe probe_floppy.cpp ${IDP_CORE_SOURCES})
     target_link_libraries(idp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
@@ -74,14 +90,21 @@ target_compile_definitions(idp-mcp PRIVATE
     $<$<CONFIG:Debug>:IDP_DEBUG>
 )
 
+set(IDP_PROGRAM_INSTALL_DIRECTORY bin)
+if(WIN32)
+    # Windows resolves application DLLs most reliably beside the executable.
+    # The installer copies this staged root directly into Program Files.
+    set(IDP_PROGRAM_INSTALL_DIRECTORY .)
+endif()
+
 install(TARGETS idp-emu idp-mcp
     RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
-    RUNTIME DESTINATION bin
-    BUNDLE DESTINATION bin)
+    RUNTIME DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}"
+    BUNDLE DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}")
 
 if(WIN32)
     install(RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
-        DESTINATION shared
+        DESTINATION .
         PRE_EXCLUDE_REGEXES
             "^api-ms-.*"
             "^ext-ms-.*"
@@ -120,6 +143,7 @@ install(FILES
     "${CMAKE_SOURCE_DIR}/roms/partner_crt.rom"
     "${CMAKE_SOURCE_DIR}/roms/partner_gdp.rom"
     DESTINATION roms)
+install(FILES "${CMAKE_SOURCE_DIR}/partner_cmos.bin" DESTINATION .)
 install(DIRECTORY "${CMAKE_SOURCE_DIR}/disks/" DESTINATION disks
         FILES_MATCHING PATTERN "*.img")
 install(FILES
@@ -128,8 +152,10 @@ install(FILES
     "${CMAKE_SOURCE_DIR}/docs/PACKAGING.md"
     "${CMAKE_BINARY_DIR}/release-manifest.txt"
     DESTINATION docs)
-install(FILES "${CMAKE_SOURCE_DIR}/packaging/shared-README.txt"
-        DESTINATION shared RENAME README.txt)
+if(NOT WIN32)
+    install(FILES "${CMAKE_SOURCE_DIR}/packaging/shared-README.txt"
+            DESTINATION shared RENAME README.txt)
+endif()
 
 # Optional: define your own debug macro if needed
 target_compile_definitions(idp-emu PRIVATE GL_GLEXT_PROTOTYPES $<$<CONFIG:Debug>:IDP_DEBUG>)

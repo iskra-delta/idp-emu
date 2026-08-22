@@ -5,6 +5,7 @@
   <key>CFBundleDevelopmentRegion</key><string>en</string>
   <key>CFBundleDisplayName</key><string>Iskra Delta Partner</string>
   <key>CFBundleExecutable</key><string>idp-emu</string>
+  <key>CFBundleIconFile</key><string>partner.icns</string>
   <key>CFBundleIdentifier</key><string>org.iskradelta.partner-emulator</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
   <key>CFBundleName</key><string>Iskra Delta Partner</string>

@@ -17,7 +17,13 @@ fs::path executable_directory()
         return {};
     fs::path result(base);
     SDL_free(base);
-    return result.lexically_normal();
+    result = result.lexically_normal();
+    // SDL returns a directory with a trailing separator. std::filesystem
+    // represents that as an empty filename, so parent_path() would otherwise
+    // return the same directory instead of the bundle root one level above.
+    if (result.filename().empty())
+        result = result.parent_path();
+    return result;
 }
 
 std::vector<fs::path> resource_candidates(const fs::path &relative)

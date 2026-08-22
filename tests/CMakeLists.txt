@@ -197,6 +197,16 @@ target_link_libraries(test_rtc_nvram_shadow PRIVATE chipsex)
 
 add_test(NAME rtc_nvram_shadow COMMAND test_rtc_nvram_shadow)
 
+add_executable(test_runtime_paths
+    test_runtime_paths.cpp
+    ../src/runtime_paths.cpp
+)
+
+target_include_directories(test_runtime_paths PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_link_libraries(test_runtime_paths PRIVATE SDL2::SDL2)
+
+add_test(NAME runtime_paths_unit COMMAND test_runtime_paths)
+
 add_test(NAME mcp_stdio
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_mcp_stdio.py
             $<TARGET_FILE:idp-mcp>)

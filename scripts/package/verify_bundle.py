@@ -10,12 +10,16 @@ from pathlib import Path
 import re
 import shutil
 import subprocess
+import struct
 import sys
 import tempfile
 
 
-REQUIRED_DIRECTORIES = ("bin", "shared", "roms", "disks", "assets", "docs")
+COMMON_REQUIRED_DIRECTORIES = ("roms", "disks", "assets", "docs")
+EXPECTED_CMOS = bytes.fromhex("00 40 80 1b 40 00 90 44")
+ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 REQUIRED_MEDIA = (
+    "partner_cmos.bin",
     "roms/partner_crt.rom",
     "roms/partner_gdp.rom",
     "disks/fdd-partner-p.img",
@@ -44,6 +48,27 @@ def run(command: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
     return result
+
+
+def verify_png_icon(path: Path, expected_size: int) -> None:
+    data = path.read_bytes()
+    header = data[:26]
+    if len(header) != 26 or header[:8] != b"\x89PNG\r\n\x1a\n":
+        fail(f"application icon is not a PNG: {path}")
+    width, height = struct.unpack(">II", header[16:24])
+    if (width, height) != (expected_size, expected_size):
+        fail(
+            f"application icon must be {expected_size}x{expected_size}, "
+            f"got {width}x{height}: {path}"
+        )
+    offset = 8
+    chunks: set[bytes] = set()
+    while offset + 12 <= len(data):
+        chunk_size = struct.unpack(">I", data[offset:offset + 4])[0]
+        chunks.add(data[offset + 4:offset + 8])
+        offset += chunk_size + 12
+    if header[25] not in (4, 6) and b"tRNS" not in chunks:
+        fail("application icon PNG must carry an alpha channel")
 
 
 def verify_linux_dependencies(executable: Path, root: Path) -> None:
@@ -82,6 +107,14 @@ def verify_macos_dependencies(executable: Path, root: Path) -> None:
 
 
 def verify_windows_dependencies(executable: Path, root: Path) -> None:
+    nested_dlls = sorted(
+        str(path.relative_to(root))
+        for path in root.rglob("*.dll")
+        if path.parent != root
+    )
+    if nested_dlls:
+        fail(f"Windows DLLs must be beside partner.exe: {nested_dlls}")
+
     # Loading the executable from an unrelated directory catches missing DLLs.
     # Release CI uses the x64-windows-static vcpkg triplet and static MSVC CRT;
     # dumpbin adds an explicit check when it is available in the runner image.
@@ -95,11 +128,7 @@ def verify_windows_dependencies(executable: Path, root: Path) -> None:
         if line.strip().lower().endswith(".dll")
     }
     system32 = Path(os.environ.get("SystemRoot", r"C:\Windows")) / "System32"
-    local_names = {
-        path.name.upper()
-        for directory in (root / "bin", root / "shared")
-        for path in directory.glob("*.dll")
-    }
+    local_names = {path.name.upper() for path in root.glob("*.dll")}
     unexpected = sorted(
         dependency
         for dependency in dependencies
@@ -107,6 +136,23 @@ def verify_windows_dependencies(executable: Path, root: Path) -> None:
     )
     if unexpected:
         fail(f"non-system Windows DLL dependencies: {', '.join(unexpected)}")
+
+
+def verify_windows_icon(executable: Path) -> None:
+    import ctypes
+
+    extract_icon = ctypes.windll.shell32.ExtractIconExW
+    extract_icon.argtypes = (
+        ctypes.c_wchar_p,
+        ctypes.c_int,
+        ctypes.c_void_p,
+        ctypes.c_void_p,
+        ctypes.c_uint,
+    )
+    extract_icon.restype = ctypes.c_uint
+    icon_count = extract_icon(str(executable), -1, None, None, 0)
+    if icon_count < 1:
+        fail(f"Windows executable has no embedded application icon: {executable}")
 
 
 def main() -> int:
@@ -117,7 +163,10 @@ def main() -> int:
     args = parser.parse_args()
 
     root = args.root.resolve()
-    for directory in REQUIRED_DIRECTORIES:
+    required_directories = COMMON_REQUIRED_DIRECTORIES
+    if args.platform != "windows":
+        required_directories += ("bin", "shared")
+    for directory in required_directories:
         if not (root / directory).is_dir():
             fail(f"missing bundle directory: {directory}")
     for relative in REQUIRED_MEDIA:
@@ -127,19 +176,33 @@ def main() -> int:
     for rom in (root / "roms").glob("*.rom"):
         if rom.stat().st_size != 2048:
             fail(f"Partner ROM must be exactly 2048 bytes: {rom}")
+    cmos = (root / "partner_cmos.bin").read_bytes()
+    if cmos != EXPECTED_CMOS:
+        fail("Partner CMOS seed is not the expected eight-byte image")
+    for size in ICON_SIZES:
+        name = "partner.png" if size == 256 else f"partner-{size}.png"
+        verify_png_icon(root / "assets/icons" / name, size)
 
     suffix = ".exe" if args.platform == "windows" else ""
-    gui = root / "bin" / f"idp-emu{suffix}"
-    mcp = root / "bin" / f"idp-mcp{suffix}"
+    if args.platform == "windows":
+        gui = root / "partner.exe"
+        mcp = root / "idp-mcp.exe"
+        for obsolete_directory in ("bin", "shared"):
+            if (root / obsolete_directory).exists():
+                fail(f"Windows programs and DLLs must not use {obsolete_directory}/")
+    else:
+        gui = root / "bin" / f"idp-emu{suffix}"
+        mcp = root / "bin" / f"idp-mcp{suffix}"
     for executable in (gui, mcp):
         if not executable.is_file():
             fail(f"missing executable: {executable}")
+    program_directory = root if args.platform == "windows" else root / "bin"
     unexpected_programs = {
-        path.name for path in (root / "bin").iterdir()
-        if path.is_file()
+        path.name for path in program_directory.iterdir()
+        if path.is_file() and path.suffix.lower() in ("", ".exe")
     } - {gui.name, mcp.name}
     if unexpected_programs:
-        fail(f"unexpected files in runtime bin/: {sorted(unexpected_programs)}")
+        fail(f"unexpected runtime programs: {sorted(unexpected_programs)}")
 
     with tempfile.TemporaryDirectory(prefix="idp-bundle-check-") as temporary:
         work = Path(temporary)
@@ -160,6 +223,8 @@ def main() -> int:
     }[args.platform]
     for executable in (gui, mcp):
         checker(executable, root)
+    if args.platform == "windows":
+        verify_windows_icon(gui)
 
     print(f"verified {args.platform} release tree at {root}")
     return 0

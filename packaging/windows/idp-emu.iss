@@ -23,18 +23,19 @@ ArchitecturesInstallIn64BitMode=x64compatible
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-UninstallDisplayIcon={app}\bin\idp-emu.exe
+SetupIconFile=assets\partner.ico
+UninstallDisplayIcon={app}\partner.exe
 ChangesEnvironment=no
 
 [Files]
 Source: "{#SourceDir}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{autoprograms}\Iskra Delta Partner Emulator"; Filename: "{app}\bin\idp-emu.exe"; WorkingDir: "{app}"
-Name: "{autodesktop}\Iskra Delta Partner Emulator"; Filename: "{app}\bin\idp-emu.exe"; WorkingDir: "{app}"; Tasks: desktopicon
+Name: "{autoprograms}\Iskra Delta Partner Emulator"; Filename: "{app}\partner.exe"; WorkingDir: "{app}"
+Name: "{autodesktop}\Iskra Delta Partner Emulator"; Filename: "{app}\partner.exe"; WorkingDir: "{app}"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a &desktop shortcut"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Run]
-Filename: "{app}\bin\idp-emu.exe"; Description: "Launch Iskra Delta Partner Emulator"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\partner.exe"; Description: "Launch Iskra Delta Partner Emulator"; Flags: nowait postinstall skipifsilent
