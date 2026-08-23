@@ -37,6 +37,14 @@ floppy. The installer creates matching
 Start Menu shortcuts, and its optional desktop-shortcut task creates the same
 pair.
 
+System hard disks are copied to the per-user data directory because CP/M must
+be able to write to them. Each copy carries a fingerprint of its packaged seed.
+When an upgraded package contains a changed seed, the emulator activates that
+seed and preserves the old writable image beside it with a `.previous` suffix.
+Guest changes remain untouched while the packaged seed is unchanged. Packaged
+resources also take precedence over same-named files in the launch directory,
+preventing an installed executable from mixing files from a source checkout.
+
 The packaged CMOS seed selects the GDP BIOS ANSI terminal mode and carries a
 valid NVRAM checksum. Recreate it after changing its defaults with
 `python3 tools/make_partner_cmos.py`; package verification checks the exact
