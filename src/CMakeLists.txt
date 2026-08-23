@@ -189,14 +189,15 @@ if(UNIX)
         DESTINATION bin)
 endif()
 install(FILES
-    "${CMAKE_SOURCE_DIR}/README.md"
     "${CMAKE_SOURCE_DIR}/docs/COMMAND-LINE.md"
     "${CMAKE_SOURCE_DIR}/docs/PACKAGING.md"
     "${CMAKE_BINARY_DIR}/release-manifest.txt"
     DESTINATION docs)
 if(NOT WIN32)
-    install(FILES "${CMAKE_SOURCE_DIR}/packaging/shared-README.txt"
-            DESTINATION shared RENAME README.txt)
+    # Keep the runtime layout stable even when every dependency is static.
+    # An empty directory is sufficient; do not add a README placeholder.
+    install(CODE
+        "file(MAKE_DIRECTORY \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/shared\")")
 endif()
 
 # Optional: define your own debug macro if needed

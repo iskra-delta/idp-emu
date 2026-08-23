@@ -38,6 +38,12 @@ Type: files; Name: "{app}\*.dll"
 Type: files; Name: "{app}\idp-emu.exe"
 Type: filesandordirs; Name: "{app}\bin"
 Type: filesandordirs; Name: "{app}\shared"
+; Remove README files left by older packages. Release packages intentionally
+; contain no README on any supported platform.
+Type: files; Name: "{app}\README.md"
+Type: files; Name: "{app}\README.txt"
+Type: files; Name: "{app}\docs\README.md"
+Type: files; Name: "{app}\docs\README.txt"
 ; Retire the old ambiguously named shortcuts when upgrading an installation.
 Type: files; Name: "{autoprograms}\partner.lnk"
 Type: files; Name: "{autoprograms}\partnerg.lnk"

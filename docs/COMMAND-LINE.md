@@ -1,14 +1,16 @@
 # Command-Line Reference
 
-Run the emulator as:
+Use the installed launch profiles for normal operation:
 
 ```bash
-./bin/bin/idp-emu [options]
+partnerp [options]  # Partner P/CRT system hard disk
+partnerg [options]  # Partner G/GDP system hard disk
 ```
 
-`./bin/bin/idp-emu --help` prints the same complete option list. Unknown options,
-missing values, invalid enumerated values, invalid ports, and malformed command
-escapes stop startup with an error.
+For lower-level configuration, run `idp-emu [options]` on Linux or macOS, or
+`partner.exe [options]` on Windows. `--help` prints the complete option list.
+Unknown options, missing values, invalid enumerated values, invalid ports, and
+malformed command escapes stop startup with an error.
 
 ## Options
 
@@ -69,7 +71,7 @@ Attach a Covox to main PIO port A and pass the corresponding port number to a
 guest program:
 
 ```bash
-./bin/bin/idp-emu --model gdp --hdd disks/music.img \
+idp-emu --model gdp --hdd disks/music.img \
   --covox-port 1 --commands 'player 1\n'
 ```
 
@@ -115,7 +117,7 @@ the order supplied. They do not add separators automatically.
 For example, boot a GDP Partner and run `dir` at the CP/M prompt:
 
 ```bash
-./bin/bin/idp-emu \
+idp-emu \
   --model gdp \
   --rom roms/partner_gdp.rom \
   --hdd disks/hdd-partner-g-system.img \
@@ -126,7 +128,7 @@ For example, boot a GDP Partner and run `dir` at the CP/M prompt:
 Send two command lines using repeated options:
 
 ```bash
-./bin/bin/idp-emu \
+idp-emu \
   --commands 'b:\n' \
   --commands 'test\n'
 ```
@@ -135,14 +137,14 @@ Override the safe 350 ms typing interval only when the guest is known to
 accept input faster:
 
 ```bash
-./bin/bin/idp-emu --commands 'dir\n' --type-interval 100
+idp-emu --commands 'dir\n' --type-interval 100
 ```
 
 Keep normal typing speed but allow a drive-change command to finish before the
 next command starts:
 
 ```bash
-./bin/bin/idp-emu --commands 'b:\nmavrica\n' \
+idp-emu --commands 'b:\nmavrica\n' \
   --type-interval 350 --type-enter-delay 2000
 ```
 
@@ -151,7 +153,7 @@ next command starts:
 Partner P/CRT with a floppy in drive 0:
 
 ```bash
-./bin/bin/idp-emu \
+idp-emu \
   --model crt \
   --rom roms/partner_crt.rom \
   --fd0 disks/fdd-partner-p.img
@@ -160,7 +162,7 @@ Partner P/CRT with a floppy in drive 0:
 Partner P/CRT with the bootable system hard disk:
 
 ```bash
-./bin/bin/idp-emu --model crt --system-crt-hdd
+idp-emu --model crt --system-crt-hdd
 ```
 
 The CRT hard disk uses the same CP/M files and Xebec/SASI geometry as the
@@ -170,7 +172,7 @@ disabled, and the loader-configured CRT SIO channel retained.
 Partner G/GDP with a hard disk and VT100 terminal behavior:
 
 ```bash
-./bin/bin/idp-emu \
+idp-emu \
   --model gdp \
   --rom roms/partner_gdp.rom \
   --hdd disks/hdd-partner-g.img \
@@ -180,7 +182,7 @@ Partner G/GDP with a hard disk and VT100 terminal behavior:
 Attach two floppy images and start the debug server:
 
 ```bash
-./bin/bin/idp-emu \
+idp-emu \
   --fd0 disks/system.img \
   --fd1 disks/data.img \
   --dap 4711

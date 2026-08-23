@@ -5,6 +5,9 @@ set -eu
 # Writable CMOS and disk copies live in the user's application-data directory,
 # so removing this obsolete application bundle does not remove user media.
 rm -f "/usr/local/bin/partner"
-rm -rf "/Applications/Iskra Delta Partner.app"
+rm -rf "/Applications/Iskra Delta Partner.app" \
+       "/Applications/Iskra Delta Partner P.app" \
+       "/Applications/Iskra Delta Partner G.app" \
+       "/Applications/Iskra Delta Partner MCP.app"
 
 exit 0
