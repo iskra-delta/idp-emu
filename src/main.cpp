@@ -32,6 +32,7 @@ constexpr const char *DEFAULT_PARTOS_NVRAM = "partos/partos_shadow_nvram.bin";
 constexpr const char *DEFAULT_PARTNER_NVRAM = "partner_cmos.bin";
 constexpr const char *DEFAULT_LEGACY_CRT_ROM = "roms/partner_crt.rom";
 constexpr const char *DEFAULT_PARTNER_SYSTEM_FD0 = "disks/fdd-partner-p.img";
+constexpr const char *DEFAULT_PARTNER_P_SYSTEM_HDD = "disks/hdd-partner-p-system.img";
 constexpr const char *DEFAULT_PARTNER_G_SYSTEM_HDD = "disks/hdd-partner-g-system.img";
 constexpr const char *DEFAULT_PARTOS_FD0 = "disks/fdd-dos.img";
 constexpr const char *DEFAULT_PARTOS_HDD = "disks/hdd-dos.img";
@@ -113,6 +114,7 @@ void print_usage(const char *prog)
     std::cerr << "  --hdd FILE             Hard disk image for Xebec/SASI controller\n";
     std::cerr << "                         (auto-attached for the default PartOS ROM)\n";
     std::cerr << "  --system-floppy        Writable copy of the Partner P system floppy\n";
+    std::cerr << "  --system-crt-hdd       Writable copy of the Partner P CRT system hard disk\n";
     std::cerr << "  --system-hdd           Writable copy of the Partner G system hard disk\n";
     std::cerr << "  --boot TYPE            Firmware boot target: default|floppy\n";
     std::cerr << "  --nvram FILE           Shadow MM58167 NVRAM backing file\n";
@@ -122,6 +124,8 @@ void print_usage(const char *prog)
     std::cerr << "  --covox-port PORT      Attach Covox to main PIO: 1=A, 2=B\n";
     std::cerr << "  --sio-tcp PORT DATA CONTROL\n";
     std::cerr << "                         Attach PAKET port 2, 3, or 4 to a TCP bridge\n";
+    std::cerr << "  --sio-squid PORT       Attach internal Squid/Retro Vault to port 2, 3, or 4\n";
+    std::cerr << "                         (Partner CRT and G default: port 2)\n";
     std::cerr << "  --dap PORT             Start the udap DAP server on 127.0.0.1:PORT\n";
     std::cerr << "  --commands TEXT        Type TEXT after the GUI opens; may be repeated\n";
     std::cerr << "  --command TEXT         Alias for --commands\n";
@@ -146,6 +150,7 @@ int main(int argc, char **argv)
     int sio_tcp_port = 0;
     int sio_tcp_data_port = 0;
     int sio_tcp_control_port = 0;
+    int sio_squid_port = 0;
     bool fd0_explicit = false;
     bool fd1_explicit = false;
     bool packaged_system_fd0 = false;
@@ -201,6 +206,12 @@ int main(int argc, char **argv)
         {
             hdd_file = DEFAULT_PARTNER_G_SYSTEM_HDD;
             packaged_system_hdd = true;
+        }
+        else if (strcmp(argv[i], "--system-crt-hdd") == 0)
+        {
+            hdd_file = DEFAULT_PARTNER_P_SYSTEM_HDD;
+            packaged_system_hdd = true;
+            auto_boot_floppy = false;
         }
         else if (strcmp(argv[i], "--boot") == 0)
         {
@@ -300,6 +311,21 @@ int main(int argc, char **argv)
                 return 1;
             }
         }
+        else if (strcmp(argv[i], "--sio-squid") == 0)
+        {
+            if ((i + 1) >= argc)
+            {
+                std::cerr << "Error: --sio-squid requires PORT\n";
+                return 1;
+            }
+            const char *port = argv[++i];
+            if ((port[1] != '\0') || (port[0] < '2') || (port[0] > '4'))
+            {
+                std::cerr << "Error: --sio-squid PORT must be 2, 3, or 4\n";
+                return 1;
+            }
+            sio_squid_port = port[0] - '0';
+        }
         else if (strcmp(argv[i], "--commands") == 0 ||
                  strcmp(argv[i], "--command") == 0 ||
                  strcmp(argv[i], "--type") == 0)
@@ -375,7 +401,7 @@ int main(int argc, char **argv)
             fd1_file = resolve_existing_path(fd1_file);
         if (!hdd_file.empty()) {
             hdd_file = packaged_system_hdd
-                ? runtime_paths::mutable_resource_copy(DEFAULT_PARTNER_G_SYSTEM_HDD)
+                ? runtime_paths::mutable_resource_copy(hdd_file)
                 : resolve_existing_path(hdd_file);
         }
         if (nvram_explicit)
@@ -495,6 +521,21 @@ int main(int argc, char **argv)
         };
 
         std::unique_ptr<partner> emu = make_emu(gdp_model);
+        if (sio_squid_port != 0)
+        {
+            const auto port = sio_squid_port == 2 ? partner::sio_port_id::sio1_b :
+                (sio_squid_port == 3 ? partner::sio_port_id::sio2_a
+                                     : partner::sio_port_id::sio2_b);
+            partner::sio_device_config config;
+            config.kind = partner::sio_device_kind::internal_squid;
+            if (!emu->set_sio_device_config(port, config))
+            {
+                std::cerr << "Error: could not attach internal Squid to SIO port\n";
+                return 1;
+            }
+            std::cout << "[info] internal Squid attached to PAKET port "
+                      << sio_squid_port << "\n";
+        }
         if (covox_port != 0)
         {
             const auto port = covox_port == 1 ? partner::pio_port_id::a

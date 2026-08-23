@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -16,19 +17,53 @@ import tempfile
 
 
 COMMON_REQUIRED_DIRECTORIES = ("roms", "disks", "assets", "docs")
-EXPECTED_CMOS = bytes.fromhex("00 40 80 1b 40 00 90 44")
+EXPECTED_CMOS = bytes.fromhex("00 00 80 08 40 00 90 4f")
+EXPECTED_PAKET_SIZE = 34162
+EXPECTED_PAKET_SHA256 = (
+    "808226bba339ab3c39bb78bc15209ec58659820525573c386a9372b06da6fded"
+)
+BASIC_CPM_FILES = {
+    "CCP.COM",
+    "CPM3.SYS",
+    "DATE.COM",
+    "DEVICE.COM",
+    "DIR.COM",
+    "DUMP.COM",
+    "ED.COM",
+    "ERASE.COM",
+    "FORMAT.COM",
+    "GENCOM.COM",
+    "GET.COM",
+    "HELP.COM",
+    "HELP.HLP",
+    "HEXCOM.COM",
+    "INITDIR.COM",
+    "PAKET.COM",
+    "PIP.COM",
+    "PUT.COM",
+    "RENAME.COM",
+    "SAVE.COM",
+    "SET.COM",
+    "SETDEF.COM",
+    "SHOW.COM",
+    "SUBMIT.COM",
+    "TYPE.COM",
+}
 ICON_SIZES = (16, 24, 32, 48, 64, 128, 256)
 REQUIRED_MEDIA = (
     "partner_cmos.bin",
     "roms/partner_crt.rom",
     "roms/partner_gdp.rom",
-    "disks/fdd-partner-p.img",
-    "disks/fdd-partner-g.img",
+    "disks/hdd-partner-p-system.img",
     "disks/hdd-partner-g-system.img",
 )
 WINDOWS_LAUNCHERS = {
-    "partner-classic.bat": "--model crt --system-floppy --boot floppy",
-    "partner-graphical.bat": "--model gdp --system-hdd",
+    "partnerp.bat": "--model crt --system-crt-hdd",
+    "partnerg.bat": "--model gdp --system-hdd",
+}
+PACKAGED_DISK_IMAGES = {
+    "hdd-partner-p-system.img",
+    "hdd-partner-g-system.img",
 }
 
 
@@ -94,6 +129,80 @@ def verify_ico_icon(path: Path) -> None:
         sizes.add(width)
     if sizes != set(ICON_SIZES):
         fail(f"application ICO has wrong image sizes {sorted(sizes)}: {path}")
+
+
+def extract_cpm_file(
+    path: Path,
+    directory_offset: int,
+    directory_entries: int,
+    expected_name: str,
+    block_size: int,
+    extent_mask: int = 0,
+    user: int = 0,
+) -> bytes:
+    image = path.read_bytes()
+    expected = expected_name.upper()
+    extents: list[tuple[int, bytes]] = []
+    for index in range(directory_entries):
+        offset = directory_offset + index * 32
+        entry = image[offset:offset + 32]
+        if len(entry) != 32 or entry[0] != user:
+            continue
+        name = "".join(chr(value & 0x7F) for value in entry[1:9]).rstrip()
+        suffix = "".join(chr(value & 0x7F) for value in entry[9:12]).rstrip()
+        actual = f"{name}.{suffix}" if suffix else name
+        if actual != expected:
+            continue
+        raw_extent = entry[12]
+        extent_number = (raw_extent & ~extent_mask) | ((entry[14] & 0x3F) << 5)
+        remaining = ((raw_extent & extent_mask) * 128 + entry[15]) * 128
+        extent = bytearray()
+        for allocation_offset in range(16, 32, 2):
+            block = int.from_bytes(
+                entry[allocation_offset:allocation_offset + 2], "little")
+            if block == 0 or remaining == 0:
+                break
+            block_offset = directory_offset + block * block_size
+            take = min(block_size, remaining)
+            extent.extend(image[block_offset:block_offset + take])
+            remaining -= take
+        if remaining != 0:
+            fail(f"CP/M file {expected} has a truncated extent in {path}")
+        extents.append((extent_number, bytes(extent)))
+    if not extents:
+        fail(f"CP/M user {user} file {expected} is missing from {path}")
+    extents.sort(key=lambda item: item[0])
+    expected_extent = 0
+    output = bytearray()
+    for extent_number, data in extents:
+        if extent_number != expected_extent:
+            fail(
+                f"CP/M file {expected} has an overlapping or missing "
+                f"extent in {path}"
+            )
+        output.extend(data)
+        expected_extent += (len(data) + 16383) // 16384
+    return bytes(output)
+
+
+def cpm_directory_files(
+    path: Path,
+    directory_offset: int,
+    directory_entries: int,
+) -> set[tuple[int, str]]:
+    image = path.read_bytes()
+    files: set[tuple[int, str]] = set()
+    for index in range(directory_entries):
+        offset = directory_offset + index * 32
+        entry = image[offset:offset + 32]
+        if len(entry) != 32 or entry[0] > 15:
+            continue
+        name = "".join(chr(value & 0x7F) for value in entry[1:9]).rstrip()
+        suffix = "".join(chr(value & 0x7F) for value in entry[9:12]).rstrip()
+        if not name:
+            continue
+        files.add((entry[0], f"{name}.{suffix}" if suffix else name))
+    return files
 
 
 def verify_linux_dependencies(executable: Path, root: Path) -> None:
@@ -199,6 +308,56 @@ def main() -> int:
         path = root / relative
         if not path.is_file() or path.stat().st_size == 0:
             fail(f"missing or empty release media: {relative}")
+    packaged_images = {path.name for path in (root / "disks").iterdir()}
+    if packaged_images != PACKAGED_DISK_IMAGES:
+        fail(
+            "release must contain only the two system hard disks; "
+            f"found={sorted(packaged_images)}"
+        )
+    # Extract and hash the universal client from both model-specific system
+    # media. This prevents either package profile from silently reverting to
+    # a missing, stale, or display-specific PAKET.COM.
+    packaged_pakets = (
+        extract_cpm_file(
+            root / "disks/hdd-partner-p-system.img",
+            1 * 32 * 256,
+            1024,
+            "PAKET.COM",
+            4096,
+            extent_mask=1,
+        ),
+        extract_cpm_file(
+            root / "disks/hdd-partner-g-system.img",
+            1 * 32 * 256,
+            1024,
+            "PAKET.COM",
+            4096,
+            extent_mask=1,
+        ),
+    )
+    for packaged_paket in packaged_pakets:
+        if len(packaged_paket) < EXPECTED_PAKET_SIZE:
+            fail("packaged PAKET.COM is truncated")
+        packaged_paket = packaged_paket[:EXPECTED_PAKET_SIZE]
+        if hashlib.sha256(packaged_paket).hexdigest() != EXPECTED_PAKET_SHA256:
+            fail("CP/M boot media contains the wrong PAKET.COM build")
+    expected_cpm_files = {(0, name) for name in BASIC_CPM_FILES}
+    for relative in (
+        "disks/hdd-partner-p-system.img",
+        "disks/hdd-partner-g-system.img",
+    ):
+        actual_cpm_files = cpm_directory_files(
+            root / relative,
+            1 * 32 * 256,
+            1024,
+        )
+        if actual_cpm_files != expected_cpm_files:
+            missing = sorted(expected_cpm_files - actual_cpm_files)
+            unexpected = sorted(actual_cpm_files - expected_cpm_files)
+            fail(
+                f"basic CP/M manifest mismatch in {relative}; "
+                f"missing={missing}, unexpected={unexpected}"
+            )
     for rom in (root / "roms").glob("*.rom"):
         if rom.stat().st_size != 2048:
             fail(f"Partner ROM must be exactly 2048 bytes: {rom}")
@@ -228,17 +387,46 @@ def main() -> int:
             expected_command = f'"%~dp0partner.exe" {arguments} %*'
             if expected_command not in launcher_text:
                 fail(f"Windows launcher has wrong command: {launcher}")
+        for obsolete in ("partner-classic.bat", "partner-graphical.bat"):
+            if (root / obsolete).exists():
+                fail(f"obsolete Windows launcher remains: {obsolete}")
     else:
         gui = root / "bin" / f"idp-emu{suffix}"
         mcp = root / "bin" / f"idp-mcp{suffix}"
+    if args.platform in ("linux", "macos"):
+        partnerp = root / "bin" / "partnerp"
+        partnerg = root / "bin" / "partnerg"
+        for path in (partnerp, partnerg):
+            if not path.is_file() or path.stat().st_size == 0:
+                fail(f"missing Unix launcher: {path}")
+        partnerp_text = partnerp.read_text(encoding="utf-8")
+        partnerg_text = partnerg.read_text(encoding="utf-8")
+        for profile_argument in ("--model crt", "--system-crt-hdd"):
+            if profile_argument not in partnerp_text:
+                fail(f"Partner P launcher is missing {profile_argument}")
+        for profile_argument in ("--model gdp", "--system-hdd"):
+            if profile_argument not in partnerg_text:
+                fail(f"Partner G launcher is missing {profile_argument}")
+        if (root / "bin" / "partner").exists():
+            fail("obsolete Unix partner launcher remains")
+    obsolete_squid_paths = (
+        root / "bin/squid-server",
+        root / "squid",
+    )
+    for path in obsolete_squid_paths:
+        if path.exists():
+            fail(f"obsolete external Squid component is still packaged: {path}")
     for executable in (gui, mcp):
         if not executable.is_file():
             fail(f"missing executable: {executable}")
     program_directory = root if args.platform == "windows" else root / "bin"
+    expected_programs = {gui.name, mcp.name}
+    if args.platform in ("linux", "macos"):
+        expected_programs.update({"partnerp", "partnerg"})
     unexpected_programs = {
         path.name for path in program_directory.iterdir()
         if path.is_file() and path.suffix.lower() in ("", ".exe")
-    } - {gui.name, mcp.name}
+    } - expected_programs
     if unexpected_programs:
         fail(f"unexpected runtime programs: {sorted(unexpected_programs)}")
 
@@ -254,9 +442,16 @@ def main() -> int:
             fail(f"MCP bundle is missing tools: {sorted(required_tools - names)}")
         gui_help = run([str(gui), "--help"], work)
         help_text = gui_help.stdout + gui_help.stderr
-        for option in ("--system-floppy", "--system-hdd"):
+        for option in (
+            "--system-crt-hdd",
+            "--system-hdd",
+            "--sio-squid",
+        ):
             if option not in help_text:
                 fail(f"GUI bundle is missing shortcut media option: {option}")
+        if args.platform in ("linux", "macos"):
+            for launcher in (partnerp, partnerg):
+                run([str(launcher), "--help"], work)
 
     checker = {
         "linux": verify_linux_dependencies,

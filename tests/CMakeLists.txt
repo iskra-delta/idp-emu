@@ -10,6 +10,20 @@ add_executable(test_z80dma test_z80dma.cpp)
 target_link_libraries(test_z80dma PRIVATE chipsex)
 add_test(NAME z80dma_unit COMMAND test_z80dma)
 
+add_executable(test_squid_link_server test_squid_link_server.cpp)
+target_link_libraries(test_squid_link_server PRIVATE idp_internal_squid)
+add_test(NAME squid_link_server_unit COMMAND test_squid_link_server)
+
+add_executable(test_retro_vault_core
+    "${IDP_RETROVAULT_SOURCE_DIRECTORY}/tests/test_retrovault.c"
+    "${IDP_RETROVAULT_SOURCE_DIRECTORY}/retrovault_curl.c")
+target_include_directories(test_retro_vault_core PRIVATE
+    "${IDP_RETROVAULT_SOURCE_DIRECTORY}"
+    "${retrovault_gateway_SOURCE_DIR}/include")
+target_link_libraries(test_retro_vault_core PRIVATE
+    idp_internal_squid CURL::libcurl)
+add_test(NAME retro_vault_core_unit COMMAND test_retro_vault_core)
+
 add_executable(test_udap_util test_udap_util.cpp)
 target_link_libraries(test_udap_util PRIVATE udap_sdcc)
 add_test(NAME udap_util_unit COMMAND test_udap_util)
@@ -95,6 +109,26 @@ target_link_libraries(test_partner_crt_boot PRIVATE chipsex SDL2::SDL2 OpenGL::G
 
 add_test(NAME partner_crt_boot_integration COMMAND test_partner_crt_boot)
 
+add_executable(test_partner_crt_hdd_boot
+    test_partner_crt_hdd_boot.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_crt.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partner_crt_hdd_boot PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partner_crt_hdd_boot PRIVATE
+    GL_GLEXT_PROTOTYPES
+    IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+)
+target_link_libraries(test_partner_crt_hdd_boot PRIVATE
+    chipsex SDL2::SDL2 OpenGL::GL)
+
+add_test(NAME partner_crt_hdd_boot_integration COMMAND test_partner_crt_hdd_boot)
+
 add_executable(test_z80pio
     test_z80pio.cpp
 )
@@ -148,6 +182,27 @@ target_compile_definitions(test_partner_gdp_boot PRIVATE
 target_link_libraries(test_partner_gdp_boot PRIVATE chipsex SDL2::SDL2 OpenGL::GL)
 
 add_test(NAME partner_gdp_boot_integration COMMAND test_partner_gdp_boot)
+
+add_executable(test_partner_gdp_hdd_boot
+    test_partner_gdp_hdd_boot.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+    ../src/partner_gdp.cpp
+    ../src/partner_gdp_keyboard.cpp
+    ../src/terminal/terminal_factory.cpp
+    ../src/terminal/vt52_terminal.cpp
+    ../src/gui/display.cpp
+)
+
+target_include_directories(test_partner_gdp_hdd_boot PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partner_gdp_hdd_boot PRIVATE
+    GL_GLEXT_PROTOTYPES
+    IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+)
+target_link_libraries(test_partner_gdp_hdd_boot PRIVATE
+    chipsex SDL2::SDL2 OpenGL::GL)
+
+add_test(NAME partner_gdp_hdd_boot_integration COMMAND test_partner_gdp_hdd_boot)
 
 add_executable(test_partner_external_im2
     test_partner_external_im2.cpp
@@ -229,3 +284,17 @@ add_test(NAME runtime_paths_unit COMMAND test_runtime_paths)
 add_test(NAME mcp_stdio
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_mcp_stdio.py
             $<TARGET_FILE:idp-mcp>)
+
+foreach(partner_test_target
+    test_partner_sio
+    test_partner_crt_terminal
+    test_partner_crt_boot
+    test_partner_crt_hdd_boot
+    test_partner_gdp_memacc
+    test_partner_gdp_boot
+    test_partner_gdp_hdd_boot
+    test_partner_external_im2
+    test_partner_covox
+    test_rtc_nvram_shadow)
+    target_link_libraries(${partner_test_target} PRIVATE idp_internal_squid)
+endforeach()

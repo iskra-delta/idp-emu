@@ -7,4 +7,5 @@ Maintainer: Iskra Delta Emulator Project
 Depends: libc6, libgl1, libglx0, libglvnd0, libdrm2, libgbm1, libexpat1, hicolor-icon-theme
 Description: Chip-level Iskra Delta Partner emulator
  Native GUI and invisible MCP emulators with original Partner ROM images and
- initial floppy and hard-disk media.
+ model-specific system hard disks. Both Partner profiles include an internal
+ Retro Vault Squid service and boot media containing PAKET.COM.

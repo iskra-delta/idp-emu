@@ -1,4 +1,3 @@
 #!/bin/sh
 launcher_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P) || exit 127
-exec "$launcher_dir/idp-emu" \
-    --model crt --system-floppy --boot floppy "$@"
+exec "$launcher_dir/idp-emu" --model crt --system-crt-hdd "$@"

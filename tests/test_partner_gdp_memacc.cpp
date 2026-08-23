@@ -43,6 +43,21 @@ static void draw_test_pixel(partner_gdp_test_shim &emu, uint16_t x, uint16_t y)
 int main()
 {
     partner_gdp_test_shim emu(terminal_profile::vt100_ansi);
+    if (emu.get_sio_device_config(partner::sio_port_id::sio1_b).kind !=
+        partner::sio_device_kind::internal_squid) {
+        std::puts("test_partner_gdp_memacc: FAIL internal Squid is not on default port 2");
+        return 1;
+    }
+    partner::sio_device_config moved_squid;
+    moved_squid.kind = partner::sio_device_kind::internal_squid;
+    if (!emu.set_sio_device_config(partner::sio_port_id::sio2_a, moved_squid) ||
+        emu.get_sio_device_config(partner::sio_port_id::sio1_b).kind !=
+            partner::sio_device_kind::none ||
+        emu.get_sio_device_config(partner::sio_port_id::sio2_a).kind !=
+            partner::sio_device_kind::internal_squid) {
+        std::puts("test_partner_gdp_memacc: FAIL internal Squid did not move to port 3");
+        return 1;
+    }
     emu.reset();
 
     emu.key_input('Q');

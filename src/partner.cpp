@@ -1,4 +1,5 @@
 #include "partner.hpp"
+#include "internal_squid_server.hpp"
 #include <fstream>
 #include <iostream>
 #include <cstring>
@@ -348,6 +349,21 @@ bool partner::set_sio_device_config(sio_port_id port, const sio_device_config &c
     if (cfg.tcp_control_port == cfg.tcp_data_port)
         cfg.tcp_control_port = clamp_tcp_port(cfg.tcp_data_port + 1);
 
+    // One embedded Retro Vault service can be cabled to any free serial
+    // port. Selecting it on a new port moves the virtual cable instead of
+    // creating ambiguous duplicate servers.
+    if (cfg.kind == sio_device_kind::internal_squid)
+    {
+        for (int other = 0; other < static_cast<int>(sio_device_cfg_.size()); ++other)
+        {
+            if (other == idx ||
+                sio_device_cfg_[other].kind != sio_device_kind::internal_squid)
+                continue;
+            sio_device_cfg_[other].kind = sio_device_kind::none;
+            reset_sio_device_runtime(static_cast<sio_port_id>(other));
+        }
+    }
+
     const sio_device_config old_cfg = sio_device_cfg_[idx];
     sio_device_cfg_[idx] = cfg;
     const bool changed =
@@ -422,6 +438,16 @@ partner::sio_port_status partner::get_sio_port_status(sio_port_id port) const
         st.pending_rx_bytes += rt.tcp.data_rx_fifo.size();
         break;
     }
+    case sio_device_kind::internal_squid:
+        cts = true;
+        dcd = true;
+        connected = internal_squid_ != nullptr && internal_squid_->link_up();
+        st.detail = internal_squid_ != nullptr
+            ? internal_squid_->status_text()
+            : "Internal Squid (waiting for PAKET)";
+        if (internal_squid_ != nullptr)
+            st.pending_rx_bytes += internal_squid_->pending_serial_bytes();
+        break;
     }
     st.cts = cts;
     st.dcd = dcd;
@@ -511,7 +537,27 @@ void partner::reset_sio_device_runtime(sio_port_id port)
     rt.mouse_accum_dy = 0;
     rt.tx_bytes = 0;
     rt.rx_bytes = 0;
+    rt.next_internal_squid_poll_tick = 0;
     cleanup_tcp_bridge(rt.tcp);
+    if (sio_device_cfg_[sio_port_index(port)].kind ==
+        sio_device_kind::internal_squid && internal_squid_ != nullptr)
+        internal_squid_->reset_link();
+}
+
+void partner::reset_internal_squid_session(sio_port_id port)
+{
+    const int index = sio_port_index(port);
+    if (sio_device_cfg_[index].kind != sio_device_kind::internal_squid)
+        return;
+
+    // PAKET begins every invocation by resetting its selected Z80 SIO
+    // channel. Treat that as reconnecting the internal virtual cable: retry
+    // bytes from the preceding invocation must not enter the new handshake.
+    auto &runtime = sio_device_runtime_[index];
+    runtime.rx_fifo.clear();
+    runtime.next_internal_squid_poll_tick = 0;
+    if (internal_squid_ != nullptr)
+        internal_squid_->reset_link();
 }
 
 bool partner::parse_bool_token(const std::string &token, bool &value)
@@ -1157,6 +1203,12 @@ void partner::apply_sio_modem_inputs(uint64_t &bus_pins, sio_port_id port_a, sio
                 cts = rt.tcp.control_cts_override_value;
             break;
         }
+        case sio_device_kind::internal_squid:
+            // This is a direct virtual cable. It is present even before the
+            // guest completes the Squid handshake.
+            cts = true;
+            dcd = true;
+            break;
         }
         return std::pair<bool, bool>{cts, dcd};
     };
@@ -1184,6 +1236,13 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
 
     if (cfg.kind == sio_device_kind::tcp_bridge)
         poll_tcp_bridge(port, ch);
+    else if (cfg.kind == sio_device_kind::internal_squid &&
+             internal_squid_ != nullptr &&
+             tick_count >= rt.next_internal_squid_poll_tick)
+    {
+        internal_squid_->service(rt.rx_fifo);
+        rt.next_internal_squid_poll_tick = tick_count + 2048;
+    }
 
     uint8_t rx = 0;
     bool rx_accepted = false;
@@ -1239,6 +1298,14 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
                     rt.tcp.data_tx_fifo.pop_front();
                 rt.tcp.data_tx_fifo.push_back(tx);
             }
+        }
+        else if (cfg.kind == sio_device_kind::internal_squid)
+        {
+            if (internal_squid_ == nullptr)
+                internal_squid_ = std::make_unique<internal_squid_server>();
+            internal_squid_->receive_serial_byte(tx);
+            internal_squid_->service(rt.rx_fifo);
+            rt.next_internal_squid_poll_tick = tick_count + 2048;
         }
         else if (cfg.kind == sio_device_kind::mouse_logitech)
         {
@@ -1593,13 +1660,7 @@ void partner::reset()
             rtc.regs[0x09] &= (uint8_t)~PARTNER_FD2_TYPE_MASK;
         if (disks_[3].data.empty())
             rtc.regs[0x09] &= (uint8_t)~PARTNER_FD3_TYPE_MASK;
-        uint8_t nibble_sum = 0;
-        for (uint8_t i = 0; i < 8; ++i) {
-            const uint8_t value = rtc.regs[0x08 + i];
-            nibble_sum = (uint8_t)((nibble_sum + (value & 0x0F)) & 0x0F);
-            nibble_sum = (uint8_t)((nibble_sum + ((value >> 4) & 0x0F)) & 0x0F);
-        }
-        rtc.regs[0x0F] |= (uint8_t)((-nibble_sum) & 0x0F);
+        stamp_rtc_nvram_checksum();
     }
 
     rom_enabled = true;
@@ -1655,6 +1716,19 @@ void partner::reset()
     }
     covox_sample_events_.clear();
     virtual_printer_text_.clear();
+}
+
+void partner::stamp_rtc_nvram_checksum()
+{
+    rtc.regs[0x0F] &= 0xF0;
+    uint8_t nibble_sum = 0;
+    for (uint8_t i = 0; i < 8; ++i) {
+        const uint8_t value = rtc.regs[0x08 + i];
+        nibble_sum = (uint8_t)((nibble_sum + (value & 0x0F)) & 0x0F);
+        nibble_sum = (uint8_t)(
+            (nibble_sum + ((value >> 4) & 0x0F)) & 0x0F);
+    }
+    rtc.regs[0x0F] |= (uint8_t)((-nibble_sum) & 0x0F);
 }
 
 void partner::tick()
@@ -2462,6 +2536,10 @@ void partner::io_write(uint16_t port, uint8_t data)
 
     if (partner_sio0_port((uint8_t)port))
     {
+        const int channel = (port & 0x02) != 0
+            ? Z80SIO_CHANNEL_B : Z80SIO_CHANNEL_A;
+        const bool channel_reset = (port & 0x01) != 0 &&
+            sio.chn[channel].reg_index == 0 && (data & 0x38u) == 0x18u;
         static const bool trace_sio = [] {
             const char *s = std::getenv("IDP_TRACE_SIO");
             return s && s[0] && s[0] != '0';
@@ -2470,11 +2548,21 @@ void partner::io_write(uint16_t port, uint8_t data)
             std::fprintf(stderr, "[sio] wr pc=%04X port=%02X data=%02X\n",
                 cpu.pc, (unsigned int)((uint8_t)port), (unsigned int)data);
         z80sio_cpu_write(&sio, (uint8_t)port, data);
+        if (channel_reset)
+            reset_internal_squid_session(channel == Z80SIO_CHANNEL_B
+                ? sio_port_id::sio1_b : sio_port_id::sio1_a);
         return;
     }
     if (partner_sio1_port((uint8_t)port))
     {
+        const int channel = (port & 0x02) != 0
+            ? Z80SIO_CHANNEL_B : Z80SIO_CHANNEL_A;
+        const bool channel_reset = (port & 0x01) != 0 &&
+            sio2.chn[channel].reg_index == 0 && (data & 0x38u) == 0x18u;
         z80sio_cpu_write(&sio2, (uint8_t)port, data);
+        if (channel_reset)
+            reset_internal_squid_session(channel == Z80SIO_CHANNEL_B
+                ? sio_port_id::sio2_b : sio_port_id::sio2_a);
         return;
     }
 

@@ -14,7 +14,10 @@
 #include <cstdint>
 #include <vector>
 #include <deque>
+#include <memory>
 #include <utility>
+
+class internal_squid_server;
 
 class partner
 {
@@ -37,7 +40,8 @@ public:
         mouse_microsoft,
         mouse_mousesystems,
         mouse_logitech,
-        tcp_bridge
+        tcp_bridge,
+        internal_squid
     };
 
     struct sio_device_config {
@@ -220,6 +224,8 @@ public:
     void write_debug_io(uint16_t port, uint8_t data) { io_write(port, data); }
 
 protected:
+    void stamp_rtc_nvram_checksum();
+
     // All Zilog chips in Partner system
     z80_t cpu{};
     z80dma_t dma{};    // Highest priority (if present)
@@ -326,6 +332,7 @@ private:
         int32_t mouse_accum_dy = 0;
         uint64_t tx_bytes = 0;
         uint64_t rx_bytes = 0;
+        uint64_t next_internal_squid_poll_tick = 0;
         tcp_bridge_runtime tcp{};
     };
 
@@ -348,6 +355,7 @@ private:
     static int sio_port_index(sio_port_id port) { return (int)port; }
     static int pio_port_index(pio_port_id port) { return (int)port; }
     void reset_sio_device_runtime(sio_port_id port);
+    void reset_internal_squid_session(sio_port_id port);
     void cleanup_tcp_bridge(tcp_bridge_runtime &tcp);
     bool ensure_tcp_bridge_listeners(sio_port_id port);
     void poll_tcp_bridge(sio_port_id port, z80sio_channel_t &ch);
@@ -371,6 +379,7 @@ private:
     std::array<sio_device_runtime, 4> sio_device_runtime_{};
     std::array<bool, 4> sio_port_locked_{};
     std::array<std::string, 4> sio_port_lock_reason_{};
+    std::unique_ptr<internal_squid_server> internal_squid_;
     std::array<pio_device_config, 2> pio_device_cfg_{};
     std::array<pio_device_runtime, 2> pio_device_runtime_{};
     std::deque<covox_sample_event> covox_sample_events_;

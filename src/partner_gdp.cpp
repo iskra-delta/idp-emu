@@ -179,6 +179,9 @@ partner_gdp::partner_gdp(terminal_profile profile, const std::string &rtc_nvram_
     : partner(rtc_nvram_path), terminal_profile_(profile)
 {
     set_sio_port_lock(sio_port_id::sio1_a, true, "Internal GDP keyboard (fixed)");
+    sio_device_config squid;
+    squid.kind = sio_device_kind::internal_squid;
+    (void)set_sio_device_config(sio_port_id::sio1_b, squid);
     ef9367_init(&ef9367_);
     scn2674_init(&avdc_);
     z80pio_init(&gdp_video_pio_);
@@ -196,6 +199,22 @@ partner_gdp::partner_gdp(terminal_profile profile, const std::string &rtc_nvram_
 void partner_gdp::reset()
 {
     partner::reset();
+    if (terminal_profile_ == terminal_profile::vt100_ansi) {
+        // The GDP BIOS interprets ESC sequences according to the terminal
+        // type stored in MM58167 NVRAM AB. A Partner-mode value treats ANSI
+        // CSI digits as native GDP commands, which can draw tiny/rotated EF
+        // glyphs. Match the BIOS configuration to the selected VT100 profile
+        // while preserving its language nibble and checksum.
+        uint8_t language = (uint8_t)(rtc.regs[0x0B] & 0x0Fu);
+        // Language values 0..8 are defined. The historical package seed used
+        // the invalid value B, which makes the GDP BIOS translate decimal
+        // digits into its tiny alternate glyph range D8..E1. Migrate that
+        // value to Yugoslav while preserving any valid user selection.
+        if (language > 8u)
+            language = 8u;
+        rtc.regs[0x0B] = language;
+        stamp_rtc_nvram_checksum();
+    }
     raw_serial_.clear();
     ef9367_reset(&ef9367_);
     ef9367_clear_framebuffers(&ef9367_);

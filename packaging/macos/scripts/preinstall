@@ -1,0 +1,10 @@
+#!/bin/sh
+set -eu
+
+# The P profile was formerly installed under the ambiguous Partner name.
+# Writable CMOS and disk copies live in the user's application-data directory,
+# so removing this obsolete application bundle does not remove user media.
+rm -f "/usr/local/bin/partner"
+rm -rf "/Applications/Iskra Delta Partner.app"
+
+exit 0

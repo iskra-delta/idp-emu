@@ -37,4 +37,5 @@ private:
     std::string raw_serial_;
     std::deque<uint8_t> key_fifo_;
     uint16_t last_pc_ = 0xFFFF;
+    bool cpm_console_started_ = false;
 };

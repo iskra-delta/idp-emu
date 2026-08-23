@@ -599,13 +599,19 @@ uint64_t z80dma_write(z80dma_t *dma, uint8_t data)
                 return dma->pins;
             case 7:
                 /*
-                    The 0x95 form used by the CRT boot ROM has two filler bytes
-                    after the fixed I/O port. Swallow the second one here; the
-                    following byte is the fixed-I/O timing/control value 0x8A.
-                    The shorter 0x85 form enters state 9 directly.
+                    The GDP hard-disk table has one filler byte after its fixed
+                    I/O port, while the CRT floppy table has two. In the GDP
+                    form this byte is already timing/control value 0x8A; in the
+                    CRT form it is the second filler and timing follows. The
+                    shorter 0x85 form enters state 9 directly.
                 */
                 dma->port_b.is_memory = false;
-                dma->compat_state = 9;
+                if (data == 0x8Au) {
+                    dma->port_b.timing = data;
+                    dma->compat_state = 10;
+                } else {
+                    dma->compat_state = 9;
+                }
                 return dma->pins;
             case 8:
                 /*

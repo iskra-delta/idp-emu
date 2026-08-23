@@ -1,3 +1,65 @@
+set(idp_runtime_binaries
+    "@CMAKE_RUNTIME_OUTPUT_DIRECTORY@/idp-emu"
+    "@CMAKE_RUNTIME_OUTPUT_DIRECTORY@/idp-mcp")
+
+file(GET_RUNTIME_DEPENDENCIES
+    RESOLVED_DEPENDENCIES_VAR idp_resolved_dependencies
+    UNRESOLVED_DEPENDENCIES_VAR idp_unresolved_dependencies
+    CONFLICTING_DEPENDENCIES_PREFIX idp_conflicts
+    EXECUTABLES ${idp_runtime_binaries}
+    POST_EXCLUDE_REGEXES
+        ".*/ld-linux[^/]*\\.so.*"
+        ".*/lib(c|m|pthread|dl|rt|resolv|util|gcc_s|stdc\\+\\+)\\.so.*"
+        ".*/lib(GL|OpenGL|GLX|EGL|drm|gbm)\\.so.*")
+
+if(idp_unresolved_dependencies)
+    message(FATAL_ERROR
+        "Could not resolve Linux runtime libraries: ${idp_unresolved_dependencies}")
+endif()
+
+# CMake reports a collision when two search roots contain the same SONAME.
+# Select the candidate that the Linux loader actually chose for these build
+# executables, rather than failing the entire package install.
+set(idp_loader_output "")
+foreach(idp_binary IN LISTS idp_runtime_binaries)
+    execute_process(
+        COMMAND ldd "${idp_binary}"
+        RESULT_VARIABLE idp_ldd_result
+        OUTPUT_VARIABLE idp_ldd_output
+        ERROR_VARIABLE idp_ldd_error)
+    if(NOT idp_ldd_result EQUAL 0)
+        message(FATAL_ERROR
+            "Could not inspect ${idp_binary} dependencies: ${idp_ldd_error}")
+    endif()
+    string(APPEND idp_loader_output "\n${idp_ldd_output}")
+endforeach()
+
+foreach(idp_filename IN LISTS idp_conflicts_FILENAMES)
+    set(idp_selected_dependency "")
+    foreach(idp_candidate IN LISTS idp_conflicts_${idp_filename})
+        string(FIND "${idp_loader_output}" "${idp_candidate}" idp_match_offset)
+        if(NOT idp_match_offset EQUAL -1)
+            set(idp_selected_dependency "${idp_candidate}")
+            break()
+        endif()
+    endforeach()
+    if(NOT idp_selected_dependency)
+        message(FATAL_ERROR
+            "Could not choose the loaded ${idp_filename} from: "
+            "${idp_conflicts_${idp_filename}}")
+    endif()
+    list(APPEND idp_resolved_dependencies "${idp_selected_dependency}")
+endforeach()
+
+list(REMOVE_DUPLICATES idp_resolved_dependencies)
+foreach(idp_dependency IN LISTS idp_resolved_dependencies)
+    file(INSTALL
+        DESTINATION "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/shared"
+        TYPE SHARED_LIBRARY
+        FILES "${idp_dependency}"
+        FOLLOW_SYMLINK_CHAIN)
+endforeach()
+
 file(GLOB idp_bundled_libraries
     "$ENV{DESTDIR}${CMAKE_INSTALL_PREFIX}/shared/*.so*")
 

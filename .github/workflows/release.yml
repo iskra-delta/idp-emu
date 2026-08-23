@@ -22,6 +22,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Validate and extract version
         id: version
         shell: bash
@@ -54,15 +56,16 @@ jobs:
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
-          -DIDP_VERSION=${{ steps.version.outputs.value }}
           -DIDP_STATIC_RUNTIME=ON
           -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake
           -DVCPKG_TARGET_TRIPLET=x64-linux
+      - name: Verify compiled version matches tag
+        run: test "$(tr -d '\r\n' < build/idp-version.txt)" = "${{ steps.version.outputs.value }}"
       - name: Build and test
         run: |
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
-      - name: Stage and verify relocatable tree
+      - name: Stage and verify partnerp/partnerg tree
         run: |
           cmake --install build --prefix "$PWD/dist/tree"
           python3 scripts/package/verify_bundle.py \
@@ -95,6 +98,8 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Validate and extract version
         id: version
         shell: bash
@@ -119,15 +124,16 @@ jobs:
         run: >-
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
-          -DIDP_VERSION=${{ steps.version.outputs.value }}
           -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake
           -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
           -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
+      - name: Verify compiled version matches tag
+        run: test "$(tr -d '\r\n' < build/idp-version.txt)" = "${{ steps.version.outputs.value }}"
       - name: Build and test
         run: |
           cmake --build build --parallel 2
           ctest --test-dir build --output-on-failure
-      - name: Stage and verify relocatable tree
+      - name: Stage and verify partnerp/partnerg tree
         run: |
           cmake --install build --prefix "$PWD/dist/tree"
           python3 scripts/package/verify_bundle.py \
@@ -151,6 +157,8 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - name: Validate and extract version
         id: version
         shell: bash
@@ -180,8 +188,6 @@ jobs:
           runVcpkgInstall: false
       - name: Configure
         shell: pwsh
-        env:
-          IDP_RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
           $toolchain = Join-Path $env:VCPKG_ROOT "scripts/buildsystems/vcpkg.cmake"
           $cmakeArgs = @(
@@ -189,19 +195,27 @@ jobs:
             "-B", "build",
             "-G", "Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
-            "-DIDP_VERSION=$env:IDP_RELEASE_VERSION",
             "-DIDP_STATIC_RUNTIME=ON",
             "-DCMAKE_TOOLCHAIN_FILE=$toolchain",
             "-DVCPKG_TARGET_TRIPLET=x64-windows-static"
           )
           cmake @cmakeArgs
+      - name: Verify compiled version matches tag
+        shell: pwsh
+        env:
+          IDP_RELEASE_VERSION: ${{ steps.version.outputs.value }}
+        run: |
+          $compiledVersion = (Get-Content build/idp-version.txt -Raw).Trim()
+          if ($compiledVersion -ne $env:IDP_RELEASE_VERSION) {
+            throw "Compiled version $compiledVersion does not match tag $env:IDP_RELEASE_VERSION"
+          }
       - name: Build and test
         shell: pwsh
         run: |
           cmake --build build --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           ctest --test-dir build --output-on-failure
-      - name: Stage and verify relocatable tree
+      - name: Stage and verify partnerp/partnerg tree
         shell: pwsh
         run: |
           cmake --install build --prefix "$PWD/dist/tree"

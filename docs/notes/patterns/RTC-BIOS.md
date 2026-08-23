@@ -134,6 +134,11 @@ read or replicate the Partner boot-time state.
   - `0xAF = 0x28` (QWERTY, click on, autorepeat on)
 - If these bytes are left zeroed, firmware and CP/M utilities may fall back to
   degraded or nonsensical display behavior.
+- The distributable seed uses `0xAB = 0x08`: ANSI terminal mode in the high
+  nibble and the valid Yugoslav character set in the low nibble. Its
+  checksum-stamped final byte is `0xAF = 0x4F`. The former invalid language
+  value `0xB` translated decimal digits into tiny alternate glyphs `0xD8`
+  through `0xE1` in the GDP BIOS.
 
 ## Default values
 

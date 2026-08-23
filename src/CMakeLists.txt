@@ -1,3 +1,17 @@
+add_library(idp_internal_squid STATIC
+    squid_link_server.cpp
+    internal_squid_server.cpp
+    "${IDP_RETROVAULT_SOURCE_DIRECTORY}/retrovault_core.c"
+    "${IDP_RETROVAULT_SOURCE_DIRECTORY}/retrovault_json.c"
+)
+target_include_directories(idp_internal_squid
+    PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
+    PRIVATE
+        "${IDP_RETROVAULT_SOURCE_DIRECTORY}"
+        "${retrovault_gateway_SOURCE_DIR}/include")
+target_link_libraries(idp_internal_squid PUBLIC CURL::libcurl Threads::Threads)
+target_compile_features(idp_internal_squid PRIVATE c_std_11 cxx_std_23)
+
 set(IDP_CORE_SOURCES
     chips_impl.cpp
     partner.cpp
@@ -40,7 +54,7 @@ set(IDP_GUI_SOURCES
 )
 
 add_executable(idp-emu ${IDP_CORE_SOURCES} ${IDP_GUI_SOURCES})
-target_link_libraries(idp-emu PRIVATE chipsex imgui_lib SDL2::SDL2 PNG::PNG OpenGL::GL Threads::Threads udap_dap udap_sdcc)
+target_link_libraries(idp-emu PRIVATE chipsex imgui_lib SDL2::SDL2 PNG::PNG OpenGL::GL Threads::Threads udap_dap udap_sdcc idp_internal_squid)
 target_compile_definitions(idp-emu PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
 if(WIN32)
@@ -61,14 +75,14 @@ endif()
 
 if(IDP_BUILD_PROBES)
     add_executable(idp-probe probe_floppy.cpp ${IDP_CORE_SOURCES})
-    target_link_libraries(idp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
+    target_link_libraries(idp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL idp_internal_squid)
     target_compile_definitions(idp-probe PRIVATE
         IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
         GL_GLEXT_PROTOTYPES
         $<$<CONFIG:Debug>:IDP_DEBUG>)
 
     add_executable(idp-gdp-probe probe_gdp.cpp ${IDP_CORE_SOURCES})
-    target_link_libraries(idp-gdp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL)
+    target_link_libraries(idp-gdp-probe PRIVATE chipsex imgui_lib SDL2::SDL2 OpenGL::GL idp_internal_squid)
     target_compile_definitions(idp-gdp-probe PRIVATE
         IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
         GL_GLEXT_PROTOTYPES
@@ -98,7 +112,8 @@ endif()
 
 target_include_directories(idp-mcp PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(idp-mcp PRIVATE
-    chipsex SDL2::SDL2 PNG::PNG OpenGL::GL nlohmann_json::nlohmann_json)
+    chipsex SDL2::SDL2 PNG::PNG OpenGL::GL nlohmann_json::nlohmann_json
+    idp_internal_squid)
 target_compile_definitions(idp-mcp PRIVATE
     IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
     IDP_VERSION="${PROJECT_VERSION}"
@@ -117,11 +132,14 @@ endif()
 if(WIN32)
     install(TARGETS idp-emu idp-mcp
         RUNTIME DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}")
-else()
+elseif(APPLE)
     install(TARGETS idp-emu idp-mcp
         RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
         RUNTIME DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}"
         BUNDLE DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}")
+else()
+    install(TARGETS idp-emu idp-mcp
+        RUNTIME DESTINATION "${IDP_PROGRAM_INSTALL_DIRECTORY}")
 endif()
 
 if(APPLE)
@@ -129,12 +147,9 @@ if(APPLE)
         DESTINATION shared
         POST_EXCLUDE_REGEXES "^/System/Library/.*" "^/usr/lib/.*")
 elseif(UNIX)
-    install(RUNTIME_DEPENDENCY_SET idp_runtime_dependencies
-        DESTINATION shared
-        POST_EXCLUDE_REGEXES
-            ".*/ld-linux[^/]*\\.so.*"
-            ".*/lib(c|m|pthread|dl|rt|resolv|util|gcc_s|stdc\\+\\+)\\.so.*"
-            ".*/lib(GL|OpenGL|GLX|EGL|drm|gbm)\\.so.*")
+    # The Linux helper resolves conflicts explicitly. This matters on developer
+    # machines where a Conda library and the system library can share the same
+    # SONAME; install(RUNTIME_DEPENDENCY_SET) treats that as a fatal error.
     install(SCRIPT "${CMAKE_BINARY_DIR}/fix-linux-rpaths.cmake")
 endif()
 
@@ -157,13 +172,21 @@ install(FILES
     "${CMAKE_SOURCE_DIR}/roms/partner_gdp.rom"
     DESTINATION roms)
 install(FILES "${CMAKE_SOURCE_DIR}/partner_cmos.bin" DESTINATION .)
-install(DIRECTORY "${CMAKE_SOURCE_DIR}/disks/" DESTINATION disks
-        FILES_MATCHING PATTERN "*.img")
+install(FILES
+    "${CMAKE_SOURCE_DIR}/disks/hdd-partner-p-system.img"
+    "${CMAKE_SOURCE_DIR}/disks/hdd-partner-g-system.img"
+    DESTINATION disks)
 if(WIN32)
     install(FILES
-        "${CMAKE_SOURCE_DIR}/packaging/windows/partner-classic.bat"
-        "${CMAKE_SOURCE_DIR}/packaging/windows/partner-graphical.bat"
+        "${CMAKE_SOURCE_DIR}/packaging/windows/partnerp.bat"
+        "${CMAKE_SOURCE_DIR}/packaging/windows/partnerg.bat"
         DESTINATION .)
+endif()
+if(UNIX)
+    install(PROGRAMS
+        "${CMAKE_SOURCE_DIR}/packaging/linux/partnerp"
+        "${CMAKE_SOURCE_DIR}/packaging/linux/partnerg"
+        DESTINATION bin)
 endif()
 install(FILES
     "${CMAKE_SOURCE_DIR}/README.md"

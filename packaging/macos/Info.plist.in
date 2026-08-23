@@ -3,12 +3,12 @@
 <plist version="1.0">
 <dict>
   <key>CFBundleDevelopmentRegion</key><string>en</string>
-  <key>CFBundleDisplayName</key><string>partner</string>
-  <key>CFBundleExecutable</key><string>partner</string>
+  <key>CFBundleDisplayName</key><string>partnerp</string>
+  <key>CFBundleExecutable</key><string>partnerp</string>
   <key>CFBundleIconFile</key><string>partner.icns</string>
   <key>CFBundleIdentifier</key><string>org.iskradelta.partner-emulator</string>
   <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
-  <key>CFBundleName</key><string>partner</string>
+  <key>CFBundleName</key><string>partnerp</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>@VERSION@</string>
   <key>CFBundleVersion</key><string>@VERSION@</string>

@@ -1,11 +1,65 @@
 cmake_minimum_required(VERSION 3.21)
-set(IDP_VERSION "1.1.0" CACHE STRING "Release version embedded in packages")
+
+# A release tag is the canonical version source.  Keep an explicit cache value
+# available for source archives (which have no .git metadata) and untagged
+# developer builds, but never allow it to disagree with an exact release tag.
+set(idp_version_fallback "1.1.0")
+set(idp_tag_version "")
+find_program(IDP_GIT_EXECUTABLE git)
+if(IDP_GIT_EXECUTABLE AND EXISTS "${CMAKE_SOURCE_DIR}/.git")
+    execute_process(
+        COMMAND "${IDP_GIT_EXECUTABLE}" describe --tags --exact-match
+                --match "v[0-9]*.[0-9]*.[0-9]*"
+        WORKING_DIRECTORY "${CMAKE_SOURCE_DIR}"
+        OUTPUT_VARIABLE idp_exact_tag
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+        RESULT_VARIABLE idp_exact_tag_result)
+    if(idp_exact_tag_result EQUAL 0)
+        string(REGEX REPLACE "^v" "" idp_tag_version "${idp_exact_tag}")
+        if(NOT idp_tag_version MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+            message(FATAL_ERROR
+                "Release tag '${idp_exact_tag}' must have the form v1.2.3")
+        endif()
+    endif()
+endif()
+
+if(NOT DEFINED IDP_VERSION)
+    if(idp_tag_version)
+        set(IDP_VERSION "${idp_tag_version}")
+    else()
+        set(IDP_VERSION "${idp_version_fallback}")
+    endif()
+endif()
+
+if(NOT IDP_VERSION MATCHES "^[0-9]+\\.[0-9]+\\.[0-9]+$")
+    message(FATAL_ERROR
+        "IDP_VERSION '${IDP_VERSION}' must have the form 1.2.3")
+endif()
+if(idp_tag_version AND NOT IDP_VERSION STREQUAL idp_tag_version)
+    message(FATAL_ERROR
+        "IDP_VERSION '${IDP_VERSION}' does not match release tag "
+        "'v${idp_tag_version}'")
+endif()
+
+set(IDP_VERSION "${IDP_VERSION}" CACHE STRING
+    "Release version embedded in packages")
 project(idp-emu VERSION ${IDP_VERSION} LANGUAGES C CXX)
+file(WRITE "${CMAKE_BINARY_DIR}/idp-version.txt" "${PROJECT_VERSION}\n")
+if(idp_tag_version)
+    message(STATUS "Release version: ${PROJECT_VERSION} (from tag v${idp_tag_version})")
+else()
+    message(STATUS "Release version: ${PROJECT_VERSION} (untagged build)")
+endif()
 
 option(IDP_STATIC_RUNTIME
     "Link the compiler runtime statically where the platform supports it" ON)
 option(IDP_BUILD_PROBES
     "Build developer-only floppy and GDP diagnostic probes" OFF)
+set(IDP_RETROVAULT_COMMIT
+    "c003deb4647e63a7a1db864222f008c0621493c9"
+    CACHE STRING "Pinned Retro Vault protocol implementation revision")
+mark_as_advanced(IDP_RETROVAULT_COMMIT)
 
 if(IDP_STATIC_RUNTIME AND MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -65,6 +119,25 @@ find_package(PNG REQUIRED)
 find_package(OpenGL REQUIRED)
 find_package(Threads REQUIRED)
 find_package(Python3 COMPONENTS Interpreter REQUIRED)
+find_package(CURL QUIET)
+if(NOT CURL_FOUND)
+    find_program(IDP_CURL_CONFIG_EXECUTABLE curl-config)
+    if(IDP_CURL_CONFIG_EXECUTABLE)
+        execute_process(
+            COMMAND "${IDP_CURL_CONFIG_EXECUTABLE}" --prefix
+            OUTPUT_VARIABLE idp_curl_prefix
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            RESULT_VARIABLE idp_curl_prefix_result)
+        if(idp_curl_prefix_result EQUAL 0)
+            list(PREPEND CMAKE_PREFIX_PATH "${idp_curl_prefix}")
+            find_package(CURL QUIET)
+        endif()
+    endif()
+endif()
+if(NOT CURL_FOUND)
+    message(FATAL_ERROR
+        "Internal Retro Vault support requires the libcurl development package")
+endif()
 
 if(WIN32)
     find_package(GLEW REQUIRED)
@@ -84,6 +157,22 @@ FetchContent_Declare(
     GIT_SHALLOW    TRUE
 )
 FetchContent_MakeAvailable(imgui)
+
+# Compile only the platform-neutral Retro Vault request/JSON core into the
+# emulator. The POSIX squid-server executable, serial transport and plugin
+# loader are intentionally not built or shipped.
+FetchContent_Declare(
+    retrovault_gateway
+    GIT_REPOSITORY https://github.com/retro-plastics/squid-server.git
+    GIT_TAG        ${IDP_RETROVAULT_COMMIT}
+    GIT_SHALLOW    FALSE
+)
+FetchContent_GetProperties(retrovault_gateway)
+if(NOT retrovault_gateway_POPULATED)
+    FetchContent_Populate(retrovault_gateway)
+endif()
+set(IDP_RETROVAULT_SOURCE_DIRECTORY
+    "${retrovault_gateway_SOURCE_DIR}/lib/retrovault")
 
 set(IDP_IMGUI_OPENGL3_BACKEND
     "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp")

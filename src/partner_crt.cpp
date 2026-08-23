@@ -1,6 +1,7 @@
 #include "partner_crt.hpp"
 #include "gui/display.hpp"
 #include "terminal/terminal_emulator.hpp"
+#include <cstring>
 
 namespace {
 
@@ -33,12 +34,22 @@ static void queue_key_to_channel(std::deque<uint8_t> &fifo, uint8_t ch)
     fifo.push_back(ch);
 }
 
+static bool ends_with(const std::string &text, const char *suffix)
+{
+    const size_t suffix_size = std::strlen(suffix);
+    return text.size() >= suffix_size &&
+        text.compare(text.size() - suffix_size, suffix_size, suffix) == 0;
+}
+
 } // namespace
 
 partner_crt::partner_crt(terminal_profile profile, const std::string &rtc_nvram_path)
     : partner(rtc_nvram_path), terminal_profile_(profile)
 {
     set_sio_port_lock(sio_port_id::sio1_a, true, "Internal CRT keyboard/terminal (fixed)");
+    sio_device_config squid;
+    squid.kind = sio_device_kind::internal_squid;
+    (void)set_sio_device_config(sio_port_id::sio1_b, squid);
     terminal_ = make_terminal_emulator(terminal_profile_);
 }
 
@@ -47,6 +58,7 @@ void partner_crt::reset()
     partner::reset();
     raw_serial_.clear();
     last_pc_ = 0xFFFF;
+    cpm_console_started_ = false;
     key_fifo_.clear();
     if (terminal_)
         terminal_->reset();
@@ -61,7 +73,8 @@ void partner_crt::tick()
     // text machine the restart redraws a fresh boot screen; clear the emulator
     // terminal surface on that edge so stale BIOS/menu text cannot bleed into
     // the next boot banner.
-    if ((pc == stage1_entry_pc_) && (last_pc_ != stage1_entry_pc_)) {
+    if (!cpm_console_started_ && (pc == stage1_entry_pc_) &&
+        (last_pc_ != stage1_entry_pc_)) {
         raw_serial_.clear();
         if (terminal_)
             terminal_->reset();
@@ -73,6 +86,8 @@ void partner_crt::tick()
     // should not bleed into the on-screen terminal.
     feed_pending_rx(sio, Z80SIO_CHANNEL_A, key_fifo_, get_tick_count());
     consume_terminal_tx(sio, Z80SIO_CHANNEL_A, raw_serial_, terminal_.get());
+    if (!cpm_console_started_ && ends_with(raw_serial_, "CP/M V3.0 Loader"))
+        cpm_console_started_ = true;
 }
 
 void partner_crt::render_to(display &disp)

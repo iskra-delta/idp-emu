@@ -13,6 +13,13 @@
       "name": "glew",
       "platform": "windows"
     },
+    {
+      "name": "curl",
+      "default-features": false,
+      "features": [
+        "ssl"
+      ]
+    },
     "libpng",
     "sdl2"
   ]

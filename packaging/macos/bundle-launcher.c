@@ -9,10 +9,10 @@
 #include <unistd.h>
 
 #ifndef IDP_LAUNCH_PROFILE
-#error IDP_LAUNCH_PROFILE must be 0 (MCP), 1 (Partner), or 2 (Partner G)
+#error IDP_LAUNCH_PROFILE must be 0 (MCP), 1 (Partner P), or 2 (Partner G)
 #endif
 #if IDP_LAUNCH_PROFILE < 0 || IDP_LAUNCH_PROFILE > 2
-#error IDP_LAUNCH_PROFILE must be 0 (MCP), 1 (Partner), or 2 (Partner G)
+#error IDP_LAUNCH_PROFILE must be 0 (MCP), 1 (Partner P), or 2 (Partner G)
 #endif
 
 int main(int argc, char **argv)
@@ -44,16 +44,14 @@ int main(int argc, char **argv)
     char target[PATH_MAX];
     const int written = snprintf(
         target, sizeof(target),
-        "%s/Iskra Delta Partner.app/Contents/MacOS/%s",
+        "%s/Iskra Delta Partner P.app/Contents/MacOS/%s",
         applications, target_name);
     if (written < 0 || (size_t)written >= sizeof(target)) {
         fprintf(stderr, "Partner target path is too long\n");
         return 127;
     }
 
-    const size_t default_count = IDP_LAUNCH_PROFILE == 0 ? 0U
-                               : IDP_LAUNCH_PROFILE == 1 ? 5U
-                                                        : 3U;
+    const size_t default_count = IDP_LAUNCH_PROFILE == 0 ? 0U : 3U;
     char **target_argv = calloc((size_t)argc + default_count + 1U,
                                 sizeof(*target_argv));
     if (!target_argv) {
@@ -66,9 +64,7 @@ int main(int argc, char **argv)
     if (IDP_LAUNCH_PROFILE == 1) {
         target_argv[next++] = "--model";
         target_argv[next++] = "crt";
-        target_argv[next++] = "--system-floppy";
-        target_argv[next++] = "--boot";
-        target_argv[next++] = "floppy";
+        target_argv[next++] = "--system-crt-hdd";
     } else if (IDP_LAUNCH_PROFILE == 2) {
         target_argv[next++] = "--model";
         target_argv[next++] = "gdp";

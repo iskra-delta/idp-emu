@@ -1,7 +1,7 @@
 [Desktop Entry]
 Type=Application
 Name=partnerg
-Comment=Iskra Delta Partner G with its system hard disk
+Comment=Iskra Delta Partner GDP with its system hard disk
 Exec=/usr/bin/partnerg
 Icon=iskra-delta-partner
 Terminal=false

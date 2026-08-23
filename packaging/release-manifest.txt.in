@@ -5,15 +5,17 @@ Runtime layout:
   bin/       Native executables
   shared/    Bundled non-system runtime libraries
   roms/      Original Partner CRT and GDP ROM images
-  disks/     Writable seed floppy/hard-disk images (copied per user on first use)
+  disks/     Partner P and Partner G system HDD images (copied per user on first use)
   assets/    Fonts, UI assets, and icons (including partner.ico and mcp.ico)
   docs/      Command-line and hardware documentation
 
 Windows layout:
-  ./         partner.exe, idp-mcp.exe, partner-classic.bat, partner-graphical.bat, and CMOS seed
+  ./         partner.exe, idp-mcp.exe, partnerp.bat, partnerg.bat, and CMOS seed
   roms/      Original Partner CRT and GDP ROM images
-  disks/     Writable seed floppy/hard-disk images (copied per user on first use)
+  disks/     Partner P and Partner G system HDD images (copied per user on first use)
   assets/    Fonts, UI assets, and icons (including partner.ico and mcp.ico)
   docs/      Command-line and hardware documentation
 
 Package version: @PROJECT_VERSION@
+
+PAKET support: Internal Squid/Retro Vault device compiled into the emulator

@@ -77,8 +77,10 @@ Current repository media files:
   - `disks/fdd-partner-p.img` (P model floppy image)
   - `disks/fdd-partner-g.img` (G model floppy image)
 - Hard disks:
+  - `disks/hdd-partner-p-system.img` (bootable P/CRT CP/M system HDD)
   - `disks/hdd-partner-g.img` (G model HDD image with startup programs)
   - `disks/hdd-partner-g-empty.img` (empty G model HDD image)
+  - `disks/hdd-partner-g-system.img` (basic G/GDP CP/M system HDD)
 
 ### CPU and Chipset Overview
 
@@ -406,6 +408,12 @@ Per free SIO port, device options are:
 - `Serial Mouse (Mouse Systems)`
 - `Serial Mouse (Logitech)`
 - `TCP Bridge`
+- `Internal Squid (Retro Vault)`
+
+Partner CRT and Partner G attach Internal Squid to PAKET port 2 by default.
+The Devices panel can move the single attachment to either other free SIO
+port. Internal Squid connects PAKET directly to Retro Vault; TCP Bridge
+remains available for external serial applications.
 
 Logitech-specific behavior includes prompt/poll handling:
 

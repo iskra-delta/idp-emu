@@ -11,9 +11,9 @@ const char *sio_port_label(partner::sio_port_id port)
     switch (port)
     {
     case partner::sio_port_id::sio1_a: return "SIO1 Port A";
-    case partner::sio_port_id::sio1_b: return "SIO1 Port B";
-    case partner::sio_port_id::sio2_a: return "SIO2 Port A";
-    case partner::sio_port_id::sio2_b: return "SIO2 Port B";
+    case partner::sio_port_id::sio1_b: return "SIO1 Port B (PAKET 2)";
+    case partner::sio_port_id::sio2_a: return "SIO2 Port A (PAKET 3)";
+    case partner::sio_port_id::sio2_b: return "SIO2 Port B (PAKET 4)";
     }
     return "SIO ?";
 }
@@ -27,6 +27,7 @@ const char *sio_kind_label(partner::sio_device_kind kind)
     case partner::sio_device_kind::mouse_mousesystems: return "Serial Mouse (Mouse Systems)";
     case partner::sio_device_kind::mouse_logitech: return "Serial Mouse (Logitech)";
     case partner::sio_device_kind::tcp_bridge: return "TCP Bridge";
+    case partner::sio_device_kind::internal_squid: return "Internal Squid (Retro Vault)";
     }
     return "Unknown";
 }
@@ -85,12 +86,13 @@ void render_sio_port(partner &emu, partner::sio_port_id port)
     }
     else
     {
-        const std::array<partner::sio_device_kind, 5> kinds = {
+        const std::array<partner::sio_device_kind, 6> kinds = {
             partner::sio_device_kind::none,
             partner::sio_device_kind::mouse_microsoft,
             partner::sio_device_kind::mouse_mousesystems,
             partner::sio_device_kind::mouse_logitech,
-            partner::sio_device_kind::tcp_bridge
+            partner::sio_device_kind::tcp_bridge,
+            partner::sio_device_kind::internal_squid
         };
         int current_idx = 0;
         for (int i = 0; i < (int)kinds.size(); i++) {

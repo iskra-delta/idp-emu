@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=partner
-Comment=Classic Iskra Delta Partner with its system floppy
-Exec=/usr/bin/partner
+Name=partnerp
+Comment=Iskra Delta Partner P with its system hard disk
+Exec=/usr/bin/partnerp
 Icon=iskra-delta-partner
 Terminal=false
 Categories=System;Emulator;

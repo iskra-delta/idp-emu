@@ -1,5 +1,6 @@
 #include "partner_crt.hpp"
 
+#include <array>
 #include <cstdio>
 #include <string>
 #include <vector>
@@ -71,6 +72,10 @@ int main()
 
     {
         partner_crt_test emu(terminal_profile::vt52);
+        fails += !expect(
+            emu.get_sio_device_config(partner::sio_port_id::sio1_b).kind ==
+                partner::sio_device_kind::internal_squid,
+            "classic Partner defaults internal Squid to PAKET port 2");
         emu.reset();
         enable_tx(emu, INTERNAL_CTRL_PORT);
         enable_tx(emu, SECONDARY_B_CTRL_PORT);
@@ -97,6 +102,23 @@ int main()
                          "internal SIO clear screen reaches terminal");
         fails += !expect(emu.dump_terminal_text().find('B') == std::string::npos,
                          "internal clear screen removes prior text");
+    }
+
+    {
+        partner_crt_test emu(terminal_profile::vt52);
+        emu.reset();
+        enable_tx(emu, INTERNAL_CTRL_PORT);
+        const char marker[] = "CP/M V3.0 Loader";
+        for (char ch : marker)
+            send_tx_byte(emu, INTERNAL_DATA_PORT, (uint8_t)ch);
+        send_tx_byte(emu, INTERNAL_DATA_PORT, 'X');
+
+        emu.debug_set_pc(0x2000);
+        emu.tick();
+        fails += !expect(
+            emu.dump_raw_serial_text().find(marker) != std::string::npos &&
+                emu.dump_raw_serial_text().find('X') != std::string::npos,
+            "CP/M program execution at 2000h does not clear terminal output");
     }
 
     {
@@ -134,6 +156,48 @@ int main()
                          "host key stays off secondary SIO A");
         fails += !expect(!sio2.chn[Z80SIO_CHANNEL_B].rx_ready,
                          "host key stays off secondary SIO B");
+    }
+
+    {
+        partner_crt_test emu(terminal_profile::vt52);
+        emu.reset();
+        enable_tx(emu, INTERNAL_CTRL_PORT + 2);
+
+        std::array<uint8_t, 20> hello{};
+        hello.front() = 0x7E;
+        hello.back() = 0xD3;
+        for (uint8_t byte : hello)
+            send_tx_byte(emu, INTERNAL_DATA_PORT + 2, byte);
+
+        const auto stale = emu.get_sio_port_status(
+            partner::sio_port_id::sio1_b);
+        fails += !expect(stale.connected,
+                         "first PAKET session reaches internal Squid");
+        fails += !expect(stale.pending_rx_bytes > 0,
+                         "unread first-session response is queued");
+
+        // PAKET starts each invocation with a WR0 channel-reset command.
+        emu.io_write(INTERNAL_CTRL_PORT + 2, 0x18);
+        const auto reset = emu.get_sio_port_status(
+            partner::sio_port_id::sio1_b);
+        fails += !expect(!reset.connected,
+                         "guest SIO reset closes the previous Squid session");
+        fails += !expect(reset.pending_rx_bytes == 0,
+                         "guest SIO reset discards stale Squid response bytes");
+
+        enable_rx(emu, INTERNAL_CTRL_PORT + 2);
+        enable_tx(emu, INTERNAL_CTRL_PORT + 2);
+        for (uint8_t byte : hello)
+            send_tx_byte(emu, INTERNAL_DATA_PORT + 2, byte);
+        for (int i = 0; i < 10000; ++i)
+            emu.tick();
+
+        const auto fresh = emu.get_sio_port_status(
+            partner::sio_port_id::sio1_b);
+        fails += !expect(fresh.connected,
+                         "second PAKET session reaches internal Squid");
+        fails += !expect(fresh.rx_bytes > 0,
+                         "second PAKET session receives a fresh handshake");
     }
 
     if (fails == 0) {

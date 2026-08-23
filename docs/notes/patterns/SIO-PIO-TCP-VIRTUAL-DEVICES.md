@@ -53,6 +53,7 @@ Available device kinds:
 - `mouse_mousesystems`
 - `mouse_logitech`
 - `tcp_bridge`
+- `internal_squid`
 
 ### Modem-Line Behavior
 
@@ -62,6 +63,12 @@ Available device kinds:
   - `DCD` follows data-client connection by default.
   - `CTS` follows data-client connection if enabled by config.
   - Both can be overridden by control socket commands.
+- For internal Squid: `CTS=1`, `DCD=1`; the virtual cable is present before
+  PAKET completes its link handshake.
+
+Only one internal Squid service is attached at a time. Selecting it on a new
+free SIO port moves the attachment. Partner CRT and GDP select `sio1_b`
+(PAKET port 2) by default; `sio2_a` and `sio2_b` remain valid choices.
 
 ## Mouse Emulation
 

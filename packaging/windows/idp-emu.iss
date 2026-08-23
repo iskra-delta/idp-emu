@@ -43,15 +43,21 @@ Type: files; Name: "{autoprograms}\partner.lnk"
 Type: files; Name: "{autoprograms}\partnerg.lnk"
 Type: files; Name: "{autodesktop}\partner.lnk"
 Type: files; Name: "{autodesktop}\partnerg.lnk"
+Type: files; Name: "{autoprograms}\partner-classic.lnk"
+Type: files; Name: "{autoprograms}\partner-graphical.lnk"
+Type: files; Name: "{autodesktop}\partner-classic.lnk"
+Type: files; Name: "{autodesktop}\partner-graphical.lnk"
+Type: files; Name: "{app}\partner-classic.bat"
+Type: files; Name: "{app}\partner-graphical.bat"
 
 [Icons]
-Name: "{autoprograms}\partner-classic"; Filename: "{app}\partner-classic.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"
-Name: "{autoprograms}\partner-graphical"; Filename: "{app}\partner-graphical.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"
-Name: "{autodesktop}\partner-classic"; Filename: "{app}\partner-classic.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"; Tasks: desktopicon
-Name: "{autodesktop}\partner-graphical"; Filename: "{app}\partner-graphical.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"; Tasks: desktopicon
+Name: "{autoprograms}\partnerp"; Filename: "{app}\partnerp.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"
+Name: "{autoprograms}\partnerg"; Filename: "{app}\partnerg.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"
+Name: "{autodesktop}\partnerp"; Filename: "{app}\partnerp.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"; Tasks: desktopicon
+Name: "{autodesktop}\partnerg"; Filename: "{app}\partnerg.bat"; WorkingDir: "{app}"; IconFilename: "{app}\partner.exe"; Tasks: desktopicon
 
 [Tasks]
 Name: "desktopicon"; Description: "Create &desktop shortcuts"; GroupDescription: "Additional icons:"; Flags: unchecked
 
 [Run]
-Filename: "{app}\partner-classic.bat"; WorkingDir: "{app}"; Description: "Launch partner-classic"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\partnerp.bat"; WorkingDir: "{app}"; Description: "Launch partnerp"; Flags: nowait postinstall skipifsilent
