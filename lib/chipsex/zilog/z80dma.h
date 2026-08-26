@@ -901,8 +901,12 @@ static uint64_t _z80dma_int(z80dma_t *dma, uint64_t pins)
     if ((dma->int_state != 0) && (pins & Z80DMA_IEIO)) {
         pins &= ~Z80DMA_IEIO;
 
-        if (dma->int_state & Z80DMA_INT_NEEDED) {
+        /* INT is level-held from request until acknowledge. NEEDED is only
+           the one-time promotion state; REQUESTED must continue driving INT
+           on every intervening CPU cycle. */
+        if (dma->int_state & (Z80DMA_INT_NEEDED | Z80DMA_INT_REQUESTED))
             pins |= Z80DMA_INT;
+        if (dma->int_state & Z80DMA_INT_NEEDED) {
             dma->int_state = (dma->int_state & ~Z80DMA_INT_NEEDED) | Z80DMA_INT_REQUESTED;
         }
 

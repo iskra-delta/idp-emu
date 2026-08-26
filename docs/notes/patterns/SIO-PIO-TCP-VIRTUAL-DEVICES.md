@@ -16,15 +16,15 @@ This note is intended as the implementation baseline for future refinements.
 
 ## Hardware/Port Topology in Emulator
 
-- Main PIO: `0xD0..0xD3`
+- Main PIO: `0xD0..0xD7` (registers repeat when A2=1)
   - `0xD0`: Port A data
   - `0xD1`: Port A control
   - `0xD2`: Port B data
   - `0xD3`: Port B control
-- Main SIO #1: `0xD8..0xDB`
+- Main SIO #1: `0xD8..0xDF` (registers repeat when A2=1)
   - `0xD8/D9`: channel A data/control
   - `0xDA/DB`: channel B data/control
-- Main SIO #2: `0xE0..0xE3` (`0xE4` alias path also decoded by current port-range helper)
+- Main SIO #2: `0xE0..0xE7` (registers repeat when A2=1)
   - `0xE0/E1`: channel A data/control
   - `0xE2/E3`: channel B data/control
 
@@ -166,7 +166,7 @@ Available PIO attachment kinds per port A/B:
 
 Data path:
 
-- On writes to `0xD0..0xD3`, only data-port writes (`D0/D2`) trigger virtual-device output handling.
+- Across `0xD0..0xD7`, only data-register aliases (`D0/D2/D4/D6`) trigger virtual-device output handling.
 - Control-port writes (`D1/D3`) do not push device payload bytes.
 
 ### Covox
@@ -183,7 +183,8 @@ Data path:
 
 ## Interrupt and Daisy-Chain Context
 
-- System interrupt priority order (in tick loop): DMA -> CTC -> SIO1 -> SIO2 -> PIO.
+- System interrupt priority order: CTC -> DMA -> SIO1 -> SIO2 -> motherboard
+  PIO -> discrete FDC daisy glue -> expansion device (GDP-local PIO on G).
 - Virtual device service runs after chip ticks, preserving chip-level interrupt behavior.
 - Modem inputs are applied to SIO pins each tick before `z80sio_tick()`.
 
@@ -204,6 +205,20 @@ cd build && ctest --output-on-failure
 
 ## Known Limits / Follow-Up
 
-- SIO emulation is significantly improved for async/control/interrupt behavior but still not full SDLC/sync/timing-complete.
-- PIO emulation now covers key handshake/interrupt behavior and active-low strobe logic, but advanced edge-case timing can still be refined.
+- SIO asynchronous operation is timed at the Partner system-tick boundary and
+  covers all character sizes, parity choices, stop lengths, clock divisors,
+  FIFO errors, modem latches, Wait/Ready, auto-enables, and interrupt causes.
+  Sync/SDLC serialization and individual TxC/RxC electrical edges remain
+  outside the complete-character line API.
+- PIO covers all four modes, both active-low handshakes, all Mode 3 equations,
+  M1 interrupt inhibition/reset, and daisy-chain priority at the system-tick
+  boundary. Datasheet analogue propagation delays within a clock are not
+  represented by the emulator's digital pin API.
 - TCP bridge is functional and controllable; further optimization may be useful for heavy traffic sessions.
+
+The conformance cases follow Zilog's
+[Z80 CPU Peripherals User Manual](https://www.zilog.com/docs/z80/um0081.pdf).
+The Mode 3 programming sequence is also cross-checked against the
+[Zeal Z80 PIO example](https://zeal8bit.com/docs/pio/), while asynchronous SIO
+initialization is checked against both the Partner ROM byte sequence and the
+[Z80 SIO programming examples](https://www.hp64000.net/scansioni/Programmazione_Z80/howto_program_the_Z80-SIO.pdf).

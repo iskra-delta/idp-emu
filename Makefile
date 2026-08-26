@@ -28,7 +28,7 @@ $(BUILD_DIR)/CMakeCache.txt: | fetch
 	cmake -S . -B $(BUILD_DIR)
 
 build: configure
-	cmake --build $(BUILD_DIR)
+	+cmake --build $(BUILD_DIR)
 	cmake -E remove_directory $(abspath $(BIN_DIR))
 	cmake --install $(BUILD_DIR) --prefix $(abspath $(BIN_DIR))
 

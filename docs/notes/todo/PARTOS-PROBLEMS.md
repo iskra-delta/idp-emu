@@ -1,4 +1,4 @@
-# PROBLEM: FDD `partos_kernel_boot` derail #2 (worker-stack corruption)
+# PartOS Problems: FDD `partos_kernel_boot` derail #2 (worker-stack corruption)
 
 ## RESOLVED (2026-06-20)
 FDD path now PASSES end-to-end (`partos_kernel_boot` depth 10/10, loader_reached;

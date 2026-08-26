@@ -48,6 +48,7 @@ private:
     uint64_t video_frames_ = 0;
     int video_width_ = 0;
     int video_height_ = 0;
+    bool video_include_border_ = true;
 
     nlohmann::json invoke_tool(const std::string &name,
                                const nlohmann::json &arguments);
@@ -59,7 +60,7 @@ private:
     nlohmann::json breakpoint_state() const;
     std::optional<uint32_t> execute_breakpoint(uint16_t address);
     std::optional<uint32_t> bus_breakpoint(uint64_t pins);
-    captured_screen capture_screen(int scale = 1);
+    captured_screen capture_screen(int scale = 1, bool include_border = true);
     void record_video_frame();
     void capture_video_if_due();
 };

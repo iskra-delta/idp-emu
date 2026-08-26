@@ -37,8 +37,12 @@
     *           +-----------+           *
     *************************************
 
-    ## Not Emulated
-        - bidirectional mode
+    ## Supported Features
+        - output, input, bidirectional, and bit-control modes
+        - active-low strobe/ready handshakes
+        - mode-3 mask equations and edge-triggered interrupts
+        - Z80 daisy-chain acknowledge and RETI handling
+        - M1 reset and interrupt-inhibit timing
 
     ## Functions:
     ~~~C
@@ -273,12 +277,15 @@ typedef struct {
     bool bctrl_match;       /* bitcontrol logic equation result */
     bool ready;             /* ready signal state (ARDY/BRDY output) */
     bool strobe_prev;       /* previous strobe state for edge detection */
+    bool interrupt_deferred;/* interrupt edge observed while M1 was active */
 } z80pio_port_t;
 
 /* Z80 PIO state. */
 typedef struct {
     z80pio_port_t port[Z80PIO_NUM_PORTS];
     bool reset_active;  /* currently in reset state? (until a control word is received) */
+    bool m1_active;     /* interrupt-state changes are inhibited while M1 is active */
+    bool reset_pending; /* reset after M1 without RD/IORQ returns inactive */
     uint64_t pins;      /* last pin state (useful for debugging) */
 } z80pio_t;
 
@@ -350,8 +357,22 @@ void z80pio_reset(z80pio_t* pio) {
         pio->port[p].ready = false;
         /* STB pins are active-low, idle high after reset. */
         pio->port[p].strobe_prev = true;
+        pio->port[p].interrupt_deferred = false;
     }
     pio->reset_active = true;
+    pio->m1_active = false;
+    pio->reset_pending = false;
+}
+
+static inline void _z80pio_request_interrupt(z80pio_t* pio, z80pio_port_t* p) {
+    /* Zilog inhibits changes to the interrupt-request state throughout M1.
+       Preserve an edge seen during M1 and expose it immediately afterwards. */
+    if (pio->m1_active) {
+        p->interrupt_deferred = true;
+    }
+    else {
+        p->int_state |= Z80PIO_INT_NEEDED;
+    }
 }
 
 /* new control word received from CPU */
@@ -382,9 +403,11 @@ void _z80pio_write_ctrl(z80pio_t* pio, int port_id, uint8_t data) {
             uint8_t mode = data >> 6;
             /* MK3881/Z80-PIO supports bidirectional mode on port A only. */
             if ((port_id == Z80PIO_PORT_B) && (mode == Z80PIO_MODE_BIDIRECTIONAL)) {
-                mode = Z80PIO_MODE_INPUT;
+                return;
             }
             p->mode = mode;
+            /* Handshake outputs start inactive. Mode 0 is raised by a data
+               write; Modes 1 and 2 input are primed by a CPU data read. */
             p->ready = false;
             p->strobe_prev = true;
             p->expect_int_mask = false;
@@ -470,17 +493,19 @@ uint8_t _z80pio_read_data(z80pio_t* pio, int port_id) {
         case Z80PIO_MODE_OUTPUT:
             return p->output;
         case Z80PIO_MODE_INPUT:
-            // Reading input data clears ready signal
-            p->ready = false;
+            /* A CPU read consumes the full input register and advertises that
+               the peripheral may strobe another byte. */
+            p->ready = true;
             return p->input;
         case Z80PIO_MODE_BIDIRECTIONAL:
-            // Port A is output, Port B is input
+            /* Both directions use Port A's data bus.  ARDY/ASTB control the
+               output half, while BRDY/BSTB and Port B's interrupt vector
+               control the input half. */
             if (port_id == Z80PIO_PORT_A) {
-                return p->output;
-            } else {
-                p->ready = false;
+                pio->port[Z80PIO_PORT_B].ready = true;
                 return p->input;
             }
+            return p->input;
         case Z80PIO_MODE_BITCONTROL:
             return (p->input & p->io_select) | (p->output & ~p->io_select);
         default:
@@ -603,9 +628,8 @@ uint64_t _z80pio_int(z80pio_t* pio, uint64_t pins) {
               pin will be set to active, so that downstream devices
               get a chance to decode the RETI
 
-            - NOT IMPLEMENTED: "All channels are inhibited from changing
-              their interrupt request status when M1 is active - about two
-              clock cycles earlier than IORQ".
+            - all channels defer new interrupt requests while M1 is active,
+              including the clocks preceding IORQ during acknowledge
         */
         const bool int_active = (p->int_state & (Z80PIO_INT_REQUESTED | Z80PIO_INT_SERVICED)) != 0;
         if ((p->int_state != 0) && (pins & Z80PIO_IEIO) && (p->int_enabled || int_active)) {
@@ -639,6 +663,37 @@ uint64_t z80pio_daisychain(z80pio_t* pio, uint64_t pins) {
 }
 
 void _z80pio_read_port_inputs(z80pio_t* pio, uint64_t pins) {
+    /* In Mode 2, Port A owns the bidirectional data bus.  ASTB/ARDY form
+       its output handshake and BSTB/BRDY form its input handshake. */
+    if (pio->port[Z80PIO_PORT_A].mode == Z80PIO_MODE_BIDIRECTIONAL) {
+        z80pio_port_t* pa = &pio->port[Z80PIO_PORT_A];
+        z80pio_port_t* pb = &pio->port[Z80PIO_PORT_B];
+        const bool astb = (pins & Z80PIO_ASTB) != 0;
+        const bool bstb = (pins & Z80PIO_BSTB) != 0;
+        const bool astb_rising = !pa->strobe_prev && astb;
+        const bool bstb_rising = !pb->strobe_prev && bstb;
+
+        if (!bstb && pb->ready)
+            pa->input = Z80PIO_GET_PA(pins);
+        if (astb_rising && pa->ready) {
+            pa->ready = false;
+            _z80pio_request_interrupt(pio, pa);
+        }
+        if (bstb_rising && pb->ready) {
+            pb->ready = false;
+            _z80pio_request_interrupt(pio, pb);
+        }
+        pa->strobe_prev = astb;
+        pb->strobe_prev = bstb;
+
+        /* Port B's pins still obey its Mode 3 directions, but its mask
+           equation is unavailable because its handshake logic belongs to
+           the input half of Mode 2. */
+        if (pb->mode == Z80PIO_MODE_BITCONTROL)
+            pb->input = Z80PIO_GET_PB(pins);
+        return;
+    }
+
     for (int i = 0; i < Z80PIO_NUM_PORTS; i++) {
         z80pio_port_t* p = &pio->port[i];
         uint8_t data = (i == 0) ? Z80PIO_GET_PA(pins) : Z80PIO_GET_PB(pins);
@@ -657,22 +712,18 @@ void _z80pio_read_port_inputs(z80pio_t* pio, uint64_t pins) {
                 p->input = data;
             }
 
-            /* Rising edge acknowledges transfer and makes data available to CPU. */
+            /* The rising edge completes the transfer: the input register is
+               full, so Ready becomes inactive until the CPU reads it. */
             if (strobe_rising) {
-                p->ready = true;  // Ready goes active
-                if (p->int_enabled) {
-                    p->int_state |= Z80PIO_INT_NEEDED;
-                }
+                p->ready = false;
+                _z80pio_request_interrupt(pio, p);
             }
         }
         else if (Z80PIO_MODE_OUTPUT == p->mode) {
             /* Peripheral acknowledge on STB deassertion (low->high). */
             if (strobe_rising) {
                 p->ready = false;
-                // Generate interrupt if enabled
-                if (p->int_enabled) {
-                    p->int_state |= Z80PIO_INT_NEEDED;
-                }
+                _z80pio_request_interrupt(pio, p);
             }
         }
         else if (Z80PIO_MODE_BIDIRECTIONAL == p->mode) {
@@ -681,19 +732,15 @@ void _z80pio_read_port_inputs(z80pio_t* pio, uint64_t pins) {
             if (i == Z80PIO_PORT_A) {
                 if (strobe_rising) {
                     p->ready = false;
-                    if (p->int_enabled) {
-                        p->int_state |= Z80PIO_INT_NEEDED;
-                    }
+                    _z80pio_request_interrupt(pio, p);
                 }
             } else {
                 if (strobe_asserted) {
                     p->input = data;
                 }
                 if (strobe_rising) {
-                    p->ready = true;
-                    if (p->int_enabled) {
-                        p->int_state |= Z80PIO_INT_NEEDED;
-                    }
+                    p->ready = false;
+                    _z80pio_request_interrupt(pio, p);
                 }
             }
         }
@@ -707,13 +754,15 @@ void _z80pio_read_port_inputs(z80pio_t* pio, uint64_t pins) {
             bool match = false;
             val &= mask;
 
-            const uint8_t ictrl = p->int_control & 0x60;
-            if ((ictrl == 0) && (val != mask)) match = true;
-            else if ((ictrl == 0x20) && (val != 0)) match = true;
-            else if ((ictrl == 0x40) && (val == 0)) match = true;
-            else if ((ictrl == 0x60) && (val == mask)) match = true;
-            if (!p->bctrl_match && match && p->int_enabled) {
-                p->int_state |= Z80PIO_INT_NEEDED;
+            if (mask != 0) {
+                const uint8_t ictrl = p->int_control & 0x60;
+                if ((ictrl == 0) && (val != mask)) match = true;
+                else if ((ictrl == 0x20) && (val != 0)) match = true;
+                else if ((ictrl == 0x40) && (val == 0)) match = true;
+                else if ((ictrl == 0x60) && (val == mask)) match = true;
+            }
+            if (!p->bctrl_match && match) {
+                _z80pio_request_interrupt(pio, p);
             }
             p->bctrl_match = match;
         }
@@ -728,13 +777,13 @@ uint64_t z80pio_tick(z80pio_t* pio, uint64_t pins) {
           if the interrupt enable flip-flop is set and this device has the
           highest priority.
 
-        - INPUT MODE (FIXME): When ASTB/BSTB goes active, data is loaded into the port's
+        - INPUT MODE: When ASTB/BSTB goes active, data is loaded into the port's
           input register. When ASTB/BSTB then goes from active to inactive, an
-          INT is generated is interrupt enable is set and this is the highest
-          priority interrupt device. ARDY/BRDY goes active on ASTB/BSTB going
-          inactive, and remains active until the CPU reads the input data.
+          INT is generated if the interrupt enable flip-flop is set and this is
+          the highest-priority interrupt device. ARDY/BRDY goes inactive when
+          the input register becomes full and active again when the CPU reads it.
 
-        - BIDIRECTIONAL MODE: FIXME
+        - BIDIRECTIONAL MODE: Port A data with A-output and B-input handshakes.
 
         - BIT MODE: no handshake pins (ARDY/BRDY, ASTB/BSTB) are used. A CPU write
           cycle latches the data into the output register. On a CPU read cycle,
@@ -746,9 +795,22 @@ uint64_t z80pio_tick(z80pio_t* pio, uint64_t pins) {
           the data on the port data lines satisfy the logical equation defined by
           the 8-bit mask and 2-bit mask control registers
     */
-    if ((pins & Z80PIO_M1) && !(pins & Z80PIO_IORQ) && !(pins & Z80PIO_RD)) {
-        /* Enter reset state when M1 occurs without RD/IORQ active. */
+    const bool m1_now = (pins & Z80PIO_M1) != 0;
+    if (m1_now && !(pins & Z80PIO_IORQ) && !(pins & Z80PIO_RD)) {
+        /* The reset takes effect after this M1 signal returns inactive. */
+        pio->reset_pending = true;
+    }
+    if (!m1_now && pio->reset_pending) {
         z80pio_reset(pio);
+    }
+    pio->m1_active = m1_now;
+    if (!m1_now) {
+        for (int i = 0; i < Z80PIO_NUM_PORTS; i++) {
+            if (pio->port[i].interrupt_deferred) {
+                pio->port[i].interrupt_deferred = false;
+                pio->port[i].int_state |= Z80PIO_INT_NEEDED;
+            }
+        }
     }
     if ((pins & (Z80PIO_CE|Z80PIO_IORQ|Z80PIO_M1)) == (Z80PIO_CE|Z80PIO_IORQ)) {
         pins = _z80pio_iorq(pio, pins);

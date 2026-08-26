@@ -23,6 +23,7 @@ constexpr uint64_t TCP_POLL_INTERVAL_ACTIVE_TICKS = 2048;
 constexpr uint64_t TCP_POLL_INTERVAL_IDLE_TICKS = 8192;
 constexpr uint64_t PARTNER_CPU_CLOCK_HZ = 4000000;
 constexpr uint64_t PARTNER_SIO_CLOCK_HZ = 153600;
+constexpr uint64_t PARTNER_CTC_XX1_HALF_PERIOD_TICKS = 1250;
 constexpr uint8_t  PARTNER_SPURIOUS_VECTOR = 0x00;
 constexpr uint8_t  PARTNER_FD0_TYPE_MASK = 0xC0;
 constexpr uint8_t  PARTNER_FD1_TYPE_MASK = 0x30;
@@ -55,18 +56,6 @@ static inline void i8272_bus_write(i8272_t* fdc, uint8_t reg, uint8_t data) {
     I8272_SET_DATA(pins, data);
     pins &= ~(I8272_CS | I8272_WR);
     (void)i8272_tick_pins(fdc, pins);
-}
-
-static inline uint64_t s1410_bus_idle() {
-    return S1410_CS | S1410_RD | S1410_WR | S1410_RESET;
-}
-
-static inline uint8_t s1410_bus_read(s1410_t* hdc, uint8_t reg) {
-    uint64_t pins = s1410_bus_idle();
-    pins |= (reg & 0x03);
-    pins &= ~(S1410_CS | S1410_RD);
-    pins = s1410_tick_pins(hdc, pins);
-    return S1410_GET_DATA(pins);
 }
 
 static inline uint64_t mm58167a_bus_idle() {
@@ -106,27 +95,64 @@ static inline uint64_t z80sio_port_pins(uint8_t port, bool is_read, uint8_t data
         Z80SIO_SET_DATA(sio_pins, data);
     }
 
-    if ((port == 0xD8) || (port == 0xE0)) {
+    switch (port & 0x03u) {
+    case 0:
         // Channel A data
-    } else if ((port == 0xD9) || (port == 0xE1)) {
+        break;
+    case 1:
         // Channel A control/status
         sio_pins |= Z80SIO_CS_A;
-    } else if ((port == 0xDA) || (port == 0xE2)) {
+        break;
+    case 2:
         // Channel B data
         sio_pins |= Z80SIO_CS_B;
-    } else {
+        break;
+    default:
         // Channel B control/status aliases
         sio_pins |= Z80SIO_CS_A | Z80SIO_CS_B;
+        break;
     }
     return sio_pins;
 }
 
 static inline bool partner_sio0_port(uint8_t port) {
-    return port >= 0xD8 && port <= 0xDB;
+    return port >= 0xD8 && port <= 0xDF;
 }
 
 static inline bool partner_sio1_port(uint8_t port) {
-    return port >= 0xE0 && port <= 0xE3;
+    return port >= 0xE0 && port <= 0xE7;
+}
+
+static inline bool partner_dma_port(uint8_t port) {
+    return port >= 0xC0 && port <= 0xC7;
+}
+
+static inline bool partner_ctc_port(uint8_t port) {
+    return port >= 0xC8 && port <= 0xCF;
+}
+
+static inline bool partner_pio_port(uint8_t port) {
+    return port >= 0xD0 && port <= 0xD7;
+}
+
+static inline bool partner_fdc_vector_port(uint8_t port) {
+    return port >= 0xE8 && port <= 0xEF;
+}
+
+static inline bool partner_fdc_port(uint8_t port) {
+    return port >= 0xF0 && port <= 0xF7;
+}
+
+static inline bool partner_motor_port(uint8_t port) {
+    return port >= 0x98 && port <= 0x9F;
+}
+
+static inline bool partner_sasi_port(uint8_t port) {
+    return port >= 0x10 && port <= 0x1F;
+}
+
+static inline uint8_t partner_sasi_function(uint8_t port) {
+    return port & 0x03u;
 }
 
 static inline uint8_t z80sio_cpu_read(z80sio_t* sio, uint8_t port) {
@@ -145,7 +171,8 @@ static inline void z80sio_cpu_write(z80sio_t* sio, uint8_t port, uint8_t data) {
 }
 
 static inline uint8_t z80pio_cpu_read(z80pio_t* pio, uint8_t port) {
-    uint64_t pins = Z80PIO_CE | Z80PIO_IORQ | Z80PIO_RD;
+    uint64_t pins = Z80PIO_CE | Z80PIO_IORQ | Z80PIO_RD |
+                    Z80PIO_ASTB | Z80PIO_BSTB;
     if (port & 0x01) pins |= Z80PIO_CDSEL;
     if (port & 0x02) pins |= Z80PIO_BASEL;
     pins = z80pio_tick(pio, pins);
@@ -153,7 +180,7 @@ static inline uint8_t z80pio_cpu_read(z80pio_t* pio, uint8_t port) {
 }
 
 static inline void z80pio_cpu_write(z80pio_t* pio, uint8_t port, uint8_t data) {
-    uint64_t pins = Z80PIO_CE | Z80PIO_IORQ;
+    uint64_t pins = Z80PIO_CE | Z80PIO_IORQ | Z80PIO_ASTB | Z80PIO_BSTB;
     if (port & 0x01) pins |= Z80PIO_CDSEL;
     if (port & 0x02) pins |= Z80PIO_BASEL;
     Z80PIO_SET_DATA(pins, data);
@@ -1080,9 +1107,14 @@ void partner::write_debug_memory(uint32_t address, const std::vector<uint8_t> &d
 {
     for (size_t i = 0; i < data.size(); ++i) {
         const uint16_t addr = (uint16_t)(address + i);
-        if (allow_rom && rom_enabled && addr < 0x2000) {
-            rom[addr & (rom_size - 1)] = data[i];
-            rom_loaded_ = true;
+        if (allow_rom && rom_enabled && addr < rom_capacity) {
+            if (addr < rom_size) {
+                rom[addr] = data[i];
+                rom_loaded_ = true;
+            } else {
+                rom2[addr - rom_size] = data[i];
+                rom2_loaded_ = true;
+            }
         } else {
             write_mem(addr, data[i]);
         }
@@ -1097,9 +1129,13 @@ void partner::clear_debug_memory()
 
 void partner::load_debug_rom(const std::vector<uint8_t> &data)
 {
-    if (data.size() != rom_size)
-        throw std::runtime_error("Partner ROM image must be exactly 2048 bytes");
-    std::copy(data.begin(), data.end(), rom.begin());
+    if (data.size() != rom_size && data.size() != rom_capacity)
+        throw std::runtime_error("Partner ROM image must be exactly 2048 or 4096 bytes");
+    std::copy_n(data.begin(), rom_size, rom.begin());
+    rom2.fill(0xFF);
+    rom2_loaded_ = data.size() == rom_capacity;
+    if (rom2_loaded_)
+        std::copy(data.begin() + rom_size, data.end(), rom2.begin());
     rom_loaded_ = true;
 }
 
@@ -1625,10 +1661,11 @@ void partner::load_rom(const std::string &path)
     std::ifstream file(path, std::ios::binary);
     if (!file)
         throw std::runtime_error("cannot open rom file: " + path);
-    file.read(reinterpret_cast<char *>(rom.data()), rom_size);
-    if (!file)
-        throw std::runtime_error("incomplete rom file: " + path);
-    rom_loaded_ = true;
+    std::vector<uint8_t> image(
+        (std::istreambuf_iterator<char>(file)), std::istreambuf_iterator<char>());
+    if (image.size() != rom_size && image.size() != rom_capacity)
+        throw std::runtime_error("Partner ROM image must be exactly 2048 or 4096 bytes: " + path);
+    load_debug_rom(image);
 
     std::cerr << "[info] rom loaded: " << path << "\n";
 }
@@ -1668,6 +1705,7 @@ void partner::reset()
     fdc_int_vector = 0;
     fdc_motor = 0;
     fdc_int_state = 0;
+    fdc_irq_level_ = false;
     fdc_reset_irq_armed_ = false;
     prompt_fdc_cleanup_done_ = false;
     fdc_motor_running = false;
@@ -1743,6 +1781,14 @@ void partner::tick()
             fdc.cmd_code, fdc.data_idx, fdc.data_len,
             fdc.result_idx, fdc.result_len);
     }
+    // JJ12 connects the MM58167's active-high interrupt, through the board
+    // inverter, to the CPU's active-low NMI input. CHIPS pin masks represent
+    // assertion rather than electrical polarity, so reflect it as Z80_NMI.
+    const uint64_t rtc_pins = mm58167a_tick(&rtc, mm58167a_bus_idle());
+    if (rtc_pins & MM58167A_INT)
+        pins |= Z80_NMI;
+    else
+        pins &= ~Z80_NMI;
     const uint64_t prev_pins = pins;
 
     const bool cpu_ticked = !dma_owns_bus();
@@ -1808,13 +1854,13 @@ void partner::tick()
         const uint8_t cpu_port = cpu_addr & 0xFF;
         const uint16_t prev_cpu_addr = Z80_GET_ADDR(prev_pins);
         const uint8_t prev_cpu_port = prev_cpu_addr & 0xFF;
-        const bool dma_wr_now = (cpu_port == 0xC0) &&
+        const bool dma_wr_now = partner_dma_port(cpu_port) &&
             ((pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR));
-        const bool dma_wr_prev = (prev_cpu_port == 0xC0) &&
+        const bool dma_wr_prev = partner_dma_port(prev_cpu_port) &&
             ((prev_pins & (Z80_IORQ | Z80_WR)) == (Z80_IORQ | Z80_WR));
-        const bool dma_rd_now = (cpu_port == 0xC0) &&
+        const bool dma_rd_now = partner_dma_port(cpu_port) &&
             ((pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD));
-        const bool dma_rd_prev = (prev_cpu_port == 0xC0) &&
+        const bool dma_rd_prev = partner_dma_port(prev_cpu_port) &&
             ((prev_pins & (Z80_IORQ | Z80_RD)) == (Z80_IORQ | Z80_RD));
 
         if (dma_wr_now && !dma_wr_prev)
@@ -1830,7 +1876,29 @@ void partner::tick()
     // Set IEIO to enable interrupt daisy chain
     pins |= Z80_IEIO;
 
-    // Highest priority: DMA (port 0xC0)
+    // Highest priority: CTC (ports 0xC8-0xCF). The MC14411's default F13
+    // output is a 1600 Hz square wave at channel 0; ZC/TO0 cascades into
+    // channel 1 for the floppy-motor timeout.
+    pins &= ~(Z80CTC_CE | Z80CTC_CS0 | Z80CTC_CS1 |
+              Z80CTC_CLKTRG0 | Z80CTC_CLKTRG1 | Z80CTC_CLKTRG2 | Z80CTC_CLKTRG3);
+    if (((tick_count / PARTNER_CTC_XX1_HALF_PERIOD_TICKS) & 1u) != 0)
+        pins |= Z80CTC_CLKTRG0;
+    if (ctc.pins & Z80CTC_ZCTO0)
+        pins |= Z80CTC_CLKTRG1;
+    if (get_ctc3_trigger_edge())
+        pins |= Z80CTC_CLKTRG3;
+    pins = z80ctc_tick(&ctc, pins);
+    pins &= ~(Z80CTC_CE | Z80CTC_CS0 | Z80CTC_CS1 |
+              Z80CTC_CLKTRG0 | Z80CTC_CLKTRG1 | Z80CTC_CLKTRG2 | Z80CTC_CLKTRG3);
+    if (pins & Z80CTC_ZCTO1)
+    {
+        fdc_motor_running = false;
+        fdc_motor = 0;
+        for (int drive = 0; drive < I8272_MAX_DRIVES; ++drive)
+            i8272_set_drive_motor(&fdc, drive, false);
+    }
+
+    // Second priority: DMA (ports 0xC0-0xC7)
     // Present a simple external-ready signal to the DMA so boot-time
     // transfers from the FDC data port don't start until sector data is
     // actually available.
@@ -1849,9 +1917,9 @@ void partner::tick()
                 // Once a byte has been latched, keep RDY asserted long enough
                 // for the matching write-back cycle to complete.
                 ready = true;
-            } else if (src_port == 0xF1) {
+            } else if (partner_fdc_port(src_port) && (src_port & 1u)) {
                 ready = (fdc.phase == I8272_PHASE_EXECUTE);
-            } else if (src_port == 0x11) {
+            } else if (partner_sasi_port(src_port) && partner_sasi_function(src_port) == 1) {
                 ready = idpartner_sasi_drq(&sasi_);
             }
         }
@@ -1866,9 +1934,9 @@ void partner::tick()
                 const uint8_t dst_port = (uint8_t)(dst.address & 0xFF);
                 if (dma.state == Z80DMA_STATE_WRITE) {
                     ready = true;
-                } else if (dst_port == 0xF1) {
+                } else if (partner_fdc_port(dst_port) && (dst_port & 1u)) {
                     ready = (fdc.phase == I8272_PHASE_EXECUTE);
-                } else if (dst_port == 0x11) {
+                } else if (partner_sasi_port(dst_port) && partner_sasi_function(dst_port) == 1) {
                     ready = idpartner_sasi_drq(&sasi_);
                 }
             }
@@ -1893,33 +1961,7 @@ void partner::tick()
         service_dma_write_bus(pins);
     pins &= ~Z80DMA_CE;
 
-    // Second priority: CTC (ports 0xC8-0xCB). CPU I/O is dispatched exactly
-    // once by service_cpu_bus() through io_read()/io_write(). Never decode the
-    // shared pins here: during a DMA memory cycle their low address can happen
-    // to be C8h..CBh while IORQ is still present from the DMA bus phase. That
-    // used sector bytes as CTC control words, eventually enabling a 10 kHz
-    // channel-2 interrupt which starved the floppy-controller interrupt.
-    pins &= ~(Z80CTC_CE | Z80CTC_CS0 | Z80CTC_CS1 |
-              Z80CTC_CLKTRG0 | Z80CTC_CLKTRG1 | Z80CTC_CLKTRG2 | Z80CTC_CLKTRG3);
-    // CTC ch0 ZCTO0 → ch1 CLK (motor cascade).
-    if (ctc.pins & Z80CTC_ZCTO0)
-        pins |= Z80CTC_CLKTRG1;
-    // GDP board wiring: the AVDC vertical-blank output clocks CTC channel 3.
-    // The base Partner has no AVDC, so its virtual wire remains low.
-    if (get_avdc_vb_edge())
-        pins |= Z80CTC_CLKTRG3;
-    pins = z80ctc_tick(&ctc, pins);
-    pins &= ~(Z80CTC_CE | Z80CTC_CS0 | Z80CTC_CS1 |
-              Z80CTC_CLKTRG0 | Z80CTC_CLKTRG1 | Z80CTC_CLKTRG2 | Z80CTC_CLKTRG3);
-    if (pins & Z80CTC_ZCTO1)
-    {
-        fdc_motor_running = false;
-        fdc_motor = 0;
-        for (int drive = 0; drive < I8272_MAX_DRIVES; ++drive)
-            i8272_set_drive_motor(&fdc, drive, false);
-    }
-
-    // Third priority: first SIO chip (ports 0xD8-0xDB). CPU reads and writes
+    // Third priority: first SIO chip (ports 0xD8-0xDF). CPU reads and writes
     // are both decoded exactly once by service_cpu_bus() through io_read() or
     // io_write(). Keep CE low here: a second level-sensitive decode would
     // consume RX data twice and turn a selected RR1/RR2 read into RR0.
@@ -1927,15 +1969,18 @@ void partner::tick()
     pins = z80sio_tick(&sio, pins);
     pins &= ~(Z80SIO_CE | Z80SIO_CS_A | Z80SIO_CS_B);
 
-    // Fourth priority: second SIO chip (ports 0xE0-0xE3).
+    // Fourth priority: second SIO chip (ports 0xE0-0xE7).
     apply_sio_modem_inputs(pins, sio_port_id::sio2_a, sio_port_id::sio2_b);
     pins = z80sio_tick(&sio2, pins);
     pins &= ~(Z80SIO_CE | Z80SIO_CS_A | Z80SIO_CS_B);
 
-    // Lowest priority: PIO (ports 0xD0-0xD3). As with the CTC and SIO, its
+    // Fifth priority: PIO (ports 0xD0-0xD7). As with the CTC and SIO, its
     // selected CPU access already ran through io_read()/io_write(); keep CE
     // low here so DMA addresses cannot become phantom PIO accesses.
     pins &= ~(Z80PIO_CE | Z80PIO_CDSEL | Z80PIO_BASEL);
+    // Virtual attachments generate explicit active-low strobe pulses; both
+    // handshake inputs otherwise remain at their inactive high level.
+    pins |= Z80PIO_ASTB | Z80PIO_BSTB;
     // The CPU core exposes the leading M1 phase before RD/MREQ settles. The
     // standalone PIO model interprets M1 without RD/IORQ as its reset
     // sequence, which would otherwise reset both ports after every Z80
@@ -1949,6 +1994,11 @@ void partner::tick()
     if (masked_transient_pio_m1)
         pins |= Z80PIO_M1;
     pins &= ~(Z80PIO_CE | Z80PIO_CDSEL | Z80PIO_BASEL);
+
+    // Discrete FDC daisy logic follows the motherboard PIO. The expansion
+    // connector, including the GDP card's local PIO, is last.
+    service_fdc_daisy(pins, cpu_ticked);
+    pins = clock_expansion_daisy_chain(pins);
 
     // DMA uses the same high-bit namespace as the Zilog family chips for its
     // local pins, so preserve the bus-request/acknowledge state explicitly.
@@ -1988,9 +2038,6 @@ void partner::tick()
     if (external_im2_pending_vector_ >= 0)
         pins |= Z80_INT;
 
-    // FDC interrupt participates in the Z80 daisy chain after the Zilog devices.
-    service_fdc_daisy(pins, cpu_ticked);
-
 }
 
 void partner::restore_drive_ready_flags()
@@ -2010,18 +2057,20 @@ uint64_t partner::clock_zilog_daisy_chain(uint64_t bus_pins)
 {
     /*
         The chips, not the motherboard, arbitrate Zilog interrupts.  IEI starts
-        high at the DMA and ripples through the physical priority order.  A
+        high at the CTC and ripples through the physical priority order. A
         chip with a request consumes IEIO and, during M1|IORQ, drives its own
         vector onto D0..D7.  Keeping this as a pin transaction is important:
         deriving a vector by examining controller structs duplicates each
         chip's enable, cause and in-service rules in the board model.
     */
     bus_pins |= Z80_IEIO;
-    bus_pins = z80dma_daisychain(&dma, bus_pins);
     bus_pins = z80ctc_daisychain(&ctc, bus_pins);
+    bus_pins = z80dma_daisychain(&dma, bus_pins);
     bus_pins = z80sio_daisychain(&sio, bus_pins);
     bus_pins = z80sio_daisychain(&sio2, bus_pins);
     bus_pins = z80pio_daisychain(&pio, bus_pins);
+    service_fdc_daisy(bus_pins, false);
+    bus_pins = clock_expansion_daisy_chain(bus_pins);
     return bus_pins;
 }
 
@@ -2038,20 +2087,11 @@ int partner::select_im2_ack_vector()
     ack_pins |= Z80_M1 | Z80_IORQ;
     ack_pins = clock_zilog_daisy_chain(ack_pins);
 
-    const bool zilog_claimed = (ack_pins & Z80_IEIO) == 0;
-    int ack_vector = zilog_claimed ? (int)Z80_GET_DATA(ack_pins) : -1;
+    const bool board_claimed = (ack_pins & Z80_IEIO) == 0;
+    int ack_vector = board_claimed ? (int)Z80_GET_DATA(ack_pins) : -1;
     bool external_ack = false;
 
-    /* The 8272 is a separate open-drain INT source.  Its vector byte comes
-       from the E8h board latch, but the request itself is acknowledged through
-       the controller's IACK signal. */
-    uint64_t fdc_irq_pins = i8272_irq_pins(&fdc, 0);
-    if (!zilog_claimed && (fdc_irq_pins & I8272_IRQ)) {
-        ack_vector = fdc_int_vector;
-        (void)i8272_irq_pins(&fdc, I8272_IACK);
-        fdc_int_state = 0;
-    }
-    else if (!zilog_claimed && external_im2_pending_vector_ >= 0) {
+    if (!board_claimed && external_im2_pending_vector_ >= 0) {
         ack_vector = external_im2_pending_vector_;
         external_ack = true;
     }
@@ -2069,7 +2109,7 @@ void partner::service_cpu_dma_port_write(uint64_t bus_pins)
 {
     if ((bus_pins & (Z80_IORQ | Z80_WR)) != (Z80_IORQ | Z80_WR))
         return;
-    if ((Z80_GET_ADDR(bus_pins) & 0xFF) != 0xC0)
+    if (!partner_dma_port((uint8_t)Z80_GET_ADDR(bus_pins)))
         return;
     if (last_dma_port_wr_tick_ == tick_count)
         return;
@@ -2123,13 +2163,9 @@ void partner::service_cpu_bus(uint64_t &bus_pins)
         const uint16_t prev_addr = Z80_GET_ADDR(last_cpu_bus_pins_);
         const bool same_port = ((prev_addr & 0xFF) == (addr & 0xFF));
         const uint8_t cur_port = (uint8_t)(addr & 0xFF);
-        const bool always_fresh_read =
-            (cur_port == 0x10) || (cur_port == 0x11) || (cur_port == 0x12) || // SASI status/data/reset
-            (cur_port == 0xF0) || (cur_port == 0xF1);                          // i8272 status/data
-
         if (bus_pins & Z80_RD)
         {
-            if (always_fresh_read || !io_rd_prev || !same_port || !io_read_latched_)
+            if (!io_rd_prev || !same_port || !io_read_latched_)
             {
                 io_read_latched_data_ = io_read(addr & 0xFF);
                 io_read_latched_addr_ = addr & 0xFF;
@@ -2144,7 +2180,7 @@ void partner::service_cpu_bus(uint64_t &bus_pins)
             const bool io_wr_rising =
                 io_wr_active &&
                 ((last_cpu_bus_pins_ & (Z80_IORQ | Z80_WR)) != (Z80_IORQ | Z80_WR));
-            if (cur_port == 0xC0) {
+            if (partner_dma_port(cur_port)) {
                 if (io_wr_rising)
                     service_cpu_dma_port_write(bus_pins);
             } else {
@@ -2224,11 +2260,13 @@ void partner::service_dma_read_bus(uint64_t &bus_pins)
     dma_bus_service_ = true;
     if (bus_pins & Z80DMA_MREQ)
         data = read_mem(src_addr);
-    else if ((bus_pins & Z80DMA_IORQ) && ((src_addr & 0xFFu) == 0x11u))
+    else if ((bus_pins & Z80DMA_IORQ) &&
+             partner_sasi_port((uint8_t)src_addr) &&
+             partner_sasi_function((uint8_t)src_addr) == 1)
         data = sasi_data_read_for_bus();
     else if (bus_pins & Z80DMA_IORQ) {
         data = io_read((uint8_t)src_addr);
-        if ((src_addr & 0xFFu) == 0xF1u)
+        if (partner_fdc_port((uint8_t)src_addr) && (src_addr & 1u))
             dma_fdc_reads_++;
     }
     dma_bus_service_ = false;
@@ -2261,14 +2299,42 @@ void partner::service_dma_write_bus(uint64_t &bus_pins)
 void partner::service_fdc_daisy(uint64_t &bus_pins, bool cpu_ticked)
 {
     (void)cpu_ticked;
-    // The Partner's 8272 is not a Zilog-family daisy-chain device. Its
-    // interrupt is an external IM2 request whose low vector byte comes from
-    // the board latch at port E8h, so expose it as a level-sensitive INT
-    // source and let service_cpu_bus() provide the vector on acknowledge.
-    fdc_int_state = 0;
-    if (i8272_irq_pins(&fdc, 0) & I8272_IRQ) {
-        fdc_int_state = FDC_INT_REQUESTED;
-        bus_pins |= Z80_INT;
+    const bool irq_level = (i8272_irq_pins(&fdc, 0) & I8272_IRQ) != 0;
+    if (irq_level && !fdc_irq_level_)
+        fdc_int_state |= FDC_INT_NEEDED;
+    fdc_irq_level_ = irq_level;
+
+    // A higher-priority device has blocked IEI, so the FDC latch neither
+    // requests the CPU nor consumes a downstream RETI.
+    if ((bus_pins & Z80_IEIO) == 0)
+        return;
+
+    if ((bus_pins & Z80_RETI) && (fdc_int_state & FDC_INT_SERVICED)) {
+        fdc_int_state &= (uint8_t)~FDC_INT_SERVICED;
+        bus_pins &= ~Z80_RETI;
+    }
+
+    if (fdc_int_state & FDC_INT_SERVICED) {
+        bus_pins &= ~Z80_IEIO;
+        return;
+    }
+
+    if (fdc_int_state & FDC_INT_NEEDED) {
+        fdc_int_state = (uint8_t)(
+            (fdc_int_state & ~FDC_INT_NEEDED) | FDC_INT_REQUESTED);
+    }
+
+    if (fdc_int_state & FDC_INT_REQUESTED) {
+        bus_pins &= ~Z80_IEIO;
+        if ((bus_pins & (Z80_M1 | Z80_IORQ)) == (Z80_M1 | Z80_IORQ)) {
+            Z80_SET_DATA(bus_pins, fdc_int_vector);
+            fdc_int_state = (uint8_t)(
+                (fdc_int_state & ~FDC_INT_REQUESTED) | FDC_INT_SERVICED);
+            bus_pins &= ~Z80_INT;
+            (void)i8272_irq_pins(&fdc, I8272_IACK);
+        } else {
+            bus_pins |= Z80_INT;
+        }
     }
 }
 
@@ -2293,9 +2359,10 @@ bool partner::dma_owns_bus() const
     if (!dma.direction_ab) {
         const z80dma_port_t &src = dma.port_b;
         const uint8_t src_port = (uint8_t)(src.address & 0xFF);
-        if (!src.is_memory && src_port == 0x11)
+        if (!src.is_memory && partner_sasi_port(src_port) &&
+            partner_sasi_function(src_port) == 1)
             return idpartner_sasi_drq(&sasi_);
-        if (!src.is_memory && src_port == 0xF1)
+        if (!src.is_memory && partner_fdc_port(src_port) && (src_port & 1u))
             return (fdc.phase == I8272_PHASE_EXECUTE);
     }
     return false;
@@ -2310,14 +2377,21 @@ uint8_t partner::peek_ram(uint16_t addr) const
 
 uint8_t partner::read_mem(uint16_t addr)
 {
-    // Partner maps ROM across 0x0000-0x1FFF while enabled.
-    // The dumped ROM is 2KB, mirrored across that 8KB range.
+    // E51 and E50 are separate 2 KiB sockets selected at 0000h and 0800h.
+    // The remainder of the 8 KiB overlay window has no ROM output enabled.
     if (rom_enabled && addr < 0x2000)
-    {
-        return rom[addr & (rom_size - 1)];
-    }
+        return read_boot_rom(addr);
 
     return peek_ram(addr);
+}
+
+uint8_t partner::read_boot_rom(uint16_t addr) const
+{
+    if (addr < rom_size)
+        return rom[addr];
+    if (addr < rom_capacity)
+        return rom2_loaded_ ? rom2[addr - rom_size] : 0xFF;
+    return 0xFF;
 }
 
 void partner::write_mem(uint16_t addr, uint8_t data)
@@ -2362,7 +2436,7 @@ uint8_t partner::io_read(uint16_t port)
 {
     port &= 0xFF;
 
-    if (port == 0x10) {
+    if (partner_sasi_port((uint8_t)port) && partner_sasi_function((uint8_t)port) == 0) {
         const uint8_t st = idpartner_sasi_status_r(&sasi_);
         static const bool trace_hd = [] {
             const char *s = std::getenv("IDP_TRACE_HD");
@@ -2373,26 +2447,26 @@ uint8_t partner::io_read(uint16_t port)
                 st, sasi_.target ? (int)sasi_.target->busy : -1, cpu.pc);
         return st;
     }
-    if (port == 0x11) {
+    if (partner_sasi_port((uint8_t)port) && partner_sasi_function((uint8_t)port) == 1) {
         return sasi_data_read_for_bus();
     }
-    if (port == 0x12)
-        return s1410_bus_read(&hdc, 2);
+    if (partner_sasi_port((uint8_t)port))
+        return 0xFF;
 
     // MM58167 RTC: 0xA0-0xBF
-    if ((port >= 0xA0 && port <= 0xB6) || port == 0xBF)
+    if (port >= 0xA0 && port <= 0xBF)
     {
         return mm58167a_bus_read(&rtc, (uint8_t)(port - 0xA0));
     }
 
     // Z80 PIO: 0xD0-0xD3
-    if (port >= 0xD0 && port <= 0xD3)
+    if (partner_pio_port((uint8_t)port))
     {
         return z80pio_cpu_read(&pio, (uint8_t)port);
     }
 
     // Z80 CTC: 0xC8-0xCB
-    if (port >= 0xC8 && port <= 0xCB)
+    if (partner_ctc_port((uint8_t)port))
     {
         return z80ctc_cpu_read(&ctc, (uint8_t)port);
     }
@@ -2418,17 +2492,17 @@ uint8_t partner::io_read(uint16_t port)
 
     // Z80 DMA: 0xC0 — kernel hd_dma_setup$ uses otir; route through the chip
     // model so every programmed byte lands (io_write is edge-gated per OUT).
-    if (port == 0xC0)
+    if (partner_dma_port((uint8_t)port))
         return z80dma_read(&dma);
 
     // Intel 8272 FDC Status: 0xF0
-    if (port == 0xF0)
+    if (partner_fdc_port((uint8_t)port) && (port & 0x01u) == 0)
     {
         return i8272_bus_read(&fdc, 0);
     }
 
     // Intel 8272 FDC Data: 0xF1
-    if (port == 0xF1)
+    if (partner_fdc_port((uint8_t)port) && (port & 0x01u) != 0)
     {
         const i8272_phase_t phase_before = fdc.phase;
         const uint8_t result_before = fdc.result_idx;
@@ -2445,7 +2519,7 @@ uint8_t partner::io_read(uint16_t port)
     }
 
     // FDC Motor Status: 0x98
-    if (port == 0x98)
+    if (partner_motor_port((uint8_t)port))
     {
         return fdc_motor_running ? 0x01 : 0x00;
     }
@@ -2476,12 +2550,12 @@ void partner::io_write(uint16_t port, uint8_t data)
 {
     port &= 0xFF;
 
-    if (port == 0x10)
+    if (partner_sasi_port((uint8_t)port) && partner_sasi_function((uint8_t)port) == 0)
     {
         idpartner_sasi_ctrl_w(&sasi_, data);
         return;
     }
-    if (port == 0x11)
+    if (partner_sasi_port((uint8_t)port) && partner_sasi_function((uint8_t)port) == 1)
     {
         sasi_data_writes_++;
         static const bool trace_hd = [] {
@@ -2494,14 +2568,14 @@ void partner::io_write(uint16_t port, uint8_t data)
         idpartner_sasi_data_w(&sasi_, data);
         return;
     }
-    if (port == 0x12)
+    if (partner_sasi_port((uint8_t)port) && partner_sasi_function((uint8_t)port) == 2)
     {
         idpartner_sasi_reset_w(&sasi_, data);
         return;
     }
 
     // MM58167 RTC: 0xA0-0xBF
-    if ((port >= 0xA0 && port <= 0xB6) || port == 0xBF)
+    if (port >= 0xA0 && port <= 0xBF)
     {
         mm58167a_bus_write(&rtc, (uint8_t)(port - 0xA0), data);
         if (port >= 0xA8 && port <= 0xAF)
@@ -2510,7 +2584,7 @@ void partner::io_write(uint16_t port, uint8_t data)
     }
 
     // Z80 PIO: 0xD0-0xD3
-    if (port >= 0xD0 && port <= 0xD3)
+    if (partner_pio_port((uint8_t)port))
     {
         const bool is_data_write = (port & 0x01) == 0;
         const pio_port_id pio_port = (port & 0x02) ? pio_port_id::b : pio_port_id::a;
@@ -2528,7 +2602,7 @@ void partner::io_write(uint16_t port, uint8_t data)
     }
 
     // Z80 CTC: 0xC8-0xCB
-    if (port >= 0xC8 && port <= 0xCB)
+    if (partner_ctc_port((uint8_t)port))
     {
         z80ctc_cpu_write(&ctc, (uint8_t)port, data);
         return;
@@ -2566,11 +2640,13 @@ void partner::io_write(uint16_t port, uint8_t data)
         return;
     }
 
-    if (port == 0xC0)
+    if (partner_dma_port((uint8_t)port)) {
+        z80dma_write(&dma, data);
         return;
+    }
 
     // Intel 8272 FDC Data: 0xF1
-    if (port == 0xF1)
+    if (partner_fdc_port((uint8_t)port) && (port & 0x01u) != 0)
     {
         const i8272_phase_t phase_before = fdc.phase;
         const uint8_t cmd_before = fdc.cmd_idx;
@@ -2591,7 +2667,7 @@ void partner::io_write(uint16_t port, uint8_t data)
     }
 
     // FDC Motor Control: 0x98
-    if (port == 0x98)
+    if (partner_motor_port((uint8_t)port))
     {
         // Board documentation describes OUT 98h as "turn motor on" and
         // IN 98h bit 0 as the motor-running status. Keep the motor on until
@@ -2604,7 +2680,7 @@ void partner::io_write(uint16_t port, uint8_t data)
     }
 
     // FDC Interrupt Vector: 0xE8
-    if (port == 0xE8)
+    if (partner_fdc_vector_port((uint8_t)port))
     {
         fdc_int_vector = data;
         if (!fdc_reset_irq_armed_ && cpu.i != 0xFE)

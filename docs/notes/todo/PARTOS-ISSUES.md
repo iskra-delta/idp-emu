@@ -1,4 +1,4 @@
-# PartOS Boot Investigation — ISSUES.md
+# PartOS Boot Investigation — Issues
 
 Research date: 2026-06-19  
 Scope: full PartOS tree (`partos/`) and Iskra Delta Partner emulator (`src/`, `lib/chipsex/`, tests, disk tooling)
@@ -188,7 +188,7 @@ The customized i8272 model in `lib/chipsex/intel/i8272.h` implements Partner-spe
 
 - ROM overlay disable via `OUT (0x80)`
 - RAM bank switching (`0x88` / `0x90`)
-- FDC as external IM2 device (vector latch `0xE8`)
+- FDC request/in-service daisy glue and vector latch aliases `0xE8..0xEF`
 - DMA `RDY` gated on FDC execute phase for port `0xF1`
 - NVRAM shadow file backing RTC ports `0xA8..0xAF`
 
@@ -198,9 +198,12 @@ The customized i8272 model in `lib/chipsex/intel/i8272.h` implements Partner-spe
 
 `probe_kernel.cpp` documents that skipping the ROM leaves a stale i8272 reset interrupt. The harness calls `clean_fdc_handoff()` to match real hardware state. Any future direct-load or test path must do the same.
 
-### CTC ch3 is not wired from AVDC VB in base `partner`
+### CTC channel 3 display source
 
-`src/partner.cpp` intentionally does not connect AVDC vertical blank to CTC `CLKTRG3` (avoids spurious early-boot interrupts). VBL for IM2 is injected externally in `partner_gdp` only, and only during BIOS (`I = 0xFA`).
+The GDP board exposes its conditioned active-low `AVDINT-` signal, not raw
+AVDC vertical blank, to the optional CTC `CLKTRG3` connection. EF and AVDC
+interrupts also drive the GDP-local PIO `ASTB` and `BSTB` handshake pins; no
+BIOS-only direct IM2 injection is used.
 
 ---
 

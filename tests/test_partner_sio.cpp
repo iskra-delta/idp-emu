@@ -9,7 +9,8 @@ namespace {
 class partner_sio_test : public partner
 {
 public:
-    partner_sio_test() : partner("/tmp/idp-test-partner-sio.nvram") {}
+    partner_sio_test() : partner(
+        std::string(IDP_SOURCE_ROOT) + "/tests/dump/partner-sio.nvram") {}
 
     using partner::io_read;
     using partner::io_write;
@@ -49,6 +50,9 @@ public:
 void configure_9600_8n1(partner_sio_test &emu)
 {
     emu.io_write(0xDB, 0x18); // channel reset
+    // Zilog requires four system clocks after a channel-reset command.
+    for (int i = 0; i < 4; ++i)
+        emu.tick();
     emu.io_write(0xDB, 0x04);
     emu.io_write(0xDB, 0x44); // x16 clock, one stop, no parity
     emu.io_write(0xDB, 0x05);

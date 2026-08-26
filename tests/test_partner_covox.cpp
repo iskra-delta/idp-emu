@@ -8,7 +8,8 @@ namespace {
 class partner_covox_test : public partner
 {
 public:
-    partner_covox_test() : partner("/tmp/idp-test-covox.nvram") {}
+    partner_covox_test() : partner(
+        std::string(IDP_SOURCE_ROOT) + "/tests/dump/partner-covox.nvram") {}
 
     using partner::io_write;
     int observed_pio_writes = 0;

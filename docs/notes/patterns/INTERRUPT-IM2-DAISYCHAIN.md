@@ -23,16 +23,23 @@ waits, repeated ISR entry, and pending-interrupt clearing).
   the CPU can loop around ISR entry/return.
 - If an interrupt never arrives, the CPU remains parked in `HALT` (common at
   seek/read waits).
+- The motherboard schematic establishes this priority: CTC, DMA, SIO #1,
+  SIO #2, motherboard PIO, discrete FDC request/in-service glue, then the
+  expansion IEI/IEO connection. The GDP-local PIO is the final device on a
+  Partner G.
 
 ## Emulation Rules (Practical)
 
 - IM2 acknowledge must fetch vector from the active page and call the mapped handler.
 - Device-side “pending” flags must be cleared at the same semantic moment as real hardware:
-  - FDC: after proper sense/result phase transitions
+  - FDC: its edge-latched request is acknowledged with the `0xE8..0xEF`
+    vector latch, remains in service, and is released by RETI
   - CTC/SIO/PIO: after their IRQ service/ack flow
+- A pending DMA interrupt must continue to hold `/INT` until acknowledge.
+- New PIO/SIO requests that arise during M1 are deferred until M1 ends.
 - Avoid “sticky IRQ” unless confirmed by hardware behavior.
 
 ## Current Status
 
-- Core IM2 routing is active.
-- Remaining failures in GDP path are now mostly display-path related, not basic IM2 routing.
+- Core IM2 routing, full board priority, FDC acknowledge/RETI state, DMA
+  request hold, and PIO/SIO M1 deferral have focused regression tests.

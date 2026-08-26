@@ -86,24 +86,26 @@ Current repository media files:
 
 - CPU: **Z80A**
 - Main Zilog peripherals:
-  - **Z80 DMA** (`0xC0`)
-  - **Z80 CTC** (`0xC8..0xCB`)
-  - **Z80 SIO #1** (`0xD8..0xDB`)
-  - **Z80 SIO #2** (`0xE0..0xE3`, `0xE4` currently also decoded by helper)
-  - **Z80 PIO** (`0xD0..0xD3`)
+  - **Z80 DMA** (`0xC0..0xC7`)
+  - **Z80 CTC** (`0xC8..0xCF`)
+  - **Z80 SIO #1** (`0xD8..0xDF`)
+  - **Z80 SIO #2** (`0xE0..0xE7`)
+  - **Z80 PIO** (`0xD0..0xD7`)
 - Storage:
-  - Intel **8272** FDC (`0xF0`, `0xF1`)
-  - Xebec **S1410** SASI path (`0x10..0x12`)
+  - Intel **8272** FDC (`0xF0..0xF7`, A0 selects status/data)
+  - Xebec **S1410** SASI path (`0x10..0x1F`, A1:A0 select function)
 - RTC:
   - National **MM58167A** (`0xA0..0xB6`, `0xBF`)
 
 Interrupt daisy-chain priority in emulator tick order:
 
-1. DMA
-2. CTC
+1. CTC
+2. DMA
 3. SIO #1
 4. SIO #2
-5. PIO
+5. Motherboard PIO
+6. Discrete FDC interrupt latch/glue
+7. Expansion interrupt device (GDP-local PIO on Partner G)
 
 ### Display Subsystems
 
@@ -124,23 +126,20 @@ Interrupt daisy-chain priority in emulator tick order:
 
 | Port | Dec | Device | Dir | Description |
 | ---- | --- | ------ | --- | ----------- |
-| `0x10` | 16 | SASI/S1410 | I/O | Status read / control write |
-| `0x11` | 17 | SASI/S1410 | I/O | Data read/write |
-| `0x12` | 18 | SASI/S1410 | I/O | Error/read side or reset/write side |
+| `0x10..0x1F` | 16..31 | SASI/S1410 | I/O | A1:A0: status/control, data, floating-read/reset, unused; A3:A2 are aliases |
 | `0x80..0x87` | 128..135 | Banking | I/O | Disable ROM overlay |
 | `0x88..0x8F` | 136..143 | Banking | I/O | Select RAM Bank 1 |
 | `0x90..0x97` | 144..151 | Banking | I/O | Select RAM Bank 2 |
-| `0x98` | 152 | FDC motor | I/O | Motor control/write, motor status/read (`bit0`) |
+| `0x98..0x9F` | 152..159 | FDC motor | I/O | Motor control/write, motor status/read (`bit0`) |
 | `0xA0..0xB6` | 160..182 | MM58167A | I/O | RTC register window |
 | `0xBF` | 191 | MM58167A | I/O | RTC test/extra register path |
-| `0xC0` | 192 | Z80 DMA | I/O | DMA register port |
-| `0xC8..0xCB` | 200..203 | Z80 CTC | I/O | CTC channels |
-| `0xD0..0xD3` | 208..211 | Z80 PIO | I/O | Port A/B data/control |
-| `0xD8..0xDB` | 216..219 | Z80 SIO #1 | I/O | Channel A/B data/control |
-| `0xE0..0xE3` | 224..227 | Z80 SIO #2 | I/O | Channel A/B data/control |
-| `0xE8` | 232 | FDC vector | Out | Interrupt vector register |
-| `0xF0` | 240 | Intel 8272 | In | Main status register |
-| `0xF1` | 241 | Intel 8272 | I/O | Data FIFO/command/result |
+| `0xC0..0xC7` | 192..199 | Z80 DMA | I/O | One DMA register port with undecoded A2:A0 aliases |
+| `0xC8..0xCF` | 200..207 | Z80 CTC | I/O | Four channels, repeated when A2=1 |
+| `0xD0..0xD7` | 208..215 | Z80 PIO | I/O | Port A/B data/control, repeated when A2=1 |
+| `0xD8..0xDF` | 216..223 | Z80 SIO #1 | I/O | Channel A/B data/control, repeated when A2=1 |
+| `0xE0..0xE7` | 224..231 | Z80 SIO #2 | I/O | Channel A/B data/control, repeated when A2=1 |
+| `0xE8..0xEF` | 232..239 | FDC vector | Out | Interrupt-vector latch aliases |
+| `0xF0..0xF7` | 240..247 | Intel 8272 | I/O | A0=0 status, A0=1 FIFO; A2:A1 are aliases |
 
 ### GDP Model Additions
 
@@ -154,20 +153,34 @@ GDP mode extends I/O with EF9367, AVDC, and a local PIO window.
 
 Important emulator behavior in GDP mode:
 
-- Port `0x30` mirrors GDP local PIO Port A board-control lines (`graphic common control`):
+- Port `0x30` is GDP local PIO Port A (`graphic common control`):
   - bit0: `RBNK` (display/read page select)
   - bit1: `WBNK` (write page select)
-  - bit2: `XORM` (XOR vs normal write mode)
+  - bit2: `XORM` (XOR vs normal write mode; plotted positions toggle for both pen and eraser selection)
   - bit3: `FM0` (format 0)
   - bit4: `FM1` (format 1)
-  - bit5: `GDPINT` (read-only status line)
-  - bit6: `AVDINT` (read-only status line)
+  - bits5 and 6: no EF/AVDC status data; those interrupts reach the PIO through
+    its `ASTB` and `BSTB` handshake inputs
   - bit7: `SCRLM` (scroll mode line)
-- Port `0x36` is used as a board-level scroll/sync latch path:
-  - read: sync bit source
+- Port `0x36` is used as a board-level restriction/scroll latch path:
+  - read bit 4: `RESTRICT`, the AVDC DADD13/last-line signal captured at
+    falling `BLANK`; this is not HSYNC
   - write: scroll latch
-- AVDC ports `0x36`/`0x37` are intentionally treated as inert in the current
-  model.
+- GDP PIO Port B bits 5 and 6 drive the SCB2675B `C1:C0` divider
+  (`00`=10, `01`=7, `10`=8, `11`=9 dots per character), while bit 7 selects
+  the 18 MHz or 24 MHz AVDC dot-clock path.
+- AVDC attribute bit 2 selects the 2 KiB user-defined character RAM (128
+  characters by 16 scan lines). Attribute bit 3 drives CMAC `DOTS`; because
+  `DOTS` is sampled at falling `BLANK`, dot stretching applies to the entire
+  following scan line rather than to one character. See
+  [`AVDC-UDG.md`](../notes/patterns/AVDC-UDG.md) for the RAM map, safe access
+  sequence, and a complete Z80 CP/M program.
+- Exact EF9367 and AVDC cycle counts, all AVDC IR decodes, screen starts,
+  splits, scrolling, and interlace cases are in
+  [`GDP-AVDC-CMAC-TIMING.md`](../notes/patterns/GDP-AVDC-CMAC-TIMING.md).
+- The SCN2674 register offsets corresponding to ports `0x36`/`0x37` are
+  unused. Partner board glue intercepts `0x36`, so the board-level read and
+  write behavior described above remains active.
 
 ### Notes on SIO and PIO Routing
 
@@ -185,7 +198,7 @@ Important emulator behavior in GDP mode:
 
 ### Physical Organization
 
-- ROM image size: `0x0800` (2 KB)
+- Supported ROM image sizes: `0x0800` (E51 only) or `0x1000` (E51 + E50)
 - Shared RAM base: `0xC000`
 - Banked region: `0x0000..0xBFFF` (48 KB)
 - Shared region: `0xC000..0xFFFF` (16 KB)
@@ -196,7 +209,9 @@ Important emulator behavior in GDP mode:
 On reset:
 
 - ROM overlay is enabled.
-- Reads from `0x0000..0x1FFF` return ROM bytes mirrored from the 2 KB ROM.
+- E51 supplies `0x0000..0x07FF`; E50, when present in a 4 KiB image, supplies
+  `0x0800..0x0FFF`. There is no ROM mirroring at `0x1000..0x1FFF`; the overlay
+  window reads as an undriven `0xFF` there.
 - Writes into `0x0000..0x1FFF` are ignored while ROM overlay is enabled.
 
 After writing any value to `0x80..0x87`:

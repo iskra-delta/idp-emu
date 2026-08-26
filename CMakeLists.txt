@@ -139,6 +139,72 @@ if(NOT CURL_FOUND)
         "Internal Retro Vault support requires the libcurl development package")
 endif()
 
+# FindCURL may discover a complete non-system runtime (for example Conda)
+# while PNG and OpenGL have already been found in the system runtime. Linking
+# both sets gives CMake no safe RPATH order: either set can hide ABI-sensitive
+# libraries from the other. When curl's runtime contains matching libraries,
+# keep the complete dependency set in that one runtime.
+if(UNIX AND NOT APPLE)
+    set(idp_curl_library "")
+    foreach(idp_curl_location_property
+            IMPORTED_LOCATION
+            IMPORTED_LOCATION_RELEASE
+            IMPORTED_LOCATION_DEBUG)
+        get_target_property(idp_curl_location CURL::libcurl
+                            ${idp_curl_location_property})
+        if(idp_curl_location AND EXISTS "${idp_curl_location}")
+            set(idp_curl_library "${idp_curl_location}")
+            break()
+        endif()
+    endforeach()
+
+    if(idp_curl_library)
+        get_filename_component(idp_curl_library_directory
+                               "${idp_curl_library}" DIRECTORY)
+        list(FIND CMAKE_PLATFORM_IMPLICIT_LINK_DIRECTORIES
+             "${idp_curl_library_directory}" idp_curl_implicit_index)
+        if(idp_curl_implicit_index EQUAL -1)
+            find_file(idp_runtime_zlib
+                NAMES libz.so.1
+                PATHS "${idp_curl_library_directory}"
+                NO_DEFAULT_PATH)
+            find_file(idp_runtime_png
+                NAMES libpng16.so.16
+                PATHS "${idp_curl_library_directory}"
+                NO_DEFAULT_PATH)
+            find_file(idp_runtime_opengl
+                NAMES libOpenGL.so.0
+                PATHS "${idp_curl_library_directory}"
+                NO_DEFAULT_PATH)
+            find_file(idp_runtime_glx
+                NAMES libGLX.so.0
+                PATHS "${idp_curl_library_directory}"
+                NO_DEFAULT_PATH)
+
+            if(idp_runtime_zlib AND idp_runtime_png AND
+               idp_runtime_opengl AND idp_runtime_glx)
+                foreach(idp_imported_configuration "" _RELEASE _DEBUG)
+                    set_property(TARGET ZLIB::ZLIB PROPERTY
+                        IMPORTED_LOCATION${idp_imported_configuration}
+                        "${idp_runtime_zlib}")
+                    set_property(TARGET PNG::PNG PROPERTY
+                        IMPORTED_LOCATION${idp_imported_configuration}
+                        "${idp_runtime_png}")
+                    set_property(TARGET OpenGL::OpenGL PROPERTY
+                        IMPORTED_LOCATION${idp_imported_configuration}
+                        "${idp_runtime_opengl}")
+                    set_property(TARGET OpenGL::GLX PROPERTY
+                        IMPORTED_LOCATION${idp_imported_configuration}
+                        "${idp_runtime_glx}")
+                endforeach()
+                message(STATUS
+                    "Using curl-compatible runtime libraries from "
+                    "${idp_curl_library_directory}")
+            endif()
+        endif()
+    endif()
+endif()
+
 if(WIN32)
     find_package(GLEW REQUIRED)
     add_compile_definitions(SDL_MAIN_HANDLED WIN32_LEAN_AND_MEAN NOMINMAX)

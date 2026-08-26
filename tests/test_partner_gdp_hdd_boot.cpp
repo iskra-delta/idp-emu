@@ -82,8 +82,8 @@ int main()
 {
     namespace fs = std::filesystem;
 
-    const fs::path nvram = fs::temp_directory_path() /
-        "idp-emu-gdp-hdd-boot-nvram.bin";
+    const fs::path nvram = fs::path(IDP_SOURCE_ROOT) /
+        "tests/dump/partner-gdp-hdd-boot.nvram";
     std::error_code error;
     fs::remove(nvram, error);
     if (!fs::copy_file(

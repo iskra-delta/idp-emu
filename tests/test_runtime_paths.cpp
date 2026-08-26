@@ -47,8 +47,8 @@ int main()
 
     const auto unique = std::chrono::steady_clock::now()
                             .time_since_epoch().count();
-    const fs::path scratch = fs::temp_directory_path() /
-        ("idp-runtime-paths-" + std::to_string(unique));
+    const fs::path scratch = fs::path(IDP_SOURCE_ROOT) / "tests/dump" /
+        ("runtime-paths-" + std::to_string(unique));
     const fs::path conflicting_cwd = scratch / "cwd";
     fs::create_directories(conflicting_cwd);
 

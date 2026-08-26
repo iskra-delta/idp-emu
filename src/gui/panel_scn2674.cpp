@@ -48,11 +48,33 @@ void panels::render_scn2674(partner &emu, bool *p_open)
                 (unsigned)avdc.chars_per_row,
                 (unsigned)avdc.scanlines_per_char_row,
                 (unsigned)avdc.scroll_lines);
+    ImGui::Text("Clock: DCLK=%u Hz divider=%u CCLK=%.3f MHz phase=%u",
+                (unsigned)avdc.dot_clock_hz,
+                (unsigned)avdc.dots_per_character,
+                avdc.dots_per_character
+                    ? (double)avdc.dot_clock_hz /
+                      (double)avdc.dots_per_character / 1000000.0
+                    : 0.0,
+                (unsigned)avdc.cclk_dot_phase);
+    ImGui::Text("Raster: H=%u V=%u field=%u %s%s",
+                (unsigned)avdc.raster_char,
+                (unsigned)avdc.raster_line,
+                (unsigned)avdc.field_count,
+                avdc.interlace_enabled ? "interlaced " : "non-interlaced",
+                avdc.interlace_enabled
+                    ? (avdc.interlace_sync_and_video
+                        ? "sync+video" : "sync-only")
+                    : "");
 
     ImGui::Text("Pointers: start1=%04X start2=%04X start2_start=%04X",
                 avdc.start1_addr & 0x3FFFu,
                 avdc.start2_addr & 0x3FFFu,
                 avdc.start2_addr_start & 0x3FFFu);
+    ImGui::Text("Sequencer: RSR=%04X MAC=%04X next=%04X reload=%d",
+                avdc.row_start_addr & 0x3FFFu,
+                avdc.memory_addr & 0x3FFFu,
+                avdc.next_row_addr & 0x3FFFu,
+                avdc.start1_reload_pending ? 1 : 0);
     ImGui::Text("Cursor/Display: cursor=%04X display_ptr=%04X addr_latch=%04X",
                 avdc.cursor_addr & 0x3FFFu,
                 avdc.display_ptr_addr & 0x3FFFu,
@@ -68,9 +90,9 @@ void panels::render_scn2674(partner &emu, bool *p_open)
                 (unsigned)avdc.split_register[1],
                 avdc.scroll_start ? 1 : 0,
                 avdc.scroll_end ? 1 : 0);
-    ImGui::Text("Buffers: first=%04X last_nibble=%X glyph_rom=%s",
+    ImGui::Text("Buffers: first=%04X last=%04X glyph_rom=%s",
                 avdc.display_buffer_first_addr & 0x0FFFu,
-                avdc.display_buffer_last_nibble & 0x0Fu,
+                avdc.display_buffer_last_addr & 0x3FFFu,
                 avdc.glyph_rom_loaded ? "loaded" : "none");
 
     ImGui::Separator();

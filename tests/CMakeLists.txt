@@ -1,3 +1,5 @@
+file(MAKE_DIRECTORY "${CMAKE_SOURCE_DIR}/tests/dump")
+
 add_executable(test_z80sio
     test_z80sio.cpp
 )
@@ -35,6 +37,7 @@ add_executable(test_partner_sio
 )
 
 target_include_directories(test_partner_sio PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partner_sio PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_partner_sio PRIVATE chipsex)
 
 add_test(NAME partner_sio_unit COMMAND test_partner_sio)
@@ -211,9 +214,22 @@ add_executable(test_partner_external_im2
 )
 
 target_include_directories(test_partner_external_im2 PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partner_external_im2 PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_partner_external_im2 PRIVATE chipsex)
 
 add_test(NAME partner_external_im2_unit COMMAND test_partner_external_im2)
+
+add_executable(test_partner_board
+    test_partner_board.cpp
+    ../src/chips_impl.cpp
+    ../src/partner.cpp
+)
+
+target_include_directories(test_partner_board PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partner_board PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+target_link_libraries(test_partner_board PRIVATE chipsex)
+
+add_test(NAME partner_board_unit COMMAND test_partner_board)
 
 add_executable(test_partner_covox
     test_partner_covox.cpp
@@ -222,6 +238,7 @@ add_executable(test_partner_covox
 )
 
 target_include_directories(test_partner_covox PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_partner_covox PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_partner_covox PRIVATE chipsex)
 
 add_test(NAME partner_covox_unit COMMAND test_partner_covox)
@@ -232,6 +249,7 @@ add_executable(test_screen_recorder
 )
 
 target_include_directories(test_screen_recorder PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_screen_recorder PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_screen_recorder PRIVATE SDL2::SDL2)
 
 add_test(NAME screen_recorder_unit COMMAND test_screen_recorder)
@@ -267,6 +285,7 @@ add_executable(test_rtc_nvram_shadow
 )
 
 target_include_directories(test_rtc_nvram_shadow PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_rtc_nvram_shadow PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_rtc_nvram_shadow PRIVATE chipsex)
 
 add_test(NAME rtc_nvram_shadow COMMAND test_rtc_nvram_shadow)
@@ -277,6 +296,7 @@ add_executable(test_runtime_paths
 )
 
 target_include_directories(test_runtime_paths PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_runtime_paths PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 target_link_libraries(test_runtime_paths PRIVATE SDL2::SDL2)
 
 add_test(NAME runtime_paths_unit COMMAND test_runtime_paths)
@@ -294,6 +314,7 @@ foreach(partner_test_target
     test_partner_gdp_boot
     test_partner_gdp_hdd_boot
     test_partner_external_im2
+    test_partner_board
     test_partner_covox
     test_rtc_nvram_shadow)
     target_link_libraries(${partner_test_target} PRIVATE idp_internal_squid)

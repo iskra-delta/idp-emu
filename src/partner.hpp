@@ -23,6 +23,7 @@ class partner
 {
 public:
     static constexpr size_t rom_size = 0x0800;
+    static constexpr size_t rom_capacity = 0x1000;
     static constexpr size_t ram_size = 0x10000;
     static constexpr uint16_t banked_base = 0x0000;
     static constexpr uint16_t shared_base = 0xC000;
@@ -134,7 +135,7 @@ public:
     uint32_t get_fd_read_real_calls() const { return fd_read_real_calls_; }
     bool get_dma_ready_input() const { return dma_ready_input_; }
     uint8_t peek_mem(uint16_t addr) const {
-        if (rom_enabled && addr < 0x2000) return rom[addr & (rom_size - 1)];
+        if (rom_enabled && addr < 0x2000) return read_boot_rom(addr);
         return peek_ram(addr);
     }
     uint64_t get_tick_count() const { return tick_count; }
@@ -226,15 +227,17 @@ public:
 protected:
     void stamp_rtc_nvram_checksum();
 
-    // All Zilog chips in Partner system
+    // Motherboard interrupt priority from the schematics: CTC, DMA, SIO1,
+    // SIO2, PIO, discrete FDC logic, then the expansion connector.
     z80_t cpu{};
-    z80dma_t dma{};    // Highest priority (if present)
-    z80ctc_t ctc{};    // Second priority
+    z80ctc_t ctc{};    // Highest priority
+    z80dma_t dma{};    // Second priority
     z80sio_t sio{};    // Third priority
     z80sio_t sio2{};   // Fourth priority
-    z80pio_t pio{};    // Lowest priority
+    z80pio_t pio{};    // Last motherboard Zilog device
 
-    // Intel 8272 FDC (not on Zilog daisy chain)
+    // The 8272 itself has no Zilog daisy-chain pins. Discrete motherboard
+    // logic supplies the E8h vector latch and daisy-chain state around it.
     i8272_t fdc{};
     s1410_t hdc{};
     idpartner_sasi_t sasi_{};
@@ -242,6 +245,7 @@ protected:
     uint8_t fdc_int_vector = 0;  // Port 0xE8
     uint8_t fdc_motor = 0;       // Port 0x98
     uint8_t fdc_int_state = 0;
+    bool fdc_irq_level_ = false;
     bool fdc_reset_irq_armed_ = false;
     bool prompt_fdc_cleanup_done_ = false;
     bool fdc_motor_running = false;
@@ -273,11 +277,13 @@ protected:
     uint64_t tick_count = 0;
 
     std::array<uint8_t, rom_size> rom{};
+    std::array<uint8_t, rom_size> rom2{};
     // A boot ROM has been loaded. Gates the NVRAM boot-prep (FD-type masks +
     // checksum) in reset(): those derive BIOS-visible config from the mounted
     // hardware and must not run for a bare NVRAM round-trip (no ROM), which
     // expects the shadow bytes to persist and restore verbatim.
     bool rom_loaded_ = false;
+    bool rom2_loaded_ = false;
     std::array<uint8_t, ram_size> ram{};
     std::array<uint8_t, banked_size> ram_bank2_{};
 
@@ -289,8 +295,10 @@ protected:
     virtual uint8_t io_read(uint16_t port);
     virtual void io_write(uint16_t port, uint8_t data);
     virtual int get_external_im2_vector() const { return -1; }
-    // AVDC vertical-blank edge for CTC ch3 clock — overridden by partner_gdp.
-    virtual bool get_avdc_vb_edge() const { return false; }
+    // Optional ST8/JJ10 path on the GDP card carries conditioned AVDINT-.
+    virtual bool get_ctc3_trigger_edge() const { return false; }
+    // Expansion-card daisy device follows the motherboard FDC glue.
+    virtual uint64_t clock_expansion_daisy_chain(uint64_t bus_pins) { return bus_pins; }
 
     void restore_drive_ready_flags();
     void service_cpu_bus(uint64_t &pins);
@@ -304,6 +312,7 @@ protected:
     bool dma_owns_bus() const;
     bool dma_transfer_pending() const;
     uint8_t peek_ram(uint16_t addr) const;
+    uint8_t read_boot_rom(uint16_t addr) const;
     void set_sio_port_lock(sio_port_id port, bool locked, const std::string &reason);
 
 private:

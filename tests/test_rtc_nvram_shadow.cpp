@@ -23,6 +23,25 @@ public:
         tick_count = value;
         mm58167a_sync_time(&rtc);
     }
+
+    void arm_tenth_second_interrupt()
+    {
+        tick_count = 0;
+        rtc.det_base = 1700000000;
+        rtc.det_hz = 4000000u;
+        rtc.det_ticks = &tick_count;
+        rtc.last_sync_time = 0;
+        rtc.last_sync_millisecond = UINT16_MAX;
+        mm58167a_sync_time(&rtc);
+        for (uint8_t i = 0; i < 8; ++i)
+            rtc.regs[0x08 + i] = 0xCC; // comparator wildcard
+        io_write(0xB1, 0x02); // register 11h: tenth-second interrupt enable
+    }
+
+    void jump_before_tenth_second()
+    {
+        tick_count = 399999;
+    }
 };
 
 static int fail(const char *msg)
@@ -37,7 +56,7 @@ int main()
 {
     namespace fs = std::filesystem;
 
-    const fs::path tmp_dir = fs::temp_directory_path() / "idp-emu-nvram-shadow";
+    const fs::path tmp_dir = fs::path(IDP_SOURCE_ROOT) / "tests/dump/rtc-nvram-shadow";
     const fs::path nvram_path = tmp_dir / "shadow.bin";
     const std::array<uint8_t, 8> defaults = {
         0xF0, 0x98, 0xFF, 0x01, 0x85, 0x07, 0x00, 0x57
@@ -71,6 +90,22 @@ int main()
 
         for (size_t i = 0; i < updated.size(); ++i)
             emu.io_write((uint16_t)(0xA8 + i), updated[i]);
+    }
+
+    {
+        const fs::path irq_nvram = tmp_dir / "interrupt.bin";
+        partner_test emu(irq_nvram.string());
+        emu.arm_tenth_second_interrupt();
+        emu.jump_before_tenth_second();
+        emu.tick();
+        if ((emu.get_pins() & Z80_NMI) == 0)
+            return fail("RTC periodic interrupt did not reach CPU NMI through JJ12");
+        if ((emu.io_read(0xB0) & 0x02u) == 0u)
+            return fail("RTC interrupt status did not report the tenth-second source");
+        emu.tick();
+        if ((emu.get_pins() & Z80_NMI) != 0)
+            return fail("RTC status read did not release CPU NMI");
+        fs::remove(irq_nvram, ec);
     }
 
     {

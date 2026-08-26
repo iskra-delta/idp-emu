@@ -4,8 +4,11 @@ This folder holds reusable C++ unit tests for the emulator.
 
 ## Current tests
 
-- `test_z80sio.cpp`: Z80 SIO register/control/data pin behavior, interrupt behavior, and modem/status signals.
-- `test_z80pio.cpp`: Z80 PIO mode control, handshake timing, interrupt/vector flow, and bit-control logic.
+- `test_z80sio.cpp`: Partner ROM initialization, all asynchronous frame
+  timings, three-byte FIFO/error correspondence, modem latches, auto-enables,
+  Wait/Ready, and all six interrupt priorities/vectors.
+- `test_z80pio.cpp`: all four modes, active-low A/B handshakes, Mode 3 logic
+  equations, M1 timing, and interrupt/vector flow.
 
 ## Run tests
 

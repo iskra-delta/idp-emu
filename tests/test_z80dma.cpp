@@ -64,6 +64,10 @@ int test_pin_level_interrupt_ack()
     CHECK((pins & Z80DMA_IEIO) == 0);
     CHECK((dma.int_state & Z80DMA_INT_REQUESTED) != 0);
 
+    pins = z80dma_daisychain(&dma, Z80DMA_IEIO);
+    CHECK((pins & Z80DMA_INT) != 0);
+    CHECK((dma.int_state & Z80DMA_INT_REQUESTED) != 0);
+
     pins = z80dma_daisychain(
         &dma, Z80DMA_IEIO | Z80DMA_M1 | Z80DMA_IORQ);
     CHECK(Z80DMA_GET_DATA(pins) == 0x9A);

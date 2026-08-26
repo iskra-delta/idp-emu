@@ -19,9 +19,10 @@ define emulation rules that match ROM behavior.
   - `11` -> `1024x512`
   - `00` -> `1024x256`
   - mixed states are transitional/invalid and should not force random mode flips
-- Port `0x30` is the GDP common-control mirror of local PIO Port A lines:
+- Port `0x30` is GDP local PIO Port A:
   - bit0=`RBNK`, bit1=`WBNK`, bit2=`XORM`, bit3=`FM0`, bit4=`FM1`,
-    bit5=`GDPINT` (read-only), bit6=`AVDINT` (read-only), bit7=`SCRLM`.
+    bit7=`SCRLM`. Bits 5 and 6 are not EF/AVDC interrupt status; EF `/IRQ`
+    and conditioned AVDC `/IRQ` drive the PIO `ASTB` and `BSTB` pins.
 - EF coordinate origin is bottom-left in logical drawing space:
   - `x` grows to the right
   - `y` grows upward
@@ -46,8 +47,9 @@ define emulation rules that match ROM behavior.
   - In practice, this produces the expected stacked startup layout
     (`banner`, then `boot version`, then `TESTING MEMORY ...`) without the
     lines erasing each other.
-- Partner ROM uses EF command `0x05` as X-home while preserving `Y`.
-  - Partner ROM uses command `0x0D` when it needs to reset only `X`.
+- EF command `0x05` resets both X and Y. Command `0x0D` resets only X, and
+  command `0x0E` resets only Y. The Partner ROM's use of `0x05` therefore
+  returns the pen to the full coordinate origin.
 
 ## Emulation Rules (Practical)
 
@@ -64,6 +66,15 @@ define emulation rules that match ROM behavior.
 - GDP clear screen clears entire GDP page 64KB regardless of resolution, 
   but only one page,not both, only the write page
 - Treat GDP PIO outputs as real control lines that gate mode/behavior.
+- In `XORM`, every plotted position toggles even when EF eraser is selected;
+  pen/eraser-up still prevents a plot.
+- READY timing is workload-dependent at the 1.5 MHz EF clock. Vectors take
+  four setup clocks plus one clock per component dot, characters take
+  `48*P*Q` clocks, and clear/scan commands run to the next VB falling edge and
+  then occupy one field in non-interlaced format or two fields when interlaced.
+  Exact phase conversion and cases
+  are documented in
+  [GDP-AVDC-CMAC-TIMING.md](GDP-AVDC-CMAC-TIMING.md).
 
 ## Current Emulator Status
 
@@ -82,10 +93,10 @@ define emulation rules that match ROM behavior.
 - Clearing one plane does not imply clearing the other.
 - Pixel intensity is additive in composition terms; a pixel driven by both AVDC
   and GDP appears brighter than a pixel driven by only one plane.
-- Native AVDC geometry is up to 132 characters x 8 pixels horizontally and
-  26 characters x 12 pixels vertically.
-  - Raw character geometry is therefore `1056x312`.
-  - Because AVDC text pixels are physically 1x2, effective text raster is `1056x624`.
+- The emulator composes both planes in a `1056x624` monitor canvas. This is a
+  render-space convention, not a fixed AVDC register geometry. The observed
+  132-column runtime mode uses 132 characters by 8 dots; the ROM's
+  `IR0=0xD0` selects 11 AVDC scan lines per active character row.
 - The GDP raster is smaller (`1024x512`) and is centered inside the full
   `1056x624` monitor raster.
 
@@ -98,19 +109,15 @@ define emulation rules that match ROM behavior.
   board glue also biases GDP write addresses into video RAM. The current
   emulator uses the latter model because it matches the ROM boot banner and
   per-line clear behavior much better.
-- Verify GDP bank wiring semantics end-to-end:
-  - `RBNK` affects scanout source page.
-  - `WRNK` affects draw destination page.
-  - ROM currently appears to use page 0, but page-1 diagnostics should be added.
-- Add a dedicated probe/test that writes deterministic patterns to both pages and
-  confirms expected read/write-bank behavior under scroll.
+- Confirm GDP bank wiring semantics on real hardware. The emulator now has a
+  deterministic page-1 diagnostic proving that `RBNK` selects scanout and
+  `WBNK` selects the draw/clear destination under scroll.
 - Confirm additive compositing brightness curve against real monitor photos
   (current blend is intentionally simple and may need tuning).
-- Audit EF command semantics that can affect rotation/magnification edge cases:
+- Audit remaining EF command semantics that can affect rotation/magnification edge cases:
   - runtime `CHSZ` changes,
   - `CR2` orientation transitions,
   - cursor/pen advance under rotated text modes.
-- Expand AVDC fidelity where needed for final CP/M visual parity:
-  - row-table edge cases,
-  - delayed command timing corner cases,
-  - cursor/blink behavior in mixed GDP/AVDC scenes.
+- Continue hardware validation of AVDC setup-window edge cases and mixed-plane
+  cursor/blink presentation. Core row-table, split, interlace, delayed-command,
+  and CMAC divider timing now have focused regression coverage.

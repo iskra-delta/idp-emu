@@ -330,6 +330,7 @@ static int test_sasi_adapter_write_phase_status()
     const uint8_t status = idpartner_sasi_status_r(&sasi);
     CHECK((status & 0x80u) != 0u);
     CHECK((status & 0x40u) == 0u);
+    CHECK((status & 0x20u) == 0u);
     CHECK((status & 0x10u) == 0u);
     CHECK(idpartner_sasi_drq(&sasi) == true);
 

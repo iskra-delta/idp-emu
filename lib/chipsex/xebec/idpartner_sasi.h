@@ -110,6 +110,15 @@ static inline bool _idpartner_sasi_cd(const idpartner_sasi_t *adp) {
            (adp->target->phase == S1410_PHASE_RESPONSE);
 }
 
+static inline bool _idpartner_sasi_msg(const idpartner_sasi_t *adp) {
+    /* The currently supported S1410 command set ends in a status response and
+       does not enter a separate SASI message phase. Keep the board's MSG bit
+       explicit so a future target phase can drive it without changing the
+       adapter register contract. */
+    (void)adp;
+    return false;
+}
+
 static inline bool _idpartner_sasi_bsy(const idpartner_sasi_t *adp) {
     if (!adp->target || !adp->target->present) {
         return false;
@@ -146,6 +155,7 @@ uint8_t idpartner_sasi_status_r(idpartner_sasi_t *adp) {
     uint8_t data = 0;
     if (_idpartner_sasi_req(adp)) data |= 0x80;
     if (_idpartner_sasi_io(adp))  data |= 0x40;
+    if (_idpartner_sasi_msg(adp)) data |= 0x20;
     if (_idpartner_sasi_cd(adp))  data |= 0x10;
     if (_idpartner_sasi_bsy(adp)) data |= 0x08;
     _idpartner_sasi_update_drq(adp);

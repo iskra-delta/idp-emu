@@ -31,6 +31,7 @@ public:
     std::string dump_raw_serial_text() const;
     const scn2674_t& get_avdc() const { return avdc_; }
     const ef9367_t& get_ef9367() const { return ef9367_; }
+    const z80pio_t& get_gdp_pio() const { return gdp_video_pio_; }
     partner_gdp_keyboard& get_keyboard() { return keyboard_; }
     const partner_gdp_keyboard& get_keyboard() const { return keyboard_; }
     struct io_counters {
@@ -54,7 +55,8 @@ public:
 protected:
     uint8_t io_read(uint16_t port) override;
     void io_write(uint16_t port, uint8_t data) override;
-    bool get_avdc_vb_edge() const override { return avdc_vb_edge_; }
+    bool get_ctc3_trigger_edge() const override { return avdc_irq_edge_; }
+    uint64_t clock_expansion_daisy_chain(uint64_t bus_pins) override;
 
 private:
     terminal_profile terminal_profile_ = terminal_profile::vt100_ansi;
@@ -88,9 +90,10 @@ private:
     uint64_t gdp_video_pio_pins_ = 0;
     uint64_t ef9367_pins_ = 0;
     uint64_t avdc_pins_ = 0;
+    bool avdc_restrict_ = false; // DADD13/LL latched at falling BLANK
 
-    // AVDC VB is physically wired to CTC CLK/TRG3 on the GDP board.
-    bool avdc_vb_edge_ = false;
+    // ST8 exposes the PAL-conditioned active-low AVDC interrupt, not raw VB.
+    bool avdc_irq_edge_ = false;
 
     void gdp_put_char(uint8_t ch);
     void gdp_newline();

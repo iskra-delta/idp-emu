@@ -185,6 +185,10 @@ int main()
         fails += !expect(reset.pending_rx_bytes == 0,
                          "guest SIO reset discards stale Squid response bytes");
 
+        // A real OUT instruction supplies these four recovery clocks while
+        // fetching the next opcode; this direct I/O test must do so itself.
+        for (int i = 0; i < 4; ++i)
+            emu.tick();
         enable_rx(emu, INTERNAL_CTRL_PORT + 2);
         enable_tx(emu, INTERNAL_CTRL_PORT + 2);
         for (uint8_t byte : hello)

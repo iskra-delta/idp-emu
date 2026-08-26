@@ -41,8 +41,8 @@
     - DS̅:    Data Strobe (active-low)
     - RW:     Read (1) / Write (0) select
     - RESET̅: Reset (active-low)
-    - INT:    (TODO) interrupt output
-    - 1HZ:    (TODO) 1 Hz pulse output
+    - INT:    enabled alarm/periodic interrupt output (active high)
+    - 1HZ:    1 Hz square-wave output
 
     ## Functions
 
@@ -97,7 +97,7 @@
 
     - Registers are always BCD encoded
     - Time is latched on every access and reflects host `time()` value
-    - INT and 1HZ lines are planned but not implemented
+    - Reading interrupt-status register 10h clears the latched interrupt
     - Writes update register content, but won't alter real time
 
     You can use the MM58167A alongside a Z80 and PIO/CTC for real-time clock
@@ -142,8 +142,8 @@ extern "C"
 #define MM58167A_PIN_DS (42)
 #define MM58167A_PIN_RW (43)
 #define MM58167A_PIN_RESET (44)
-#define MM58167A_PIN_INT (45) // output (TODO)
-#define MM58167A_PIN_1HZ (46) // output (TODO)
+#define MM58167A_PIN_INT (45) // active-high output
+#define MM58167A_PIN_1HZ (46) // output
 
 #define MM58167A_CS (1ULL << MM58167A_PIN_CS)
 #define MM58167A_AS (1ULL << MM58167A_PIN_AS)
@@ -166,6 +166,10 @@ extern "C"
         uint8_t addr_latch;    // latched address (via AS)
         time_t last_sync_time; // for refreshing time
         uint16_t last_sync_millisecond;
+        uint8_t interrupt_status;
+        uint8_t interrupt_control;
+        uint8_t rollover_status;
+        uint8_t standby_interrupt_enable;
         bool nvram_init_done;  // battery-backed setup area initialized once
         // Deterministic emulated clock (for reproducible tests). When det_ticks
         // is non-NULL the visible time is derived from the emulated tick counter
@@ -213,6 +217,10 @@ void mm58167a_reset(mm58167a_t *chip)
         chip->nvram_init_done = true;
     }
     chip->addr_latch = 0;
+    chip->interrupt_status = 0;
+    chip->interrupt_control = 0;
+    chip->rollover_status = 0;
+    chip->standby_interrupt_enable = 0;
     chip->last_sync_time = 0;
     chip->last_sync_millisecond = UINT16_MAX;
     mm58167a_sync_time(chip);
@@ -243,6 +251,10 @@ void mm58167a_sync_time(mm58167a_t *chip)
     if (now == chip->last_sync_time &&
         millisecond == chip->last_sync_millisecond)
         return;
+    const bool had_previous = chip->last_sync_millisecond != UINT16_MAX;
+    uint8_t previous[8];
+    memcpy(previous, chip->regs, sizeof(previous));
+    const uint16_t previous_millisecond = chip->last_sync_millisecond;
     const bool second_changed = now != chip->last_sync_time;
     chip->last_sync_time = now;
     chip->last_sync_millisecond = millisecond;
@@ -255,8 +267,30 @@ void mm58167a_sync_time(mm58167a_t *chip)
     chip->regs[0x00] = (uint8_t)((millisecond % 10u) << 4);
     chip->regs[0x01] = (uint8_t)((hsec % 10u) | ((hsec / 10u) << 4));
 
-    if (!second_changed)
+    if (!second_changed) {
+        if (had_previous &&
+            (previous_millisecond / 100u) != (millisecond / 100u)) {
+            uint8_t events = 0x02;
+            chip->rollover_status |= events;
+            bool alarm_match = true;
+            for (uint8_t i = 0; i < 8 && alarm_match; ++i) {
+                const uint8_t value = chip->regs[i];
+                const uint8_t compare = chip->regs[0x08u + i];
+                for (uint8_t shift = 0; shift <= 4; shift += 4) {
+                    const uint8_t c = (uint8_t)((compare >> shift) & 0x0Fu);
+                    const uint8_t v = (uint8_t)((value >> shift) & 0x0Fu);
+                    if ((c & 0x0Cu) != 0x0Cu && c != v) {
+                        alarm_match = false;
+                        break;
+                    }
+                }
+            }
+            if (alarm_match)
+                events |= 0x01;
+            chip->interrupt_status |= (uint8_t)(events & chip->interrupt_control);
+        }
         return;
+    }
 
     struct tm *t = localtime(&now);
 
@@ -271,6 +305,84 @@ void mm58167a_sync_time(mm58167a_t *chip)
     chip->regs[0x05] = (t->tm_wday & 0x07);                                      // day of week
     chip->regs[0x06] = ((t->tm_mday % 10) | ((t->tm_mday / 10) << 4));          // day
     chip->regs[0x07] = ((t->tm_mon + 1) % 10) | (((t->tm_mon + 1) / 10) << 4);  // month
+
+    if (had_previous) {
+        uint8_t events = 0;
+        if (second_changed || (previous_millisecond / 100u) != (millisecond / 100u))
+            events |= 0x02; // tenth second
+        if (previous[0x02] != chip->regs[0x02]) events |= 0x04;
+        if (previous[0x03] != chip->regs[0x03]) events |= 0x08;
+        if (previous[0x04] != chip->regs[0x04]) events |= 0x10;
+        if (previous[0x06] != chip->regs[0x06]) events |= 0x20;
+        if (previous[0x05] > chip->regs[0x05]) events |= 0x40; // week rollover
+        if (previous[0x07] != chip->regs[0x07]) events |= 0x80;
+
+        chip->rollover_status |= events;
+
+        /* Comparator RAM 08h..0fh uses each BCD nibble's top two bits as a
+         * don't-care encoding. This permits alarms such as "every minute". */
+        bool alarm_match = true;
+        for (uint8_t i = 0; i < 8 && alarm_match; ++i) {
+            const uint8_t value = chip->regs[i];
+            const uint8_t compare = chip->regs[0x08u + i];
+            for (uint8_t shift = 0; shift <= 4; shift += 4) {
+                const uint8_t c = (uint8_t)((compare >> shift) & 0x0Fu);
+                const uint8_t v = (uint8_t)((value >> shift) & 0x0Fu);
+                if ((c & 0x0Cu) != 0x0Cu && c != v) {
+                    alarm_match = false;
+                    break;
+                }
+            }
+        }
+        if (events && alarm_match)
+            events |= 0x01;
+        chip->interrupt_status |= (uint8_t)(events & chip->interrupt_control);
+    }
+}
+
+static uint8_t _mm58167a_read_register(mm58167a_t *chip, uint8_t reg)
+{
+    switch (reg & 0x1Fu) {
+        case 0x10: return chip->interrupt_status;
+        case 0x11: return chip->interrupt_control;
+        case 0x14: return chip->rollover_status;
+        case 0x16: return chip->standby_interrupt_enable;
+        default: return chip->regs[reg & 0x1Fu];
+    }
+}
+
+static void _mm58167a_write_register(mm58167a_t *chip, uint8_t reg, uint8_t data)
+{
+    switch (reg & 0x1Fu) {
+        case 0x10:
+            return; // read-only interrupt status
+        case 0x11:
+            chip->interrupt_control = data;
+            chip->interrupt_status &= data;
+            return;
+        case 0x12:
+            if (data == 0xFFu)
+                memset(chip->regs, 0, 8);
+            return;
+        case 0x13:
+            if (data == 0xFFu)
+                memset(&chip->regs[0x08], 0, 8);
+            return;
+        case 0x14:
+            chip->rollover_status &= (uint8_t)~data;
+            return;
+        case 0x15:
+            chip->last_sync_time = 0;
+            chip->last_sync_millisecond = UINT16_MAX;
+            mm58167a_sync_time(chip);
+            return;
+        case 0x16:
+            chip->standby_interrupt_enable = data;
+            return;
+        default:
+            chip->regs[reg & 0x1Fu] = data;
+            return;
+    }
 }
 
 uint64_t mm58167a_tick(mm58167a_t *chip, uint64_t pins)
@@ -294,18 +406,28 @@ uint64_t mm58167a_tick(mm58167a_t *chip, uint64_t pins)
         if (pins & MM58167A_RW)
         {
             // read
-            uint8_t data = chip->regs[chip->addr_latch & 0x1F];
+            const uint8_t reg = chip->addr_latch & 0x1F;
+            uint8_t data = _mm58167a_read_register(chip, reg);
             MM58167A_SET_DATA(pins, data);
+            if (reg == 0x10)
+                chip->interrupt_status = 0;
         }
         else
         {
             // write
             uint8_t data = MM58167A_GET_DATA(pins);
-            chip->regs[chip->addr_latch & 0x1F] = data;
+            _mm58167a_write_register(chip, chip->addr_latch, data);
         }
     }
 
-    // TODO: Handle INT and 1HZ generation
+    if (chip->interrupt_status)
+        pins |= MM58167A_INT;
+    else
+        pins &= ~MM58167A_INT;
+    if (chip->last_sync_millisecond < 500u)
+        pins |= MM58167A_1HZ;
+    else
+        pins &= ~MM58167A_1HZ;
     return pins;
 }
 #endif // CHIPS_IMPL

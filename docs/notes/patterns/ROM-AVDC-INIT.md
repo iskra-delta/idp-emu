@@ -26,18 +26,27 @@ during early startup.
 
 IR table values (address `0x02AC`):
 
-| IR  | Value | Description                                            |
-| --- | ----- | ------------------------------------------------------ |
-| 0   | 0xD0  | double width, 10 scanlines, csync, independent buffers |
-| 1   | 0x2F  | no interlace, equalizing const                         |
-| 2   | 0x0D  | sync width/back porch, row-table bit off in init      |
-| 3   | 0x05  | vertical back porch                                    |
-| 4   | 0x99  | blink enabled, 25 rows                                 |
-| 5   | 0x4F  | 79 characters per row                                  |
-| 6   | 0x0A  | cursor scan lines                                      |
-| 7   | 0xEA  | vsync, blink enabled, rate, underline position         |
-| 8   | 0x00  | display buffer LSB                                     |
-| 9   | 0x30  | buffer range (last address = 8191)                     |
+| IR  | Value | Exact decode |
+| --- | ----- | ------------ |
+| 0   | 0xD0  | double-height/width control enabled, 11 scan lines/row, VSYNC, independent buffer mode |
+| 1   | 0x2F  | non-interlaced, equalizing constant = 48 CCLK |
+| 2   | 0x0D  | row table off, HSYNC = 4 CCLK, horizontal back porch = 19 CCLK |
+| 3   | 0x05  | vertical front porch = 4 lines, vertical back porch = 14 lines |
+| 4   | 0x99  | character blink period = 128 fields, 26 active rows |
+| 5   | 0x4F  | 80 active characters/row |
+| 6   | 0x0A  | cursor first line 0, last line 10 |
+| 7   | 0xEA  | VSYNC = 7 lines, cursor blink enabled at 32 fields, underline line 10 |
+| 8   | 0x00  | display-buffer first-address low byte |
+| 9   | 0x30  | first address = 0, last address = 0x0FFF |
+
+With the 18 MHz/9-dot CMAC setting normally used for this 80-column stage,
+CCLK is 2 MHz. These registers produce 112 CCLK/line and 311 lines/field:
+
+```text
+Htotal = 2 * (48 + 2*4) = 112 CCLK
+Hfront = 112 - 80 - 4 - 19 = 9 CCLK
+Vtotal = 26*11 + 4 + 7 + 14 = 311 lines
+```
 
 ### AVDCInit2 (ROM address 0x0286)
 
@@ -67,15 +76,19 @@ IR table values (address `0x02AC`):
 - IR state observed during runtime in current traces:
   - `IR0..IR9 = D0 3E BF 05 99 83 0B EA 00 30`
   - `IR2` high bit set (`0xBF`) indicates row-table mode active in runtime.
+  - `IR5 = 0x83` selects 132 active characters, not 131.
 
-### 2026 Runtime Cross-Check (Boot vs Display)
+With the 24 MHz/8-dot CMAC setting used for 132 columns, CCLK is 3 MHz.
+The runtime values produce 190 CCLK/line, including a 15-CCLK horizontal
+front porch. The active character raster is exactly `132 * 8 = 1056` dots.
 
-- GDP bootstrap text path can progress to CP/M loader strings even when AVDC final text rendering is still imperfect.
-- In traces this appears as:
-  - ROM/loader text seen on serial-side diagnostics (`Boot V`, `CP/M V3.0 Loader`, `61K TPA`)
-  - AVDC still needing fuller command interpretation for final interactive prompt display.
-- Diagnostic implication:
-  - a missing visible prompt is not always a boot failure; it can be AVDC render-path incompleteness.
+### 2026 Runtime Cross-Check
+
+- The GDP hard-disk integration now validates the final CP/M prompt in AVDC
+  VRAM, enters `paket`, receives the serial-side Squid response, observes the
+  catalog on the display, and verifies that the cursor returns after `A>`.
+- Serial diagnostics remain useful for separating CPU boot progress from
+  display rendering, but the AVDC prompt path is now a regression gate.
 
 ## Analysis / Interpretation
 
@@ -96,3 +109,6 @@ This ROM-level AVDC initialization sequence includes:
 - Command-driven char/attr buffer writes are required for accurate emulation
 
 This sequence is essential for emulating or diagnosing early Partner boot behavior.
+
+For every IR, screen-start/split/interlace behavior, and exact delayed-command
+cycle cases, see [GDP-AVDC-CMAC-TIMING.md](GDP-AVDC-CMAC-TIMING.md).

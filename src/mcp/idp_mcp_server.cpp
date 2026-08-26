@@ -395,7 +395,8 @@ json idp_mcp_server::list_tools() const
             {"ticks_per_byte", {{"type", "integer"}, {"minimum", 0}, {"maximum", clock_hz}}}}, {"text"})));
     tools.push_back(tool("screen",
         "Return the current chip-rendered CRT/GDP raster as a PNG MCP image without opening a window.",
-        object_schema({{"include_border", {{"type", "boolean"}}},
+        object_schema({{"include_border", {{"type", "boolean"},
+            {"description", "On GDP, include the surrounding AVDC text-raster area; false returns only the centered EF9367 raster."}}},
             {"scale", {{"type", "integer"}, {"minimum", 1}, {"maximum", 4}}}})));
     tools.push_back(tool("screen_text",
         "Read terminal characters or render the chip framebuffer as ASCII art; serial and printer transcripts accompany chars mode.",
@@ -408,12 +409,14 @@ json idp_mcp_server::list_tools() const
     tools.push_back(tool("screenshot",
         "Save the chip-rendered raster to a PNG file, replacing that path.",
         object_schema({{"path", {{"type", "string"}, {"minLength", 1}}},
-            {"include_border", {{"type", "boolean"}}},
+            {"include_border", {{"type", "boolean"},
+                {"description", "On GDP, include the surrounding AVDC text-raster area; false returns only the centered EF9367 raster."}}},
             {"scale", {{"type", "integer"}, {"minimum", 1}, {"maximum", 4}}}}, {"path"})));
     tools.push_back(tool("video_start",
         "Start YUV4MPEG2 recording of the chip-rendered screen at nominal 60 Hz; frames advance only while emulation runs.",
         object_schema({{"path", {{"type", "string"}, {"minLength", 1}}},
-            {"include_border", {{"type", "boolean"}}}}, {"path"})));
+            {"include_border", {{"type", "boolean"},
+                {"description", "On GDP, include the surrounding AVDC text-raster area; false records only the centered EF9367 raster."}}}}, {"path"})));
     tools.push_back(tool("video_stop",
         "Stop YUV4MPEG2 recording and report path, frame count, duration and byte size.", object_schema()));
     tools.push_back(tool("mount_media",
@@ -576,7 +579,8 @@ json idp_mcp_server::run_machine(uint64_t tick_limit,
     return result;
 }
 
-idp_mcp_server::captured_screen idp_mcp_server::capture_screen(int scale)
+idp_mcp_server::captured_screen idp_mcp_server::capture_screen(
+    int scale, bool include_border)
 {
     framebuffer_.set_phosphor_type(display::phosphor_type::flat);
     if (auto *crt = dynamic_cast<partner_crt *>(&machine_))
@@ -584,17 +588,36 @@ idp_mcp_server::captured_screen idp_mcp_server::capture_screen(int scale)
     else if (auto *gdp = dynamic_cast<partner_gdp *>(&machine_))
         gdp->render_to(framebuffer_);
 
-    const int source_width = framebuffer_.content_width();
-    const int source_height = framebuffer_.content_height();
+    int source_x = 0;
+    int source_y = 0;
+    int source_width = framebuffer_.content_width();
+    int source_height = framebuffer_.content_height();
+    int source_row_step = 1;
+    if (!include_border) {
+        if (auto *gdp = dynamic_cast<partner_gdp *>(&machine_)) {
+            // The AVDC text mode occupies the complete 1056x624 monitor
+            // raster. GDP graphics are centered within it at 1024x512, so
+            // "border" means only the AVDC/GDP geometry difference.
+            constexpr int graphics_width = 1024;
+            constexpr int physical_graphics_height = 512;
+            const bool mode_512_lines = gdp->get_ef9367().mode_512_lines;
+            source_x = (source_width - graphics_width) / 2;
+            source_y = (source_height - physical_graphics_height) / 2;
+            source_width = graphics_width;
+            source_height = mode_512_lines ? physical_graphics_height : 256;
+            source_row_step = mode_512_lines ? 1 : 2;
+        }
+    }
+
     captured_screen result;
     result.width = source_width * scale;
     result.height = source_height * scale;
     result.rgb.resize((size_t)result.width * (size_t)result.height * 3);
     const uint8_t *source = framebuffer_.data();
     for (int y = 0; y < result.height; ++y) {
-        const int sy = y / scale;
+        const int sy = source_y + (y / scale) * source_row_step;
         for (int x = 0; x < result.width; ++x) {
-            const int sx = x / scale;
+            const int sx = source_x + x / scale;
             const uint8_t code = source[sy * display::FB_W + sx];
             uint8_t r = code, g = code, b = code;
             if (code >= 0xF0) {
@@ -616,7 +639,7 @@ idp_mcp_server::captured_screen idp_mcp_server::capture_screen(int scale)
 void idp_mcp_server::record_video_frame()
 {
     if (!video_file_.is_open()) return;
-    const captured_screen frame = capture_screen();
+    const captured_screen frame = capture_screen(1, video_include_border_);
     if (frame.width != video_width_ || frame.height != video_height_)
         throw std::runtime_error("screen dimensions changed during recording");
     const size_t pixels = (size_t)frame.width * frame.height;
@@ -1029,10 +1052,13 @@ json idp_mcp_server::invoke_tool(const std::string &name, const json &arguments)
         }
         if (name == "screen" || name == "screenshot") {
             const int scale = (int)unsigned_arg(arguments, "scale", 1, 4, 1);
-            const captured_screen frame = capture_screen(scale);
+            const bool include_border =
+                bool_arg(arguments, "include_border", true);
+            const captured_screen frame = capture_screen(scale, include_border);
             const auto png = encode_png(frame.rgb, frame.width, frame.height);
             json info = {{"width", frame.width}, {"height", frame.height},
-                         {"bytes", png.size()}, {"format", "png"}, {"scale", scale}};
+                         {"bytes", png.size()}, {"format", "png"},
+                         {"scale", scale}, {"include_border", include_border}};
             if (name == "screen")
                 return image_tool_result("Partner " + model_ + " screen " +
                     std::to_string(frame.width) + "x" + std::to_string(frame.height),
@@ -1056,7 +1082,8 @@ json idp_mcp_server::invoke_tool(const std::string &name, const json &arguments)
                 arguments["path"].get<std::string>().empty())
                 throw std::invalid_argument("'path' is required");
             video_path_ = arguments["path"].get<std::string>();
-            const captured_screen frame = capture_screen();
+            video_include_border_ = bool_arg(arguments, "include_border", true);
+            const captured_screen frame = capture_screen(1, video_include_border_);
             video_width_ = frame.width;
             video_height_ = frame.height;
             video_file_.open(video_path_, std::ios::binary | std::ios::trunc);
@@ -1069,6 +1096,7 @@ json idp_mcp_server::invoke_tool(const std::string &name, const json &arguments)
             return tool_result("started YUV4MPEG2 recording to " + video_path_,
                 {{"path", video_path_}, {"width", video_width_},
                  {"height", video_height_}, {"frame_rate", 60},
+                 {"include_border", video_include_border_},
                  {"start_tick", video_start_tick_}});
         }
         if (name == "video_stop") {

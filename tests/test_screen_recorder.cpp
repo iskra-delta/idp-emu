@@ -62,7 +62,8 @@ int main()
 } while (0)
 
     const std::filesystem::path output =
-        std::filesystem::temp_directory_path() / "idp-screen-recorder-audio.avi";
+        std::filesystem::path(IDP_SOURCE_ROOT) /
+        "tests/dump/screen-recorder-audio.avi";
     std::error_code ec;
     std::filesystem::remove(output, ec);
 

@@ -242,7 +242,7 @@ def write_reports(output_dir: Path, results: list[dict[str, object]], artifacts:
                 f"(sha256 `{artifact['sha256']}`)"
             )
     lines.append("")
-    (output_dir / "report.md").write_text("\n".join(lines), encoding="utf-8")
+    (output_dir / "REPORT.md").write_text("\n".join(lines), encoding="utf-8")
 
 
 def main() -> int:
@@ -322,7 +322,7 @@ def main() -> int:
     results.sort(key=lambda item: order[str(item["name"])])
     write_reports(args.output, results, artifacts)
     passed = sum(bool(result.get("passed")) for result in results)
-    print(f"{passed}/{len(results)} cases passed; report: {args.output / 'report.md'}")
+    print(f"{passed}/{len(results)} cases passed; report: {args.output / 'REPORT.md'}")
     return 0 if passed == len(results) else 1
 
 

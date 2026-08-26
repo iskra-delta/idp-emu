@@ -5,7 +5,8 @@
 class partner_external_im2_test : public partner
 {
 public:
-    partner_external_im2_test() : partner("/tmp/idp-test-external-im2.nvram") {}
+    partner_external_im2_test() : partner(
+        std::string(IDP_SOURCE_ROOT) + "/tests/dump/partner-external-im2.nvram") {}
 
     void set_external_vector(int vector)
     {
