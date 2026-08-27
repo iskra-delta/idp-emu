@@ -1,6 +1,7 @@
 # Build directories.
 bin/
 dist/
+lab/
 tools/zx0/build/
 tools/zx0/bin/
 __pycache__/
