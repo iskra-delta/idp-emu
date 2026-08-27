@@ -56,16 +56,14 @@ option(IDP_STATIC_RUNTIME
     "Link the compiler runtime statically where the platform supports it" ON)
 option(IDP_BUILD_PROBES
     "Build developer-only floppy and GDP diagnostic probes" OFF)
-set(IDP_RETROVAULT_COMMIT
-    "bac605387ad152e4e92cb03644388b4836cb4eaa"
-    CACHE STRING "Pinned Retro Vault protocol implementation revision")
-mark_as_advanced(IDP_RETROVAULT_COMMIT)
-set(IDP_LIBSQUID_COMMIT
-    "50039278d4f74f24891e6e78166f2cee96f3a316"
-    CACHE STRING "Pinned Squid wire protocol implementation revision")
-mark_as_advanced(IDP_LIBSQUID_COMMIT)
+set(IDP_RETROVAULT_REF "main" CACHE STRING
+    "squid-server revision providing the Retro Vault request implementation")
+mark_as_advanced(IDP_RETROVAULT_REF)
+set(IDP_LIBSQUID_REF "main" CACHE STRING
+    "libsquid wire protocol implementation revision")
+mark_as_advanced(IDP_LIBSQUID_REF)
 set(IDP_LIBSQUID_SOURCE_DIR "" CACHE PATH
-    "Use a local libsquid checkout instead of the pinned revision")
+    "Explicitly use a local libsquid checkout instead of the fetched revision")
 mark_as_advanced(IDP_LIBSQUID_SOURCE_DIR)
 
 if(IDP_STATIC_RUNTIME AND MSVC)
@@ -222,7 +220,6 @@ endif()
 
 # --- Dear ImGui via FetchContent ---
 include(FetchContent)
-set(FETCHCONTENT_UPDATES_DISCONNECTED ON)
 FetchContent_Declare(
     imgui
     GIT_REPOSITORY https://github.com/ocornut/imgui.git
@@ -237,8 +234,8 @@ FetchContent_MakeAvailable(imgui)
 FetchContent_Declare(
     retrovault_gateway
     GIT_REPOSITORY https://github.com/retro-plastics/squid-server.git
-    GIT_TAG        ${IDP_RETROVAULT_COMMIT}
-    GIT_SHALLOW    FALSE
+    GIT_TAG        ${IDP_RETROVAULT_REF}
+    GIT_SHALLOW    TRUE
 )
 FetchContent_GetProperties(retrovault_gateway)
 if(NOT retrovault_gateway_POPULATED)
@@ -247,21 +244,14 @@ endif()
 set(IDP_RETROVAULT_SOURCE_DIRECTORY
     "${retrovault_gateway_SOURCE_DIR}/lib/retrovault")
 
-if(NOT IDP_LIBSQUID_SOURCE_DIR)
-    get_filename_component(IDP_LIBSQUID_SIBLING
-        "${CMAKE_SOURCE_DIR}/../../retro-plastics/libsquid" ABSOLUTE)
-    if(EXISTS "${IDP_LIBSQUID_SIBLING}/include/squid/snet.h")
-        set(IDP_LIBSQUID_SOURCE_DIR "${IDP_LIBSQUID_SIBLING}")
-    endif()
-endif()
 if(IDP_LIBSQUID_SOURCE_DIR)
     set(IDP_LIBSQUID_SOURCE_DIRECTORY "${IDP_LIBSQUID_SOURCE_DIR}")
 else()
     FetchContent_Declare(
         libsquid_internal
         GIT_REPOSITORY https://github.com/retro-plastics/libsquid.git
-        GIT_TAG        ${IDP_LIBSQUID_COMMIT}
-        GIT_SHALLOW    FALSE
+        GIT_TAG        ${IDP_LIBSQUID_REF}
+        GIT_SHALLOW    TRUE
     )
     FetchContent_GetProperties(libsquid_internal)
     if(NOT libsquid_internal_POPULATED)

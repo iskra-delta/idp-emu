@@ -22,9 +22,7 @@ $(UDAP_STAMP):
 	git -C $(UDAP_DIR) checkout --detach $(UDAP_REF)
 	@touch $@
 
-configure: $(BUILD_DIR)/CMakeCache.txt
-
-$(BUILD_DIR)/CMakeCache.txt: | fetch
+configure: fetch
 	cmake -S . -B $(BUILD_DIR)
 
 build: configure
