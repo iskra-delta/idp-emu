@@ -9,6 +9,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <filesystem>
 
 namespace {
 constexpr uint64_t PARTNER_HDD_SIZE = 1224ULL * 32 * 256;
@@ -1676,8 +1677,17 @@ void partner::load_rom(const std::string &path)
     if (image.size() != rom_size && image.size() != rom_capacity)
         throw std::runtime_error("Partner ROM image must be exactly 2048 or 4096 bytes: " + path);
     load_debug_rom(image);
+    rom_path_ = path;
 
     std::cerr << "[info] rom loaded: " << path << "\n";
+}
+
+bool partner::uses_partos_cmos_layout() const
+{
+    std::string rom_name = std::filesystem::path(rom_path_).filename().string();
+    std::transform(rom_name.begin(), rom_name.end(), rom_name.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return rom_name == "partos.rom";
 }
 
 void partner::reset()
@@ -1697,7 +1707,7 @@ void partner::reset()
     // FD-type bits for empty drive slots and stamp a valid checksum nibble. Only
     // when a boot ROM is present -- a bare NVRAM round-trip (no ROM) must read
     // back exactly what was written, so leave the shadow bytes untouched then.
-    if (rom_loaded_) {
+    if (rom_loaded_ && uses_partos_cmos_layout()) {
         rtc.regs[0x0F] &= 0xF0;
         if (disks_[0].data.empty())
             rtc.regs[0x09] &= (uint8_t)~PARTNER_FD0_TYPE_MASK;

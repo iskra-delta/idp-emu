@@ -48,8 +48,8 @@ preventing an installed executable from mixing files from a source checkout.
 The packaged CMOS seed selects the GDP BIOS ANSI terminal mode and carries a
 valid NVRAM checksum. Recreate it after changing its defaults with
 `python3 tools/make_partner_cmos.py`; package verification checks the exact
-eight-byte result. Existing per-user CMOS files are migrated to ANSI by the
-GDP emulator when they are loaded.
+eight-byte result. The GDP emulator does not override the terminal mode:
+Partner CP/M reads and implements the selection stored in CMOS.
 
 All three platform packages contain exactly two disk images:
 `hdd-partner-p-system.img` and `hdd-partner-g-system.img`. Packaged media
@@ -92,7 +92,7 @@ The same implementation is therefore present in Ubuntu, macOS, and Windows
 installers. Dynamic libcurl dependencies, when needed, use the normal
 relocatable `shared/` directory; the Windows release links them statically.
 `PAKET.COM` is embedded in both packaged CP/M system hard disks, and both
-Partner model profiles attach Internal Squid to PAKET port 2 by default. The
+Partner model profiles attach Internal Squid to SIO1B by default. The
 same client binary detects the display board at runtime and uses only plain
 text through the standard CP/M console on both models.
 

@@ -36,6 +36,7 @@ set(IDP_CORE_SOURCES
 
 set(IDP_GUI_SOURCES
     main.cpp
+    machine_configuration.cpp
     startup_input.cpp
     dap/dap_dbg.cpp
     dap/dap_target.cpp
@@ -64,7 +65,7 @@ set(IDP_GUI_SOURCES
 )
 
 add_executable(idp-emu ${IDP_CORE_SOURCES} ${IDP_GUI_SOURCES})
-target_link_libraries(idp-emu PRIVATE chipsex imgui_lib SDL2::SDL2 PNG::PNG OpenGL::GL Threads::Threads udap_dap udap_sdcc idp_internal_squid)
+target_link_libraries(idp-emu PRIVATE chipsex imgui_lib SDL2::SDL2 PNG::PNG OpenGL::GL Threads::Threads udap_dap udap_sdcc idp_internal_squid nlohmann_json::nlohmann_json)
 target_compile_definitions(idp-emu PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
 
 if(WIN32)

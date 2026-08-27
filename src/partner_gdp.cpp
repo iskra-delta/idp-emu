@@ -4,10 +4,12 @@
 #include "scn2674_font.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cctype>
 #include <cmath>
 #include <cstring>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <vector>
 
 namespace {
@@ -188,8 +190,8 @@ static inline void gdp_pio_write(z80pio_t* pio, uint8_t port, uint8_t data,
 }
 }
 
-partner_gdp::partner_gdp(terminal_profile profile, const std::string &rtc_nvram_path)
-    : partner(rtc_nvram_path), terminal_profile_(profile)
+partner_gdp::partner_gdp(const std::string &rtc_nvram_path)
+    : partner(rtc_nvram_path)
 {
     set_sio_port_lock(sio_port_id::sio1_a, true, "Internal GDP keyboard (fixed)");
     sio_device_config squid;
@@ -206,28 +208,15 @@ partner_gdp::partner_gdp(terminal_profile profile, const std::string &rtc_nvram_
         &avdc_,
         scn2674_builtin_font::rom,
         scn2674_builtin_font::rom_size);
-    terminal_ = make_terminal_emulator(terminal_profile_);
+    // GDP output is rendered by the EF9367/SCN2674 hardware. This parser is
+    // retained only for debug text extraction; CP/M performs the terminal
+    // emulation selected in CMOS.
+    terminal_ = make_terminal_emulator(terminal_profile::vt100_ansi);
 }
 
 void partner_gdp::reset()
 {
     partner::reset();
-    if (terminal_profile_ == terminal_profile::vt100_ansi) {
-        // The GDP BIOS interprets ESC sequences according to the terminal
-        // type stored in MM58167 NVRAM AB. A Partner-mode value treats ANSI
-        // CSI digits as native GDP commands, which can draw tiny/rotated EF
-        // glyphs. Match the BIOS configuration to the selected VT100 profile
-        // while preserving its language nibble and checksum.
-        uint8_t language = (uint8_t)(rtc.regs[0x0B] & 0x0Fu);
-        // Language values 0..8 are defined. The historical package seed used
-        // the invalid value B, which makes the GDP BIOS translate decimal
-        // digits into its tiny alternate glyph range D8..E1. Migrate that
-        // value to Yugoslav while preserving any valid user selection.
-        if (language > 8u)
-            language = 8u;
-        rtc.regs[0x0B] = language;
-        stamp_rtc_nvram_checksum();
-    }
     raw_serial_.clear();
     ef9367_reset(&ef9367_);
     ef9367_clear_framebuffers(&ef9367_);
@@ -604,13 +593,36 @@ void partner_gdp::render_to(display &disp)
     const auto map_avdc_x_span_to_disp = [&](int ax, int& dx0, int& dx1) {
         const double fx0 = avdc_x_off + (double)ax * avdc_clock_scale;
         const double fx1 = avdc_x_off + (double)(ax + 1) * avdc_clock_scale;
-        dx0 = (int)std::floor(fx0 * (double)display::FB_W / (double)FULL_W);
-        dx1 = (int)std::ceil(fx1 * (double)display::FB_W / (double)FULL_W);
+        /* Quantize both ends with the same rule so consecutive DCLK spans
+           share one boundary without overlapping.  In the 80-column mode
+           each 18 MHz dot occupies 4/3 of a 24 MHz framebuffer pixel.  Using
+           floor for the left edge and ceil for the right edge made adjacent
+           dots write the boundary pixel twice: additive text became falsely
+           bright/indexed, while reverse-video cursor pixels were inverted
+           twice and left vertical holes. */
+        dx0 = (int)std::lround(fx0 * (double)display::FB_W / (double)FULL_W);
+        dx1 = (int)std::lround(fx1 * (double)display::FB_W / (double)FULL_W);
         if (dx1 <= dx0) {
             dx1 = dx0 + 1;
         }
         dx0 = std::clamp(dx0, 0, display::FB_W);
         dx1 = std::clamp(dx1, 0, display::FB_W);
+    };
+    const auto for_each_avdc_x_coverage = [&](int ax, const auto& draw) {
+        const double x0 = (avdc_x_off + (double)ax * avdc_clock_scale) *
+            (double)display::FB_W / (double)FULL_W;
+        const double x1 = (avdc_x_off + (double)(ax + 1) * avdc_clock_scale) *
+            (double)display::FB_W / (double)FULL_W;
+        const int first = std::max(0, (int)std::floor(x0));
+        const int last = std::min(display::FB_W, (int)std::ceil(x1));
+        for (int dx = first; dx < last; ++dx) {
+            const double covered = std::max(
+                0.0, std::min(x1, (double)dx + 1.0) -
+                    std::max(x0, (double)dx));
+            if (covered > 0.0) {
+                draw(dx, covered);
+            }
+        }
     };
     const auto map_scan_to_glyph_row = [&](int scanline) -> int {
         const int s = avdc_output_line_address(scanline);
@@ -619,18 +631,29 @@ void partner_gdp::render_to(display &disp)
     const auto map_scan_to_user_row16 = [&](int scanline) -> int {
         return std::clamp(avdc_output_line_address(scanline), 0, 15);
     };
+    std::vector<uint8_t> avdc_previous_serial_dot(
+        (size_t)avdc_rows * (size_t)avdc_char_h_logical, 0u);
     const auto apply_dot_stretch = [&](std::array<bool, 10>& row_dots,
-                                       bool enabled) {
+                                       bool enabled, int row, int line) {
+        const size_t state_index =
+            (size_t)row * (size_t)avdc_char_h_logical + (size_t)line;
         if (!enabled || avdc_char_w < 2) {
+            avdc_previous_serial_dot[state_index] = 0u;
             return;
         }
         const int dot_count = std::clamp(avdc_char_w, 1, (int)row_dots.size());
         const std::array<bool, 10> base = row_dots;
+        row_dots[0] = base[0] || avdc_previous_serial_dot[state_index] != 0u;
         for (int i = 1; i < dot_count; i++) {
             if (base[(size_t)(i - 1)]) {
                 row_dots[(size_t)i] = true;
             }
         }
+        /* The CMAC shift register is continuous across character fetches.
+           Preserve the final source dot so a run ending at a cell boundary
+           receives its extra DCLK at the start of the following cell. */
+        avdc_previous_serial_dot[state_index] =
+            base[(size_t)(dot_count - 1)] ? 1u : 0u;
     };
     const auto draw_avdc_cell = [&](int col, int row, uint16_t off,
                                     uint16_t scanline_base) {
@@ -699,8 +722,11 @@ void partner_gdp::render_to(display &disp)
             mono_bg = bg_base;
         }
         const bool has_visible_bg = indexed_text_output ? (bg_idx != 0u) : (mono_bg > 0);
+        const bool text_scanline_dot_stretch = !avdc_.gfx_enabled &&
+            (avdc_.attr_vram[scanline_base] & 0x08u) != 0u;
         if (!avdc_.gfx_enabled && ch <= 0x20u && !attr_underline &&
-            !attr_special && !attr_reverse_mono && !has_visible_bg) {
+            !attr_special && !attr_reverse_mono && !has_visible_bg &&
+            !text_scanline_dot_stretch) {
             return;
         }
         for (int ly = 0; ly < avdc_char_h_logical; ly++) {
@@ -737,7 +763,8 @@ void partner_gdp::render_to(display &disp)
                 }
                 // Partner board quirk: D0 and D7 are swapped only for user chars.
                 std::swap(d[0], d[7]);
-                // 9-dot output ordering: D7..D0 plus D8 where D8 is tied to D7.
+                // CMAC D8 is tied to physical D7.  Keep this in pin order:
+                // the RAM-path D0/D7 swap places physical D7 in d[7].
                 row_dots[0] = d[7];
                 row_dots[1] = d[6];
                 row_dots[2] = d[5];
@@ -774,7 +801,7 @@ void partner_gdp::render_to(display &disp)
                 : scanline_base;
             const bool scanline_dot_stretch =
                 (avdc_.attr_vram[dot_control_addr] & 0x08u) != 0u;
-            apply_dot_stretch(row_dots, scanline_dot_stretch);
+            apply_dot_stretch(row_dots, scanline_dot_stretch, row, ly);
             const bool underline_row = attr_underline &&
                 (avdc_output_line_address(scan) == avdc_underline_scan);
             for (int px = 0; px < draw_char_w; px++) {
@@ -793,10 +820,35 @@ void partner_gdp::render_to(display &disp)
                 int dx0 = 0;
                 int dx1 = 0;
                 map_avdc_x_span_to_disp(fx, dx0, dx1);
+                const int draw_fg = mono_fg;
+                const bool opaque_cell = mono_bg > 0;
                 for (int ydup = 0; ydup < AVDC_CELL_Y_SCALE; ydup++) {
                     const int fy = avdc_y_off + row * avdc_char_h + (ly * AVDC_CELL_Y_SCALE) + ydup;
                     int dy = 0;
                     dy = fy;
+                    /* The 80-column serial raster has a 4:3 ratio to the
+                       common 24 MHz framebuffer.  A binary nearest-edge
+                       conversion made identical source dots alternate
+                       between one and two full pixels depending on phase --
+                       particularly obvious at the one-dot apex of `A`.
+                       Preserve fractional coverage for ordinary monochrome
+                       foreground.  Adjacent source dots then add to one full
+                       pixel at their shared destination pixel, while every
+                       isolated dot has the same width and energy. */
+                    if (!indexed_text_output && !opaque_cell && glyph_on &&
+                        draw_fg > 0) {
+                        for_each_avdc_x_coverage(fx,
+                            [&](int covered_x, double coverage) {
+                                const int level = (int)std::lround(
+                                    (double)draw_fg * coverage);
+                                if (level > 0) {
+                                    disp.add_pixel(covered_x, dy,
+                                        (uint8_t)std::min(level, 255));
+                                    avdc_pixels++;
+                                }
+                            });
+                        continue;
+                    }
                     for (int dx = dx0; dx < dx1; dx++) {
                         if (indexed_text_output) {
                             if (glyph_on) {
@@ -806,9 +858,7 @@ void partner_gdp::render_to(display &disp)
                                 disp.set_index_pixel(dx, dy, bg_idx);
                             }
                         } else {
-                            const int draw_fg = mono_fg;
                             const int inten = glyph_on ? draw_fg : mono_bg;
-                            const bool opaque_cell = (mono_bg > 0);
                             if (opaque_cell) {
                                 disp.set_level_pixel(dx, dy, (uint8_t)std::clamp(inten, 0, 255));
                             } else if (glyph_on) {
@@ -843,22 +893,24 @@ void partner_gdp::render_to(display &disp)
                     row_dots[px] = row_dots[7];
                 }
             }
-            apply_dot_stretch(row_dots, false);
+            apply_dot_stretch(row_dots, false, row, ly);
             for (int px = 0; px < avdc_char_w; px++) {
                 if (!row_dots[(size_t)px]) {
                     continue;
                 }
                 const int fx = col * avdc_char_w + px;
-                int dx0 = 0;
-                int dx1 = 0;
-                map_avdc_x_span_to_disp(fx, dx0, dx1);
                 for (int ydup = 0; ydup < AVDC_CELL_Y_SCALE; ydup++) {
                     const int fy = avdc_y_off + row * avdc_char_h + (ly * AVDC_CELL_Y_SCALE) + ydup;
                     const int dy = fy;
-                    for (int dx = dx0; dx < dx1; dx++) {
-                        disp.add_pixel(dx, dy, 144);
-                        avdc_pixels++;
-                    }
+                    for_each_avdc_x_coverage(fx,
+                        [&](int covered_x, double coverage) {
+                            const int level = (int)std::lround(144.0 * coverage);
+                            if (level > 0) {
+                                disp.add_pixel(covered_x, dy,
+                                    (uint8_t)std::min(level, 255));
+                                avdc_pixels++;
+                            }
+                        });
                 }
             }
         }

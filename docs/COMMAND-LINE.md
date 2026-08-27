@@ -28,11 +28,11 @@ malformed command escapes stop startup with an error.
 | `--system-hdd` | none | off | Attach a writable per-user copy of the bundled Partner G system hard disk. |
 | `--boot TYPE` | `default`, `floppy` | `default` | Use normal firmware boot selection, or automatically select floppy boot when the firmware prompts. |
 | `--nvram FILE` | file path | Selected for the ROM | Choose the MM58167 shadow NVRAM backing file. |
-| `--terminal TYPE` | `vt52`, `vt100`, `ansi` | VT52 for CRT; VT100 for GDP | Select terminal emulation. `ansi` is an alias for `vt100`; on GDP this also selects the BIOS ANSI terminal mode in CMOS so CSI output cannot be misread as native GDP graphics commands. |
+| `--terminal TYPE` | `vt52`, `vt100`, `ansi` | VT52 | Select host terminal emulation for Partner P/CRT. It is ignored for Partner G/GDP, where CP/M performs the emulation selected in CMOS. |
 | `--model TYPE` | `crt`, `gdp`, `auto` | `auto` | Select the text or graphics Partner model. Automatic selection uses the ROM filename. |
 | `--covox-port PORT` | `1`, `2` | disabled | Attach the host-audio Covox DAC to main PIO A (`1`) or B (`2`). This is the PIO at `D0h`–`D3h`, not the GDP-board PIO at `30h`–`33h`. |
-| `--sio-tcp PORT DATA CONTROL` | PAKET port `2`–`4` and two TCP ports | disabled | Attach the selected free SIO channel to an external TCP data/control bridge. |
-| `--sio-squid PORT` | PAKET port `2`–`4` | Partner CRT and G: port `2` | Move the internal Squid/Retro Vault service to the selected free SIO channel. |
+| `--sio-tcp PORT DATA CONTROL` | SIO port `2`–`4` and two TCP ports | disabled | Attach the selected free SIO channel to an external TCP data/control bridge. |
+| `--sio-squid PORT` | SIO port `2`–`4` | Partner CRT and G: port `2` | Move the internal Squid/Retro Vault service to the selected free SIO channel. |
 | `--squid-payload BYTES` | `16`–`112` | `112` | Set the internal Squid endpoint's maximum negotiated DATA payload. The peer may select a smaller value. |
 | `--dap PORT` | `1`–`65535` | disabled | Start the udap Debug Adapter Protocol server on `127.0.0.1:PORT`. |
 | `--commands TEXT` | escaped or literal text | no startup input | Type text through the emulated keyboard after startup. This option may be repeated. |
@@ -46,10 +46,116 @@ Relative file paths are resolved from the current directory, the executable
 directory, the release-tree root, the macOS application Resources directory,
 and the source directory in development builds.
 
-## PAKET and internal Squid
+## Persistent machine configuration
 
-Partner CRT and Partner G assign PAKET port 2 (SIO1B) to the internal
-Squid/Retro Vault device by default on every platform. `PAKET.COM` is present
+**Emulation → Machine Configuration…** opens the machine's single configuration.
+It starts from the machine that is actually running, including media mounted or
+devices rerouted after startup. **Restart** prepares CMOS, replaces the running
+Partner with that configuration, and stores it as `partner-configuration.json`.
+The file is also created from the effective current configuration on the first
+run, so it is immediately available for manual editing.
+
+The JSON is stored in SDL's platform-specific writable preference directory
+for organization `Iskra Delta` and application `Partner Emulator`—normally
+under `%APPDATA%` on Windows, `~/Library/Application Support` on macOS, and
+`$XDG_DATA_HOME` (or `~/.local/share`) on Linux. The dialog and startup log
+show the exact full path selected on the current host. ROMs and packaged media
+remain resources; writable packaged disks and CMOS are copied beneath this
+same per-user tree.
+
+Every file path in the dialog—ROM, floppy images, hard-disk image, and CMOS—
+has a **Select…** file browser. The path fields remain editable for pasting or
+manually entering a path.
+
+Command-line switches override the corresponding JSON fields for that run.
+For example, `--model`, `--rom`, `--fd0`, `--hdd`, the CRT-only `--terminal`,
+`--sio-tcp`, `--sio-squid`, `--covox-port`, and `--squid-payload` take
+precedence. The `partnerp` and `partnerg` launchers therefore still select
+their model and bundled system hard disk even when another model was saved.
+`--system-crt-hdd` and `--system-hdd` are full hard-disk boot profiles and
+also eject both saved floppy images.
+
+The generated file is intentionally readable and editable:
+
+```json
+{
+  "version": 1,
+  "model": "gdp",
+  "rom": "roms/partner_gdp.rom",
+  "boot": "default",
+  "storage": {
+    "floppies": [
+      { "image": "disks/disk-a.img", "type": "partner" },
+      { "image": "disks/disk-b.img", "type": "dos720" }
+    ],
+    "hard_disk": { "image": "", "type": "none" }
+  },
+  "cmos": {
+    "file": "partner_cmos.bin"
+  },
+  "partner_cpm_cmos": {
+    "year": 26,
+    "terminal": "ansi",
+    "language": "yugoslav",
+    "screen_columns": 132,
+    "reverse_video": false,
+    "line_wrap": true,
+    "auto_newline": false,
+    "keyboard_layout": "qwerty",
+    "key_click": false,
+    "autorepeat": true
+  },
+  "monitor": {
+    "type": "bw_crt",
+    "brightness": 1.0,
+    "contrast": 1.0,
+    "bloom": 1.0,
+    "scanline_strength": 1.0,
+    "mask_strength": 1.0,
+    "vignette": 1.0,
+    "persistence": 0.78
+  },
+  "sio": {
+    "2": { "device": "internal_squid", "data_port": 6601,
+           "control_port": 6602, "require_rts": true,
+           "cts_follows_data_client": true },
+    "3": { "device": "none" },
+    "4": { "device": "mouse_logitech" }
+  },
+  "pio": {
+    "a": { "device": "none" },
+    "b": { "device": "centronics_printer" }
+  },
+  "squid_payload_bytes": 112
+}
+```
+
+Valid floppy types are `none`, `partner`, `dos720`, and `dos360`; hard-disk
+types are `none`, `st506`, `st412`, and `st225`. SIO devices are `none`,
+`mouse_microsoft`, `mouse_mousesystems`, `mouse_logitech`, `tcp_bridge`, and
+`internal_squid`. Only one SIO port may use `internal_squid`. PIO devices are
+`none`, `covox`, and `centronics_printer`. Missing fields inherit the current
+configuration, which permits small hand-written override files.
+The top-level `terminal` field is present only for Partner P/CRT profiles.
+Partner G/GDP uses `partner_cpm_cmos.terminal` instead.
+
+`partner_cpm_cmos` is supported only by the original Partner CP/M firmware.
+Terminal values are `ansi`, `partner`, and `vt52`; language values are
+`us_ascii`, `uk_ascii`, `spanish`, `french`, `german`, `italian`, `danish`,
+`swedish`, and `yugoslav`. Screen width is `80` or `132`. On first use, these
+values are decoded from the current eight-byte CMOS image so the dialog starts
+from the machine's real settings. With a PartOS ROM selected, this editor is
+unavailable and `partner_cpm_cmos` is not written.
+
+The original Partner and PartOS assign different meanings to the same CMOS
+bytes. Preparation therefore applies either the documented Partner CP/M
+preferences or the existing PartOS hardware table, never both. Unknown legacy
+Partner bytes and flag bits are preserved.
+
+## Serial devices and internal Squid
+
+Partner CRT and Partner G attach the internal Squid/Retro Vault device to
+SIO1B by default on every platform. `PAKET.COM` is present
 on the packaged Partner P and Partner G system hard disks. The device
 terminates the reliable Squid serial framing inside the
 emulator and performs Retro Vault HTTPS requests on a background thread. Run
@@ -58,8 +164,9 @@ without terminal-control effects; catalog and search results use aligned
 ID/name columns. During a download, `Stanje` is redrawn with the number of
 bytes remaining and finishes at `preostalo: 0 bajtov`.
 
-Open **Devices** to move Internal Squid to PAKET port 3 (SIO2A) or port 4
-(SIO2B), or use `--sio-squid PORT` at startup. Selecting it on a new port
+Open **Devices** to move Internal Squid to SIO2A or SIO2B, or use
+`--sio-squid PORT` at startup (`2` = SIO1B, `3` = SIO2A, `4` = SIO2B).
+Selecting it on a new channel
 automatically detaches it from the previous one. Set `RETRO_VAULT_API_URL`
 before starting the emulator to use a compatible endpoint other than the
 default `https://retro-vault.org`.
@@ -175,14 +282,13 @@ The CRT hard disk uses the same CP/M files and Xebec/SASI geometry as the
 Partner G system disk, with its BIOS console routed to CRT, GDP `SETUP`
 disabled, and the loader-configured CRT SIO channel retained.
 
-Partner G/GDP with a hard disk and VT100 terminal behavior:
+Partner G/GDP with a hard disk; its CP/M terminal emulation comes from CMOS:
 
 ```bash
 idp-emu \
   --model gdp \
   --rom roms/partner_gdp.rom \
-  --hdd disks/hdd-partner-g.img \
-  --terminal vt100
+  --hdd disks/hdd-partner-g.img
 ```
 
 Attach two floppy images and start the debug server:
@@ -213,7 +319,7 @@ and all emulator diagnostics use stderr.
 | `--fd0` … `--fd3` | disk-image path | no disk | Attach a floppy to the selected drive. |
 | `--hdd FILE` | hard-disk image path | no disk | Attach a Xebec/SASI image. |
 | `--nvram FILE` | file path | ephemeral | Persist the MM58167 shadow bytes. With no path, no NVRAM file is written. |
-| `--terminal` | `vt52`, `vt100`, `ansi` | VT52 for CRT; VT100 for GDP | Select the invisible terminal parser and matching GDP BIOS profile. |
+| `--terminal` | `vt52`, `vt100`, `ansi` | VT52 | Select the invisible terminal parser for CRT. Ignored for GDP. |
 | `--list-tools` | none | — | Print tool definitions as JSON and exit. |
 | `--verbose` | none | disabled | Log JSON-RPC traffic to stderr. |
 | `--version` | none | — | Print the server version and exit. |

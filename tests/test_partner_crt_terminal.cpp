@@ -84,7 +84,7 @@ int main()
         fails += !expect(
             emu.get_sio_device_config(partner::sio_port_id::sio1_b).kind ==
                 partner::sio_device_kind::internal_squid,
-            "classic Partner defaults internal Squid to PAKET port 2");
+            "classic Partner defaults internal Squid to SIO1B");
         emu.reset();
         enable_tx(emu, INTERNAL_CTRL_PORT);
         enable_tx(emu, SECONDARY_B_CTRL_PORT);

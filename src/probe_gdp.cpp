@@ -25,7 +25,7 @@ void dasm_output(char c, void* user_data) {
 }
 
 int main() {
-    partner_gdp emu(terminal_profile::vt100_ansi);
+    partner_gdp emu;
     const char *hdd_path = std::getenv("IDP_HDD");
     const char *floppy_path = std::getenv("IDP_FLOPPY");
     const bool use_hdd = (hdd_path && hdd_path[0]);

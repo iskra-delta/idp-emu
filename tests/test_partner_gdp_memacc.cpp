@@ -67,7 +67,7 @@ static size_t render_test_frame(partner_gdp_test_shim &emu)
 
 static bool test_user_defined_characters_and_dot_stretch()
 {
-    partner_gdp_test_shim emu(terminal_profile::vt100_ansi);
+    partner_gdp_test_shim emu;
     emu.reset();
     configure_test_text_raster(emu);
     scn2674_t &avdc = emu.mutable_avdc();
@@ -102,6 +102,181 @@ static bool test_user_defined_characters_and_dot_stretch()
     const size_t later_attribute_pixels = render_test_frame(emu);
     if (later_attribute_pixels != normal_pixels) {
         std::puts("test_partner_gdp_memacc: FAIL dot stretch was applied per character");
+        return false;
+    }
+
+    // The CMAC serial shift register does not restart at each character. A
+    // source run ending at the ninth dot must be extended into the first DCLK
+    // of the next (blank) cell.
+    emu.write_port(0x32, 0x65); // 80 columns: 9 dots/character at 18 MHz
+    avdc.vram[0x2000u + 0x21u * 16u] = 0x01u;
+    avdc.vram[0x2000u + 0x22u * 16u] = 0x00u;
+    avdc.attr_vram[0] = 0x0Cu;
+    avdc.attr_vram[1] = 0x04u;
+    auto boundary_frame = std::make_unique<display>();
+    emu.render_to(*boundary_frame);
+    if (boundary_frame->data()[display::FB_W / 2] == 0u) {
+        std::puts("test_partner_gdp_memacc: FAIL dot stretch stopped at a character boundary");
+        return false;
+    }
+    return true;
+}
+
+static bool test_80_column_dot_rasterization()
+{
+    partner_gdp_test_shim emu;
+    emu.reset();
+    configure_test_text_raster(emu);
+    // Partner 80-column mode: monochrome, 9 dots/character at 18 MHz.
+    emu.write_port(0x32, 0x65);
+    scn2674_t &avdc = emu.mutable_avdc();
+
+    // Two adjacent dots in a user-defined glyph must retain the standard
+    // monochrome level. Overlapping 4/3-pixel spans used to add one boundary
+    // twice, producing values in the indexed-colour range (visible as white
+    // stripes amongst green text).
+    avdc.vram[0] = 0x21u;
+    avdc.attr_vram[0] = 0x04u;
+    avdc.vram[0x2000u + 0x21u * 16u] = 0x0Cu;
+    auto glyph_frame = std::make_unique<display>();
+    emu.render_to(*glyph_frame);
+    const uint8_t *glyph_pixels = glyph_frame->data();
+    for (size_t i = 0; i < (size_t)display::FB_W * display::FB_H; ++i) {
+        if (glyph_pixels[i] >= 240u) {
+            std::puts("test_partner_gdp_memacc: FAIL overlapping 80-column dots changed text colour");
+            return false;
+        }
+    }
+
+    // 720 CMAC dots occupy 960 pixels in 80-column mode. Fractional coverage
+    // must give every isolated source dot the same 4/3-pixel energy instead
+    // of alternating between one and two full pixels with horizontal phase.
+    // UDG source bits 6..1 map independently to output dots 1..6.
+    int reference_energy = -1;
+    for (int source_bit = 6; source_bit >= 1; --source_bit) {
+        avdc.vram[0x2000u + 0x21u * 16u] =
+            (uint8_t)(1u << source_bit);
+        auto isolated_frame = std::make_unique<display>();
+        emu.render_to(*isolated_frame);
+        int energy = 0;
+        int covered_pixels = 0;
+        for (int x = 0; x < display::FB_W; ++x) {
+            const int value = isolated_frame->data()[x];
+            energy += value;
+            covered_pixels += value != 0;
+        }
+        if (reference_energy < 0)
+            reference_energy = energy;
+        if (energy != reference_energy || covered_pixels != 2) {
+            std::printf("test_partner_gdp_memacc: FAIL unequal 80-column dot coverage "
+                        "(bit=%d energy=%d reference=%d pixels=%d)\n",
+                        source_bit, energy, reference_energy, covered_pixels);
+            return false;
+        }
+    }
+
+    // GDP sheet 10/14 wires CMAC D8 directly to D7. The UDG path also has the
+    // real board's erroneous D0/D7 swap, so source bit 0 drives physical D7
+    // and D8 at opposite visual endpoints. Preserve this construction error;
+    // it is one reason UDGs were not used on actual Partners.
+    avdc.vram[0x2000u + 0x21u * 16u] = 0x01u;
+    auto repeated_ninth_frame = std::make_unique<display>();
+    emu.render_to(*repeated_ninth_frame);
+    int repeated_energy = 0;
+    for (int x = 0; x < display::FB_W; ++x)
+        repeated_energy += repeated_ninth_frame->data()[x];
+    if (repeated_energy != reference_energy * 2) {
+        std::printf("test_partner_gdp_memacc: FAIL ninth dot did not repeat D7 "
+                    "(energy=%d expected=%d)\n",
+                    repeated_energy, reference_energy * 2);
+        return false;
+    }
+    int udg_first = display::FB_W;
+    int udg_last = -1;
+    int udg_lit = 0;
+    for (int x = 0; x < display::FB_W; ++x) {
+        if (repeated_ninth_frame->data()[x] != 0u) {
+            udg_first = std::min(udg_first, x);
+            udg_last = x;
+            udg_lit++;
+        }
+    }
+    if (udg_lit != 4 || udg_last - udg_first < 8) {
+        std::printf("test_partner_gdp_memacc: FAIL UDG construction-error "
+                    "endpoints were normalized (lit=%d span=%d)\n",
+                    udg_lit, udg_last >= udg_first ? udg_last - udg_first + 1 : 0);
+        return false;
+    }
+
+    // 132-column operation uses eight dots. D8 is not shifted, so this repeat
+    // defect cannot appear even though the UDG path remains physically wired
+    // the same way.
+    emu.write_port(0x32, 0xC4); // 132 columns: 8 dots/character at 24 MHz
+    auto udg_132_frame = std::make_unique<display>();
+    emu.render_to(*udg_132_frame);
+    int udg_132_lit = 0;
+    for (int x = 0; x < display::FB_W; ++x)
+        udg_132_lit += udg_132_frame->data()[x] != 0u;
+    if (udg_132_lit != 1) {
+        std::printf("test_partner_gdp_memacc: FAIL UDG ninth-dot defect leaked "
+                    "into 132-column mode (lit=%d)\n", udg_132_lit);
+        return false;
+    }
+
+    // The fixed character-ROM path has no D0/D7 swap. Its bit 0 is displayed
+    // in column 8, and the physical D7/D8 tie makes columns 8 and 9 adjacent.
+    emu.write_port(0x32, 0x65);
+    avdc.attr_vram[0] = 0u;
+    avdc.glyph_rom[0x21u][0] = 0x01u;
+    auto rom_ninth_frame = std::make_unique<display>();
+    emu.render_to(*rom_ninth_frame);
+    int rom_energy = 0;
+    int rom_first = display::FB_W;
+    int rom_last = -1;
+    int rom_lit = 0;
+    for (int x = 0; x < display::FB_W; ++x) {
+        const int value = rom_ninth_frame->data()[x];
+        rom_energy += value;
+        if (value != 0) {
+            rom_first = std::min(rom_first, x);
+            rom_last = x;
+            rom_lit++;
+        }
+    }
+    if (rom_energy != reference_energy * 2 ||
+        rom_lit != rom_last - rom_first + 1) {
+        std::printf("test_partner_gdp_memacc: FAIL fixed-ROM column 9 did not "
+                    "repeat adjacent column 8 (energy=%d lit=%d span=%d)\n",
+                    rom_energy, rom_lit,
+                    rom_last >= rom_first ? rom_last - rom_first + 1 : 0);
+        return false;
+    }
+
+    // A reverse-video cursor covers all nine DCLKs. Each maps to a disjoint
+    // span, giving one contiguous 12-pixel block at the 18-to-24 MHz ratio.
+    avdc.vram[0] = 0x20u;
+    avdc.attr_vram[0] = 0u;
+    avdc.cursor_addr = 0u;
+    avdc.cursor_enabled = true;
+    avdc.cursor_blink_on = true;
+    avdc.cursor_first_line = 0u;
+    avdc.cursor_last_line = 0u;
+    auto cursor_frame = std::make_unique<display>();
+    emu.render_to(*cursor_frame);
+    const uint8_t *cursor_pixels = cursor_frame->data();
+    int first = display::FB_W;
+    int last = -1;
+    int lit = 0;
+    for (int x = 0; x < display::FB_W; ++x) {
+        if (cursor_pixels[x] != 0u) {
+            first = std::min(first, x);
+            last = x;
+            lit++;
+        }
+    }
+    if (lit != 12 || last - first + 1 != 12) {
+        std::printf("test_partner_gdp_memacc: FAIL 80-column cursor has gaps (lit=%d span=%d)\n",
+                    lit, last >= first ? last - first + 1 : 0);
         return false;
     }
     return true;
@@ -157,7 +332,7 @@ static bool read_gdp_pixel_like_cgraf(partner_gdp_test_shim &emu,
 
 static bool test_gdp_pixel_read_latch()
 {
-    partner_gdp_test_shim emu(terminal_profile::vt100_ansi);
+    partner_gdp_test_shim emu;
     emu.reset();
 
     /* Program GDP-local PIO A as the ROM does: 512-line format, read page 0,
@@ -281,7 +456,7 @@ static bool test_user_defined_character_port_protocol()
     constexpr uint16_t udg_addr = 0x2000u + udg_code * 16u;
     constexpr uint16_t screen_addr = 0x0100u;
 
-    partner_gdp_test_shim emu(terminal_profile::vt100_ansi);
+    partner_gdp_test_shim emu;
     configure_ultimate_avdc(emu, false);
     emu.tick();
 
@@ -327,7 +502,7 @@ static bool test_user_defined_character_port_protocol()
 
 static bool test_ultimate_avdc_access_and_ready(bool columns132)
 {
-    partner_gdp_test_shim emu(terminal_profile::vt100_ansi);
+    partner_gdp_test_shim emu;
     configure_ultimate_avdc(emu, columns132);
     emu.tick(); /* propagate the programmed PIO clock/divider to the AVDC */
     const scn2674_t &avdc = emu.get_avdc();
@@ -410,13 +585,15 @@ int main()
         return 1;
     if (!test_user_defined_characters_and_dot_stretch())
         return 1;
+    if (!test_80_column_dot_rasterization())
+        return 1;
     if (!test_user_defined_character_port_protocol())
         return 1;
     if (!test_ultimate_avdc_access_and_ready(false) ||
         !test_ultimate_avdc_access_and_ready(true))
         return 1;
 
-    partner_gdp_test_shim emu(terminal_profile::vt100_ansi);
+    partner_gdp_test_shim emu;
     if (emu.get_sio_device_config(partner::sio_port_id::sio1_b).kind !=
         partner::sio_device_kind::internal_squid) {
         std::puts("test_partner_gdp_memacc: FAIL internal Squid is not on default port 2");

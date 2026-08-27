@@ -100,6 +100,10 @@ public:
     void load_disk(int drive, const std::string &path);
     void load_hdd(const std::string &path);
     std::string get_disk_path(int drive) const;
+    const std::string &get_hdd_path() const { return hdd_.path; }
+    const std::string &get_rom_path() const { return rom_path_; }
+    const std::string &get_nvram_path() const { return rtc_nvram_path_; }
+    bool uses_partos_cmos_layout() const;
     virtual void reset();
     virtual void tick();
 
@@ -388,6 +392,7 @@ private:
     };
     std::array<disk_image, I8272_MAX_DRIVES> disks_;
     disk_image hdd_;
+    std::string rom_path_;
     std::string rtc_nvram_path_ = "partner_cmos.bin";
     std::array<sio_device_config, 4> sio_device_cfg_{};
     std::array<sio_device_runtime, 4> sio_device_runtime_{};

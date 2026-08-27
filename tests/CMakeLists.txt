@@ -339,6 +339,15 @@ target_link_libraries(test_runtime_paths PRIVATE SDL2::SDL2)
 
 add_test(NAME runtime_paths_unit COMMAND test_runtime_paths)
 
+add_executable(test_machine_configuration
+    test_machine_configuration.cpp
+    ../src/machine_configuration.cpp
+)
+target_include_directories(test_machine_configuration PRIVATE ${CMAKE_SOURCE_DIR}/src)
+target_compile_definitions(test_machine_configuration PRIVATE IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}")
+target_link_libraries(test_machine_configuration PRIVATE chipsex nlohmann_json::nlohmann_json)
+add_test(NAME machine_configuration_unit COMMAND test_machine_configuration)
+
 add_test(NAME mcp_stdio
     COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/test_mcp_stdio.py
             $<TARGET_FILE:idp-mcp>)

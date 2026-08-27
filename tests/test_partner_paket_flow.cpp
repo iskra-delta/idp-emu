@@ -715,7 +715,7 @@ int main()
     if (run_p)
         p_ok = p_ok && downloaded_file_matches(p_disk, "FIXTUREP.COM");
     if (run_g) {
-        partner_gdp machine(terminal_profile::vt100_ansi, g_nvram.string());
+        partner_gdp machine(g_nvram.string());
         machine.set_rtc_nmi_enabled(true);
         g_ok = run_flow(
             machine, (root / "roms/partner_gdp.rom").string(),

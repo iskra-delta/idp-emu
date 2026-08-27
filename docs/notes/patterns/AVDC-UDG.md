@@ -40,6 +40,13 @@ RAM, not to the fixed character ROM. If the bits of a source row are
 end bits. Either compensate when preparing the bytes or deliberately use rows
 whose D7 and D0 values match, as the example does.
 
+There is a second consequence in nine-dot mode: schematic sheet 10/14 ties the
+CMAC D8 input to D7 so the fixed character ROM repeats its eighth displayed
+column as column nine. Combined with the UDG-only D0/D7 swap, writable
+characters repeat the wrong visual endpoint. This is a real board construction
+error and is emulated as built. It does not appear in 132-column mode, which
+uses eight dots per character and never shifts D8.
+
 Attribute bit 3 (`08h`) is not another UDG-select bit. It drives the CMAC
 `DOTS` input, which is sampled for a complete scan line and stretches dots
 across that line.

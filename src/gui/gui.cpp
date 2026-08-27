@@ -27,6 +27,7 @@
 #include <imgui_internal.h>
 #include <imgui_impl_sdl2.h>
 #include <imgui_impl_opengl3.h>
+#include <misc/cpp/imgui_stdlib.h>
 #include <png.h>
 #include <SDL.h>
 #include <algorithm>
@@ -43,6 +44,142 @@
 #include <string>
 
 namespace {
+
+display::phosphor_type display_type_for(monitor_type type)
+{
+    switch (type) {
+    case monitor_type::flat: return display::phosphor_type::flat;
+    case monitor_type::green_crt: return display::phosphor_type::green;
+    case monitor_type::orange_crt: return display::phosphor_type::orange;
+    case monitor_type::bw_crt: return display::phosphor_type::retro_cool;
+    case monitor_type::lcd: return display::phosphor_type::lcd;
+    }
+    return display::phosphor_type::flat;
+}
+
+monitor_type monitor_type_for(display::phosphor_type type)
+{
+    switch (type) {
+    case display::phosphor_type::green:
+    case display::phosphor_type::color: return monitor_type::green_crt;
+    case display::phosphor_type::orange: return monitor_type::orange_crt;
+    case display::phosphor_type::retro_cool: return monitor_type::bw_crt;
+    case display::phosphor_type::lcd: return monitor_type::lcd;
+    case display::phosphor_type::flat: return monitor_type::flat;
+    }
+    return monitor_type::flat;
+}
+
+const char *configuration_sio_label(partner::sio_device_kind kind)
+{
+    switch (kind) {
+    case partner::sio_device_kind::none: return "None";
+    case partner::sio_device_kind::mouse_microsoft: return "Microsoft Mouse";
+    case partner::sio_device_kind::mouse_mousesystems: return "Mouse Systems Mouse";
+    case partner::sio_device_kind::mouse_logitech: return "Logitech Mouse";
+    case partner::sio_device_kind::tcp_bridge: return "TCP Bridge";
+    case partner::sio_device_kind::internal_squid: return "Internal Squid";
+    }
+    return "None";
+}
+
+const char *configuration_pio_label(partner::pio_device_kind kind)
+{
+    switch (kind) {
+    case partner::pio_device_kind::none: return "None";
+    case partner::pio_device_kind::covox: return "Covox DAC";
+    case partner::pio_device_kind::centronics_printer: return "Centronics Printer";
+    }
+    return "None";
+}
+
+bool configuration_file_field(const char *label, const char *id,
+                              std::string &path)
+{
+    ImGui::PushID(id);
+    ImGui::TextUnformatted(label);
+    const float button_width = ImGui::CalcTextSize("Select...").x +
+                               ImGui::GetStyle().FramePadding.x * 2.0f;
+    ImGui::SetNextItemWidth(-(button_width + ImGui::GetStyle().ItemSpacing.x));
+    ImGui::InputText("##Path", &path);
+    ImGui::SameLine();
+    const bool select = ImGui::Button("Select...");
+    ImGui::PopID();
+    return select;
+}
+
+bool configuration_uses_partos(const machine_configuration &cfg)
+{
+    std::string name = std::filesystem::path(cfg.rom).filename().string();
+    std::transform(name.begin(), name.end(), name.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    return name == "partos.rom";
+}
+
+void render_partner_cpm_cmos_configuration(machine_configuration &cfg)
+{
+    if (!ImGui::CollapsingHeader("Partner CP/M CMOS",
+                                 ImGuiTreeNodeFlags_DefaultOpen))
+        return;
+    if (configuration_uses_partos(cfg)) {
+        ImGui::TextDisabled(
+            "Not available for PartOS. This editor supports the original Partner CP/M firmware only.");
+        return;
+    }
+
+    auto &settings = cfg.partner_cpm_cmos;
+    ImGui::TextUnformatted("Screen columns");
+    ImGui::SameLine();
+    if (ImGui::RadioButton("80 columns", settings.screen_columns == 80)) {
+        settings.screen_columns = 80;
+        settings.configured = true;
+    }
+    ImGui::SameLine();
+    if (ImGui::RadioButton("132 columns", settings.screen_columns == 132)) {
+        settings.screen_columns = 132;
+        settings.configured = true;
+    }
+
+    const char *terminal_names[] = {"ANSI", "Partner", "VT52"};
+    int terminal = static_cast<int>(settings.terminal);
+    if (ImGui::Combo("CP/M terminal emulation", &terminal, terminal_names, 3)) {
+        settings.terminal = static_cast<partner_terminal_type>(terminal);
+        settings.configured = true;
+    }
+
+    const char *language_names[] = {
+        "US ASCII", "UK ASCII", "Spanish", "French", "German",
+        "Italian", "Danish", "Swedish", "Yugoslav"
+    };
+    int language = static_cast<int>(settings.language);
+    if (ImGui::Combo("Language", &language, language_names, 9)) {
+        settings.language = static_cast<partner_language>(language);
+        settings.configured = true;
+    }
+
+    int year = settings.year;
+    if (ImGui::InputInt("Year (00-99)", &year)) {
+        settings.year = static_cast<uint8_t>(std::clamp(year, 0, 99));
+        settings.configured = true;
+    }
+    if (ImGui::Checkbox("Reverse video background", &settings.reverse_video))
+        settings.configured = true;
+    if (ImGui::Checkbox("Wrap at end of line", &settings.line_wrap))
+        settings.configured = true;
+    if (ImGui::Checkbox("Automatic newline", &settings.auto_newline))
+        settings.configured = true;
+
+    const char *keyboard_names[] = {"QWERTY", "QWERTZ"};
+    int keyboard = static_cast<int>(settings.keyboard_layout);
+    if (ImGui::Combo("Keyboard layout", &keyboard, keyboard_names, 2)) {
+        settings.keyboard_layout = static_cast<partner_keyboard_layout>(keyboard);
+        settings.configured = true;
+    }
+    if (ImGui::Checkbox("Key click", &settings.key_click))
+        settings.configured = true;
+    if (ImGui::Checkbox("Key autorepeat", &settings.autorepeat))
+        settings.configured = true;
+}
 static inline void push_cstr(std::vector<uint8_t>& out, const char* s)
 {
     while (*s) {
@@ -477,6 +614,30 @@ void gui::open_disk_mount_dialog(partner &emu, int drive)
     file_operation_error_.clear();
 }
 
+void gui::open_machine_configuration_file_dialog(
+    file_dialog_action action,
+    const std::string &title,
+    const std::filesystem::path &initial_path,
+    const std::string &filter_label,
+    std::vector<std::string> extensions)
+{
+    file_dialog::request request;
+    request.operation = file_dialog::mode::open_file;
+    request.title = title;
+    request.confirm_label = "Select";
+    request.initial_path = initial_path;
+    request.filter_label = filter_label;
+    request.extensions = std::move(extensions);
+    request.show_recent = true;
+    file_dialog_.open(std::move(request));
+    pending_file_dialog_action_ = action;
+    file_operation_error_.clear();
+
+    // The file browser is itself modal. Close this modal temporarily and
+    // restore it with the edited values after the browser returns.
+    ImGui::CloseCurrentPopup();
+}
+
 void gui::open_remote_debugger_dialog()
 {
     if (!remote_debugger_)
@@ -631,8 +792,16 @@ void gui::render_file_dialog(partner &emu)
 
     const file_dialog_action action = pending_file_dialog_action_;
     pending_file_dialog_action_ = file_dialog_action::none;
-    if (!result->accepted)
+    const bool restore_machine_configuration =
+        action == file_dialog_action::select_machine_rom ||
+        action == file_dialog_action::select_machine_floppy ||
+        action == file_dialog_action::select_machine_hdd ||
+        action == file_dialog_action::select_machine_cmos;
+    if (!result->accepted) {
+        if (restore_machine_configuration)
+            open_machine_configuration_popup_ = true;
         return;
+    }
 
     try
     {
@@ -668,6 +837,38 @@ void gui::render_file_dialog(partner &emu)
             start_screen_recording(result->path, emu);
             break;
 
+        case file_dialog_action::select_machine_rom:
+            edited_machine_configuration_.rom = result->path.lexically_normal().string();
+            file_dialog_.remember_recent(result->path);
+            break;
+
+        case file_dialog_action::select_machine_floppy:
+            if (machine_configuration_floppy_index_ >= 0 &&
+                machine_configuration_floppy_index_ <
+                    static_cast<int>(edited_machine_configuration_.floppies.size())) {
+                auto &floppy = edited_machine_configuration_.floppies[
+                    static_cast<std::size_t>(machine_configuration_floppy_index_)];
+                floppy.image = result->path.lexically_normal().string();
+                if (floppy.type == floppy_media_type::free)
+                    floppy.type = floppy_media_type::partner;
+                file_dialog_.remember_recent(result->path);
+            }
+            break;
+
+        case file_dialog_action::select_machine_hdd:
+            edited_machine_configuration_.hard_disk.image =
+                result->path.lexically_normal().string();
+            if (edited_machine_configuration_.hard_disk.type == hard_disk_type::free)
+                edited_machine_configuration_.hard_disk.type = hard_disk_type::st412;
+            file_dialog_.remember_recent(result->path);
+            break;
+
+        case file_dialog_action::select_machine_cmos:
+            edited_machine_configuration_.cmos_file =
+                result->path.lexically_normal().string();
+            file_dialog_.remember_recent(result->path);
+            break;
+
         case file_dialog_action::none:
             break;
         }
@@ -677,6 +878,9 @@ void gui::render_file_dialog(partner &emu)
         file_operation_error_ = e.what();
         open_file_operation_error_popup_ = true;
     }
+
+    if (restore_machine_configuration)
+        open_machine_configuration_popup_ = true;
 }
 
 void gui::render_file_operation_error()
@@ -761,6 +965,327 @@ void gui::render_remote_debugger_dialog()
     if (ImGui::Button("Close"))
         ImGui::CloseCurrentPopup();
 
+    ImGui::EndPopup();
+}
+
+void gui::set_machine_configuration(const machine_configuration &configuration,
+                                    const std::filesystem::path &path)
+{
+    current_machine_configuration_ = configuration;
+    edited_machine_configuration_ = configuration;
+    machine_configuration_path_ = path;
+    machine_configuration_ready_ = true;
+}
+
+std::optional<machine_configuration> gui::take_machine_restart_request()
+{
+    auto request = std::move(pending_machine_restart_request_);
+    pending_machine_restart_request_.reset();
+    return request;
+}
+
+void gui::machine_configuration_restarted(const machine_configuration &configuration)
+{
+    if (screen_recorder_.is_recording())
+        stop_screen_recording();
+    key_buf_.clear();
+    covox_audio_timeline_active_ = false;
+    if (audio_device_ != 0)
+        SDL_ClearQueuedAudio(audio_device_);
+    current_machine_configuration_ = configuration;
+    edited_machine_configuration_ = configuration;
+    terminal_profile_ = configuration.model == machine_model::gdp
+        ? terminal_profile::vt100_ansi : configuration.terminal;
+    display_.set_phosphor_type(display_type_for(configuration.monitor.type));
+    display_.set_monitor_brightness(configuration.monitor.brightness);
+    display_.set_monitor_contrast(configuration.monitor.contrast);
+    display_.set_monitor_bloom(configuration.monitor.bloom);
+    display_.set_monitor_scanline_strength(configuration.monitor.scanline_strength);
+    display_.set_monitor_mask_strength(configuration.monitor.mask_strength);
+    display_.set_monitor_vignette(configuration.monitor.vignette);
+    display_.set_monitor_persistence(configuration.monitor.persistence);
+    machine_configuration_error_.clear();
+}
+
+void gui::set_machine_configuration_error(
+    const std::string &error,
+    const machine_configuration *edited_configuration)
+{
+    if (edited_configuration)
+        edited_machine_configuration_ = *edited_configuration;
+    machine_configuration_error_ = error;
+    open_machine_configuration_popup_ = true;
+}
+
+machine_configuration gui::snapshot_machine_configuration(partner &emu) const
+{
+    machine_configuration snapshot = current_machine_configuration_;
+    snapshot.model = dynamic_cast<partner_gdp *>(&emu)
+        ? machine_model::gdp : machine_model::crt;
+    if (!emu.get_rom_path().empty())
+        snapshot.rom = emu.get_rom_path();
+    if (!emu.get_nvram_path().empty())
+        snapshot.cmos_file = emu.get_nvram_path();
+    if (snapshot.model == machine_model::crt)
+        snapshot.terminal = terminal_profile_;
+    snapshot.floppies[0].image = emu.get_disk_path(0);
+    snapshot.floppies[1].image = emu.get_disk_path(1);
+    snapshot.hard_disk.image = emu.get_hdd_path();
+    for (auto &floppy : snapshot.floppies) {
+        if (floppy.image.empty())
+            floppy.type = floppy_media_type::free;
+        else if (floppy.type == floppy_media_type::free)
+            floppy.type = floppy_media_type::partner;
+    }
+    if (snapshot.hard_disk.image.empty())
+        snapshot.hard_disk.type = hard_disk_type::free;
+    else if (snapshot.hard_disk.type == hard_disk_type::free)
+        snapshot.hard_disk.type = hard_disk_type::st412;
+    for (std::size_t i = 0; i < snapshot.sio.size(); ++i)
+        snapshot.sio[i] = emu.get_sio_device_config(
+            static_cast<partner::sio_port_id>(i));
+    for (std::size_t i = 0; i < snapshot.pio.size(); ++i)
+        snapshot.pio[i] = emu.get_pio_device_config(
+            static_cast<partner::pio_port_id>(i));
+    snapshot.monitor.type = monitor_type_for(display_.get_phosphor_type());
+    snapshot.monitor.brightness = display_.get_monitor_brightness();
+    snapshot.monitor.contrast = display_.get_monitor_contrast();
+    snapshot.monitor.bloom = display_.get_monitor_bloom();
+    snapshot.monitor.scanline_strength = display_.get_monitor_scanline_strength();
+    snapshot.monitor.mask_strength = display_.get_monitor_mask_strength();
+    snapshot.monitor.vignette = display_.get_monitor_vignette();
+    snapshot.monitor.persistence = display_.get_monitor_persistence();
+    if (!configuration_uses_partos(snapshot)) {
+        std::string cmos_error;
+        partner_cpm_cmos_configuration current_cmos = snapshot.partner_cpm_cmos;
+        if (load_partner_cpm_cmos(snapshot.cmos_file, snapshot.model,
+                                  current_cmos, cmos_error))
+            snapshot.partner_cpm_cmos = current_cmos;
+    }
+    return snapshot;
+}
+
+void gui::open_machine_configuration_dialog(partner &emu)
+{
+    if (!machine_configuration_ready_)
+        return;
+    edited_machine_configuration_ = snapshot_machine_configuration(emu);
+    machine_configuration_error_.clear();
+    open_machine_configuration_popup_ = true;
+}
+
+void gui::render_machine_configuration_dialog(partner &emu)
+{
+    if (open_machine_configuration_popup_) {
+        ImGui::OpenPopup("Machine Configuration");
+        open_machine_configuration_popup_ = false;
+    }
+
+    ImGui::SetNextWindowSize(ImVec2(760.0f, 650.0f), ImGuiCond_FirstUseEver);
+    bool open = true;
+    if (!ImGui::BeginPopupModal("Machine Configuration", &open,
+                               ImGuiWindowFlags_NoCollapse))
+        return;
+
+    machine_configuration &cfg = edited_machine_configuration_;
+    ImGui::TextWrapped("Saved as %s", machine_configuration_path_.string().c_str());
+    ImGui::TextDisabled("Empty image paths mean that the drive is not attached.");
+    ImGui::Separator();
+
+    const char *model_label = cfg.model == machine_model::gdp ? "Partner G (GDP)" : "Partner P (CRT)";
+    if (ImGui::BeginCombo("Machine model", model_label)) {
+        if (ImGui::Selectable("Partner P (CRT)", cfg.model == machine_model::crt)) {
+            cfg.model = machine_model::crt;
+            cfg.rom = runtime_paths::find_resource("roms/partner_crt.rom");
+            cfg.cmos_file = "partner_cmos.bin";
+            cfg.terminal = terminal_profile::vt52;
+            cfg.partner_cpm_cmos.configured = true;
+            cfg.partner_cpm_cmos.terminal = partner_terminal_type::vt52;
+            cfg.partner_cpm_cmos.screen_columns = 80;
+        }
+        if (ImGui::Selectable("Partner G (GDP)", cfg.model == machine_model::gdp)) {
+            cfg.model = machine_model::gdp;
+            cfg.rom = runtime_paths::find_resource("roms/partner_gdp.rom");
+            cfg.cmos_file = "partner_cmos.bin";
+            cfg.partner_cpm_cmos.configured = true;
+            cfg.partner_cpm_cmos.terminal = partner_terminal_type::ansi;
+            cfg.partner_cpm_cmos.screen_columns = 132;
+        }
+        ImGui::EndCombo();
+    }
+    if (configuration_file_field("ROM image", "MachineROM", cfg.rom)) {
+        open_machine_configuration_file_dialog(
+            file_dialog_action::select_machine_rom,
+            "Select Partner ROM", cfg.rom,
+            "ROM images (*.rom, *.bin)", {".rom", ".bin"});
+    }
+    if (cfg.model == machine_model::crt) {
+        if (ImGui::BeginCombo("Emulated CRT terminal", cfg.terminal == terminal_profile::vt52 ? "VT52" : "VT100 / ANSI")) {
+            if (ImGui::Selectable("VT52", cfg.terminal == terminal_profile::vt52))
+                cfg.terminal = terminal_profile::vt52;
+            if (ImGui::Selectable("VT100 / ANSI", cfg.terminal == terminal_profile::vt100_ansi))
+                cfg.terminal = terminal_profile::vt100_ansi;
+            ImGui::EndCombo();
+        }
+    }
+    if (ImGui::BeginCombo("Firmware boot", cfg.boot == machine_boot_target::floppy ? "Floppy" : "Default")) {
+        if (ImGui::Selectable("Default", cfg.boot == machine_boot_target::default_target))
+            cfg.boot = machine_boot_target::default_target;
+        if (ImGui::Selectable("Floppy", cfg.boot == machine_boot_target::floppy))
+            cfg.boot = machine_boot_target::floppy;
+        ImGui::EndCombo();
+    }
+
+    render_partner_cpm_cmos_configuration(cfg);
+
+    if (ImGui::CollapsingHeader("Storage and CMOS", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const char *floppy_types[] = {"None", "Partner", "DOS 720K", "DOS 360K"};
+        for (std::size_t i = 0; i < cfg.floppies.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i) + 200);
+            ImGui::SeparatorText(i == 0 ? "Floppy FD0" : "Floppy FD1");
+            if (configuration_file_field("Image", "FloppyImage",
+                                         cfg.floppies[i].image)) {
+                machine_configuration_floppy_index_ = static_cast<int>(i);
+                open_machine_configuration_file_dialog(
+                    file_dialog_action::select_machine_floppy,
+                    "Select Floppy FD" + std::to_string(i),
+                    cfg.floppies[i].image,
+                    "Floppy images (*.img)", {".img"});
+            }
+            int type = static_cast<int>(cfg.floppies[i].type);
+            if (ImGui::Combo("Media type", &type, floppy_types, 4))
+                cfg.floppies[i].type = static_cast<floppy_media_type>(type);
+            ImGui::SameLine();
+            if (ImGui::Button("Eject")) {
+                cfg.floppies[i].image.clear();
+                cfg.floppies[i].type = floppy_media_type::free;
+            }
+            ImGui::PopID();
+        }
+        ImGui::SeparatorText("Hard disk");
+        if (configuration_file_field("HDD image", "HardDiskImage",
+                                     cfg.hard_disk.image)) {
+            open_machine_configuration_file_dialog(
+                file_dialog_action::select_machine_hdd,
+                "Select Hard Disk Image", cfg.hard_disk.image,
+                "Hard disk images (*.img)", {".img"});
+        }
+        const char *hdd_types[] = {"None", "ST-506", "ST-412", "ST-225"};
+        int hdd_type = static_cast<int>(cfg.hard_disk.type);
+        if (ImGui::Combo("HDD type", &hdd_type, hdd_types, 4))
+            cfg.hard_disk.type = static_cast<hard_disk_type>(hdd_type);
+        ImGui::SameLine();
+        if (ImGui::Button("Detach HDD")) {
+            cfg.hard_disk.image.clear();
+            cfg.hard_disk.type = hard_disk_type::free;
+        }
+        if (configuration_file_field("CMOS file", "CMOSFile", cfg.cmos_file)) {
+            open_machine_configuration_file_dialog(
+                file_dialog_action::select_machine_cmos,
+                "Select CMOS File", cfg.cmos_file,
+                "CMOS images (*.bin, *.cmos, *.nvram)",
+                {".bin", ".cmos", ".nvram"});
+        }
+    }
+
+    if (ImGui::CollapsingHeader("Monitor", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const char *monitor_types[] = {"Flat", "Green CRT", "Orange CRT", "BW CRT", "LCD"};
+        int type = static_cast<int>(cfg.monitor.type);
+        if (ImGui::Combo("Monitor type", &type, monitor_types, 5))
+            cfg.monitor.type = static_cast<monitor_type>(type);
+        ImGui::SliderFloat("Brightness", &cfg.monitor.brightness, 0.35f, 2.20f, "%.2f");
+        ImGui::SliderFloat("Contrast", &cfg.monitor.contrast, 0.40f, 2.30f, "%.2f");
+        ImGui::SliderFloat("Bloom", &cfg.monitor.bloom, 0.00f, 2.40f, "%.2f");
+        ImGui::SliderFloat("Scanlines", &cfg.monitor.scanline_strength, 0.00f, 1.60f, "%.2f");
+        ImGui::SliderFloat("Mask", &cfg.monitor.mask_strength, 0.00f, 1.60f, "%.2f");
+        ImGui::SliderFloat("Vignette", &cfg.monitor.vignette, 0.00f, 1.60f, "%.2f");
+        ImGui::SliderFloat("Persistence", &cfg.monitor.persistence, 0.20f, 1.15f, "%.2f");
+    }
+
+    if (ImGui::CollapsingHeader("SIO", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const std::array<partner::sio_device_kind, 6> kinds{{
+            partner::sio_device_kind::none,
+            partner::sio_device_kind::mouse_microsoft,
+            partner::sio_device_kind::mouse_mousesystems,
+            partner::sio_device_kind::mouse_logitech,
+            partner::sio_device_kind::tcp_bridge,
+            partner::sio_device_kind::internal_squid
+        }};
+        for (std::size_t i = 1; i < cfg.sio.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i) + 300);
+            ImGui::SeparatorText(i == 1 ? "SIO 1 channel B" :
+                                 (i == 2 ? "SIO 2 channel A" : "SIO 2 channel B"));
+            if (ImGui::BeginCombo("Device", configuration_sio_label(cfg.sio[i].kind))) {
+                for (const auto kind : kinds) {
+                    if (ImGui::Selectable(configuration_sio_label(kind), cfg.sio[i].kind == kind)) {
+                        cfg.sio[i].kind = kind;
+                        if (kind == partner::sio_device_kind::internal_squid) {
+                            for (std::size_t other = 1; other < cfg.sio.size(); ++other) {
+                                if (other != i && cfg.sio[other].kind == kind)
+                                    cfg.sio[other].kind = partner::sio_device_kind::none;
+                            }
+                        }
+                    }
+                }
+                ImGui::EndCombo();
+            }
+            if (cfg.sio[i].kind == partner::sio_device_kind::tcp_bridge) {
+                ImGui::InputInt("Data TCP port", &cfg.sio[i].tcp_data_port);
+                ImGui::InputInt("Control TCP port", &cfg.sio[i].tcp_control_port);
+                ImGui::Checkbox("Require RTS for receive", &cfg.sio[i].tcp_require_rts);
+                ImGui::Checkbox("CTS follows data client", &cfg.sio[i].tcp_cts_follows_data_client);
+            }
+            ImGui::PopID();
+        }
+        int payload = static_cast<int>(cfg.squid_payload_bytes);
+        if (ImGui::SliderInt("Internal Squid payload", &payload, 16, 112))
+            cfg.squid_payload_bytes = static_cast<uint32_t>(payload);
+    }
+
+    if (ImGui::CollapsingHeader("PIO", ImGuiTreeNodeFlags_DefaultOpen)) {
+        const std::array<partner::pio_device_kind, 3> kinds{{
+            partner::pio_device_kind::none,
+            partner::pio_device_kind::covox,
+            partner::pio_device_kind::centronics_printer
+        }};
+        for (std::size_t i = 0; i < cfg.pio.size(); ++i) {
+            ImGui::PushID(static_cast<int>(i) + 400);
+            if (ImGui::BeginCombo(i == 0 ? "PIO A" : "PIO B",
+                                  configuration_pio_label(cfg.pio[i].kind))) {
+                for (const auto kind : kinds) {
+                    if (ImGui::Selectable(configuration_pio_label(kind), cfg.pio[i].kind == kind))
+                        cfg.pio[i].kind = kind;
+                }
+                ImGui::EndCombo();
+            }
+            ImGui::PopID();
+        }
+    }
+
+    if (!machine_configuration_error_.empty()) {
+        ImGui::PushStyleColor(ImGuiCol_Text, IM_COL32(220, 90, 90, 255));
+        ImGui::TextWrapped("%s", machine_configuration_error_.c_str());
+        ImGui::PopStyleColor();
+    }
+
+    if (ImGui::Button("Reload JSON")) {
+        machine_configuration loaded = snapshot_machine_configuration(emu);
+        if (load_machine_configuration(machine_configuration_path_, loaded,
+                                       machine_configuration_error_))
+            cfg = std::move(loaded);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Cancel")) {
+        machine_configuration_error_.clear();
+        ImGui::CloseCurrentPopup();
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Restart")) {
+        if (validate_machine_configuration(cfg, machine_configuration_error_)) {
+            pending_machine_restart_request_ = cfg;
+            ImGui::CloseCurrentPopup();
+        }
+    }
     ImGui::EndPopup();
 }
 
@@ -1466,6 +1991,8 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
             display_.clear_all();
             display_.update();
         }
+        if (ImGui::MenuItem("Machine Configuration..."))
+            open_machine_configuration_dialog(emu);
         ImGui::Separator();
         if (ImGui::MenuItem("Save Screenshot...", "Ctrl+Shift+S"))
             open_screenshot_dialog();
@@ -1605,6 +2132,7 @@ void gui::render_panels(partner &emu, bool &paused, dbg_action &action)
     render_file_dialog(emu);
     render_file_operation_error();
     render_remote_debugger_dialog();
+    render_machine_configuration_dialog(emu);
 
     if (show_dma_)
         panels::render_dma(emu, &show_dma_);

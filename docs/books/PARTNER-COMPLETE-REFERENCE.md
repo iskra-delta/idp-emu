@@ -427,9 +427,10 @@ Per free SIO port, device options are:
 - `TCP Bridge`
 - `Internal Squid (Retro Vault)`
 
-Partner CRT and Partner G attach Internal Squid to PAKET port 2 by default.
+Partner CRT and Partner G attach Internal Squid to SIO1B by default.
 The Devices panel can move the single attachment to either other free SIO
-port. Internal Squid connects PAKET directly to Retro Vault; TCP Bridge
+channel. Internal Squid lets serial software such as PAKET connect directly
+to Retro Vault; TCP Bridge
 remains available for external serial applications.
 
 Logitech-specific behavior includes prompt/poll handling:

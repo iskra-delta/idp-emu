@@ -40,7 +40,7 @@ void usage(std::ostream &out)
         << "  --fd0 FILE        attach floppy drive 0 (also --fd1..--fd3)\n"
         << "  --hdd FILE        attach SASI hard-disk image\n"
         << "  --nvram FILE      persist the eight-byte RTC shadow; default is ephemeral\n"
-        << "  --terminal TYPE   vt52, vt100, or ansi (default: model profile)\n"
+        << "  --terminal TYPE   CRT model only: vt52, vt100, or ansi (default: vt52)\n"
         << "  --list-tools      print MCP tool definitions and exit\n"
         << "  --verbose         log protocol messages to stderr\n"
         << "  --version         print version and exit\n"
@@ -109,8 +109,7 @@ int main(int argc, char **argv)
 
         std::unique_ptr<partner> machine;
         if (settings.model == "gdp")
-            machine = std::make_unique<partner_gdp>(profile_for(settings.terminal),
-                                                     settings.nvram);
+            machine = std::make_unique<partner_gdp>(settings.nvram);
         else
             machine = std::make_unique<partner_crt>(profile_for(settings.terminal),
                                                      settings.nvram);

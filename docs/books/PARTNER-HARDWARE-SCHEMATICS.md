@@ -510,6 +510,16 @@ with 16 scan-line bytes each. Character RAM is addressed as
 The complete programming procedure and a runnable CP/M example are in
 [`AVDC-UDG.md`](../notes/patterns/AVDC-UDG.md).
 
+On sheet 10/14 the SCB2675 CMAC D8 input is connected directly to D7. Thus in
+the nine-dot divider mode the fixed-ROM ninth displayed column repeats the
+eighth; it is not an independent glyph bit. The writable-character path has a
+separate board construction error which swaps D0 and D7. Consequently the
+tied D7/D8 inputs repeat the wrong visual endpoint for UDGs. This malformed
+UDG behavior is real Partner hardware behavior and must not be normalized in
+the emulator; in practice it is why the UDG facility was not used. The repeat
+defect is absent in 132-column mode because that mode displays eight dots per
+character and never shifts the tied D8 input.
+
 CMAC `DOTS` is driven by attribute-data bit 3 (`ATTD3`). The SCB2675 samples
 this signal on the falling edge of `BLANK`, so it controls the entire following
 scan line. It is not a per-character attribute and is separate from the

@@ -11,9 +11,9 @@ const char *sio_port_label(partner::sio_port_id port)
     switch (port)
     {
     case partner::sio_port_id::sio1_a: return "SIO1 Port A";
-    case partner::sio_port_id::sio1_b: return "SIO1 Port B (PAKET 2)";
-    case partner::sio_port_id::sio2_a: return "SIO2 Port A (PAKET 3)";
-    case partner::sio_port_id::sio2_b: return "SIO2 Port B (PAKET 4)";
+    case partner::sio_port_id::sio1_b: return "SIO1 Port B";
+    case partner::sio_port_id::sio2_a: return "SIO2 Port A";
+    case partner::sio_port_id::sio2_b: return "SIO2 Port B";
     }
     return "SIO ?";
 }

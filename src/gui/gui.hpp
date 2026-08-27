@@ -5,6 +5,7 @@
 #include "screen_recorder.hpp"
 #include "terminal_keymap.hpp"
 #include "../debugger.hpp"
+#include "../machine_configuration.hpp"
 #include "../terminal/terminal_factory.hpp"
 #include <SDL.h>
 #include <array>
@@ -44,6 +45,14 @@ public:
 
     display &get_display() { return display_; }
     void set_terminal_profile(terminal_profile profile) { terminal_profile_ = profile; }
+    terminal_profile get_terminal_profile() const { return terminal_profile_; }
+    void set_machine_configuration(const machine_configuration &configuration,
+                                   const std::filesystem::path &path);
+    std::optional<machine_configuration> take_machine_restart_request();
+    void machine_configuration_restarted(const machine_configuration &configuration);
+    void set_machine_configuration_error(
+        const std::string &error,
+        const machine_configuration *edited_configuration = nullptr);
     void set_remote_debugger(dap_debugger *debugger) { remote_debugger_ = debugger; }
     std::optional<remote_debugger_request> take_remote_debugger_request();
     void set_remote_debugger_error(const std::string &error) { remote_debug_error_ = error; }
@@ -51,6 +60,17 @@ public:
     std::vector<uint8_t> drain_keys();
 
 private:
+    enum class file_dialog_action {
+        none,
+        mount_disk,
+        save_screenshot,
+        start_recording,
+        select_machine_rom,
+        select_machine_floppy,
+        select_machine_hdd,
+        select_machine_cmos
+    };
+
     void blink_host_key(const char *host_key);
     bool is_host_key_blinking(const char *host_key);
     void close_all_views();
@@ -60,6 +80,12 @@ private:
     void service_covox_audio(partner &emu);
     void reset_covox_audio_timeline(partner &emu, uint64_t tick);
     void open_disk_mount_dialog(partner &emu, int drive);
+    void open_machine_configuration_file_dialog(
+        file_dialog_action action,
+        const std::string &title,
+        const std::filesystem::path &initial_path,
+        const std::string &filter_label,
+        std::vector<std::string> extensions);
     void open_screenshot_dialog();
     void open_recording_dialog();
     void render_file_dialog(partner &emu);
@@ -69,19 +95,15 @@ private:
     void service_screen_recording(partner &emu);
     void open_remote_debugger_dialog();
     void render_remote_debugger_dialog();
+    void open_machine_configuration_dialog(partner &emu);
+    void render_machine_configuration_dialog(partner &emu);
+    machine_configuration snapshot_machine_configuration(partner &emu) const;
 
     SDL_Window *window_ = nullptr;
     SDL_GLContext gl_context_ = nullptr;
     display display_;
     file_dialog file_dialog_;
     screen_recorder screen_recorder_;
-
-    enum class file_dialog_action {
-        none,
-        mount_disk,
-        save_screenshot,
-        start_recording
-    };
 
     bool show_registers_ = false;
     bool show_disasm_ = false;
@@ -105,6 +127,7 @@ private:
     bool mouse_middle_down_ = false;
     bool mouse_right_down_ = false;
     int disk_mount_drive_ = 1;
+    int machine_configuration_floppy_index_ = 0;
     panels::display_viewport_info display_viewport_{};
     terminal_profile terminal_profile_ = terminal_profile::vt52;
     SDL_AudioDeviceID audio_device_ = 0;
@@ -131,5 +154,12 @@ private:
     file_dialog_action pending_file_dialog_action_ = file_dialog_action::none;
     bool open_file_operation_error_popup_ = false;
     bool open_remote_debugger_popup_ = false;
+    bool machine_configuration_ready_ = false;
+    bool open_machine_configuration_popup_ = false;
+    machine_configuration current_machine_configuration_{};
+    machine_configuration edited_machine_configuration_{};
+    std::filesystem::path machine_configuration_path_;
+    std::string machine_configuration_error_;
+    std::optional<machine_configuration> pending_machine_restart_request_;
     static constexpr uint32_t key_blink_ms_ = 130;
 };

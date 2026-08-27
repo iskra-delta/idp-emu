@@ -68,7 +68,9 @@ Available device kinds:
 
 Only one internal Squid service is attached at a time. Selecting it on a new
 free SIO port moves the attachment. Partner CRT and GDP select `sio1_b`
-(PAKET port 2) by default; `sio2_a` and `sio2_b` remain valid choices.
+by default; `sio2_a` and `sio2_b` remain valid choices. PAKET is one CP/M
+application that can be configured to use these serial channels; it is not a
+hardware port designation.
 
 ## Mouse Emulation
 

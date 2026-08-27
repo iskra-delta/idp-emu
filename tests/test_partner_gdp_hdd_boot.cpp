@@ -96,7 +96,7 @@ int main()
 
     bool ok = true;
     {
-        partner_gdp emu(terminal_profile::vt100_ansi, nvram.string());
+        partner_gdp emu(nvram.string());
         emu.load_rom(std::string(IDP_SOURCE_ROOT) + "/roms/partner_gdp.rom");
         const char *image_override = std::getenv("IDP_TEST_GDP_HDD");
         emu.load_hdd(image_override != nullptr ? image_override :
@@ -171,7 +171,7 @@ int main()
         ok &= check(system_started,
                     "firmware did not start the attached hard-disk system");
         ok &= check(emu.get_rtc().regs[0x0B] == 0x08u,
-                    "GDP VT100 profile did not select ANSI/Yugoslav CMOS mode");
+                    "GDP reset changed the configured CP/M terminal/language");
         ok &= check(prompt_seen,
                     "hard-disk CP/M did not present a GDP prompt");
         ok &= check(command_position == command.size(),

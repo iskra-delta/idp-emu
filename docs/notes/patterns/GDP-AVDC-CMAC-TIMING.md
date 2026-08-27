@@ -608,9 +608,24 @@ characters with 16 stored scan-line bytes each:
 UDG_address = 0x2000 + ((character & 0x7f) * 16) + line_0_to_15
 ```
 
-The Partner RAM path swaps D0 and D7. The emulated nine-dot CMAC load order is
-D7 through D0 followed by D8, with D8 tied/repeated from D7 on this path. This
-wiring applies only to UDG RAM; do not swap the fixed character-ROM data.
+Schematic sheet 10/14 wires the CMAC D8 input directly to D7, so the fixed-ROM
+ninth displayed column repeats the eighth. The Partner RAM path also swaps D0
+and D7 as a board construction error. On that path the tied D7/D8 inputs
+therefore repeat the wrong visual endpoint rather than producing the intended
+eighth/ninth pair. Preserve this malformed UDG behavior: it is how the real
+Partner is wired and is why UDGs were not used in practice. Do not apply the
+RAM-path swap to fixed character-ROM data. This repeat defect only manifests
+with a nine-dot character divider (normally 80 columns); the 132-column mode
+uses eight dots and does not shift D8.
+
+The 80-column mode's 720 serialized dots occupy 960 periods of the common
+24 MHz framebuffer raster. Because the resulting 4:3 ratio is fractional, the
+renderer preserves each dot's pixel coverage instead of rounding each edge to
+an integer. Otherwise identical isolated dots alternate between one and two
+full framebuffer pixels according to horizontal phase (most visibly at the
+single-dot apex of the built-in `A`). Adjacent dots accumulate at their shared
+destination pixel, preserving both uniform intensity and the total 960-pixel
+active width.
 
 See [`AVDC-UDG.md`](AVDC-UDG.md) for the complete programming sequence and a
 runnable Z80 CP/M example.

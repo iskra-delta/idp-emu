@@ -48,6 +48,42 @@ Notes:
 - Labels keep their existing suffix style (`name_022e`), this rule applies to code operands.
 - Comments may contain historical notation, but code fields must follow these rules.
 
+## Data Line Rules
+
+Data lines are real assembler statements, not byte listings with an empty
+mnemonic. Every directive carries operands:
+
+```asm
+0186  18 04 44 03     .db   #0x18,#0x04,#0x44,#0x03      ; comment
+0218  eb 03 09 05     .dw   #0x03eb,#0x0509              ; comment
+```
+
+- `.db` and `.dw` take **at most four bytes per line**, so the operand field
+  still ends before the comment column.
+- Use `.dw` where the data is a 16-bit word (vector tables, addresses); the
+  operand is the little-endian value, not the two raw bytes.
+- Runs of one repeated byte use `.ds count,#0xNN` on a single line.
+- Never emit a bare `.db` and leave the bytes readable only in the listing
+  column.
+
+### Strings
+
+A printable run becomes `.asciiz` (null-terminated) or `.ascii` (not
+terminated), on a continuation line that carries a **lowercase** address and
+no byte listing. Leading or embedded control bytes stay as `.db`. A
+`; bytes:` line after the block keeps the full byte record:
+
+```asm
+banner_string_018d:
+018D  1c              .db   #0x1c                        ; clear the terminal screen
+018e                  .asciiz "DELTA PARTNER  #"
+; bytes: 1c 44 45 4c 54 41 20 50 41 52 54 4e 45 52 20 20 23 00
+```
+
+The lowercase address is the marker for "continuation line, bytes not listed
+here"; checking tools skip those and validate them against the `; bytes:`
+record or the ROM image instead.
+
 ## Label and Comment Block Spacing Rules
 
 ### 1) Main routine block (section comment + label)
@@ -113,4 +149,7 @@ Before finishing edits to annotated ROM files:
 4. Immediate numeric operands are `#0x...`.
 5. Label/comment spacing follows rules 1–3 above.
 6. Comment column alignment is consistent.
+7. Every `.db`/`.dw`/`.ds` has operands; no more than four bytes per line.
+8. Printable runs use `.asciiz`/`.ascii`, not `.db` of raw hex.
+9. Every referenced label is defined somewhere in the file.
 

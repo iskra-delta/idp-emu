@@ -18,8 +18,7 @@ class partner_gdp : public partner
 public:
     static constexpr size_t KEY_FIFO_CAPACITY = 64;
 
-    explicit partner_gdp(terminal_profile profile = terminal_profile::vt100_ansi,
-                         const std::string &rtc_nvram_path = "partner_cmos.bin");
+    explicit partner_gdp(const std::string &rtc_nvram_path = "partner_cmos.bin");
 
     void reset() override;
     void tick() override;
@@ -59,7 +58,6 @@ protected:
     uint64_t clock_expansion_daisy_chain(uint64_t bus_pins) override;
 
 private:
-    terminal_profile terminal_profile_ = terminal_profile::vt100_ansi;
     std::unique_ptr<terminal_emulator> terminal_;
     std::string raw_serial_;
 

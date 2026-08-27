@@ -40,7 +40,7 @@ bool check(bool condition, const char *message)
 
 int main()
 {
-    partner_gdp emu(terminal_profile::vt100_ansi, "");
+    partner_gdp emu("");
     emu.load_rom(std::string(IDP_SOURCE_ROOT) + "/roms/partner_gdp.rom");
     emu.load_disk(0,
         std::string(IDP_SOURCE_ROOT) + "/disks/fdd-partner-g.img");

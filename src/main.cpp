@@ -8,6 +8,7 @@
 #include "startup_input.hpp"
 #include "runtime_paths.hpp"
 #include "squid_link_server.hpp"
+#include "machine_configuration.hpp"
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -100,6 +101,109 @@ bool parse_tcp_port(const char *text, int &value)
     return true;
 }
 
+machine_configuration resolve_machine_configuration(machine_configuration cfg)
+{
+    cfg.rom = runtime_paths::find_resource(cfg.rom);
+    for (auto &floppy : cfg.floppies) {
+        if (floppy.image.empty())
+            continue;
+        if (floppy.image == DEFAULT_PARTNER_SYSTEM_FD0 ||
+            floppy.image == "disks/fdd-partner-g.img" ||
+            floppy.image == DEFAULT_PARTOS_FD0)
+            floppy.image = runtime_paths::mutable_resource_copy(floppy.image);
+        else
+            floppy.image = runtime_paths::find_resource(floppy.image);
+    }
+    if (!cfg.hard_disk.image.empty()) {
+        if (cfg.hard_disk.image == DEFAULT_PARTNER_P_SYSTEM_HDD ||
+            cfg.hard_disk.image == DEFAULT_PARTNER_G_SYSTEM_HDD ||
+            cfg.hard_disk.image == DEFAULT_PARTOS_HDD)
+            cfg.hard_disk.image = runtime_paths::mutable_resource_copy(cfg.hard_disk.image);
+        else
+            cfg.hard_disk.image = runtime_paths::find_resource(cfg.hard_disk.image);
+    }
+    const std::filesystem::path cmos(cfg.cmos_file);
+    if (!cmos.is_absolute()) {
+        if (cfg.cmos_file == DEFAULT_PARTNER_NVRAM)
+            cfg.cmos_file = runtime_paths::mutable_resource_copy(DEFAULT_PARTNER_NVRAM);
+        else
+            cfg.cmos_file = runtime_paths::user_file(cmos).string();
+    }
+    return cfg;
+}
+
+std::unique_ptr<partner> create_machine(machine_configuration &cfg)
+{
+    std::string error;
+    if (!validate_machine_configuration(cfg, error))
+        throw std::runtime_error(error);
+    cfg = resolve_machine_configuration(std::move(cfg));
+    const bool partos_layout = is_partos_rom_path(cfg.rom);
+    if (!partos_layout && !cfg.partner_cpm_cmos.configured) {
+        std::error_code exists_error;
+        if (std::filesystem::exists(cfg.cmos_file, exists_error) && !exists_error) {
+            if (!load_partner_cpm_cmos(cfg.cmos_file, cfg.model,
+                                       cfg.partner_cpm_cmos, error))
+                throw std::runtime_error(error);
+        } else {
+            // A new CMOS file starts with model-appropriate documented values.
+            cfg.partner_cpm_cmos.configured = true;
+            cfg.partner_cpm_cmos.terminal = cfg.model == machine_model::gdp
+                ? partner_terminal_type::ansi : partner_terminal_type::vt52;
+            cfg.partner_cpm_cmos.screen_columns = cfg.model == machine_model::gdp
+                ? 132 : 80;
+        }
+    }
+    if (!validate_machine_configuration(cfg, error))
+        throw std::runtime_error(error);
+    if (!squid_link_server::set_default_payload_bytes(
+            static_cast<std::uint8_t>(cfg.squid_payload_bytes)))
+        throw std::runtime_error("invalid internal Squid payload size");
+    if (!prepare_machine_cmos(cfg, cfg.cmos_file, partos_layout, error))
+        throw std::runtime_error(error);
+
+    std::cout << "[info] model=" << (cfg.model == machine_model::gdp ? "gdp" : "crt")
+              << " rom=" << cfg.rom
+              << " fd0=" << (cfg.floppies[0].image.empty() ? "(none)" : cfg.floppies[0].image)
+              << " fd1=" << (cfg.floppies[1].image.empty() ? "(none)" : cfg.floppies[1].image)
+              << " hdd=" << (cfg.hard_disk.image.empty() ? "(none)" : cfg.hard_disk.image)
+              << " nvram=" << cfg.cmos_file << '\n';
+
+    std::unique_ptr<partner> created;
+    if (cfg.model == machine_model::gdp) {
+        created = std::make_unique<partner_gdp>(cfg.cmos_file);
+    } else {
+        created = std::make_unique<partner_crt>(cfg.terminal, cfg.cmos_file);
+    }
+    created->load_rom(cfg.rom);
+    for (std::size_t i = 0; i < cfg.floppies.size(); ++i) {
+        if (!cfg.floppies[i].image.empty())
+            created->load_disk(static_cast<int>(i), cfg.floppies[i].image);
+    }
+    if (!cfg.hard_disk.image.empty())
+        created->load_hdd(cfg.hard_disk.image);
+    created->reset();
+
+    // Clear/make non-Squid routes first, then attach the one allowed embedded
+    // endpoint. This avoids its process-wide endpoint briefly being active on
+    // two channels while a configuration is applied.
+    for (std::size_t i = 1; i < cfg.sio.size(); ++i) {
+        if (cfg.sio[i].kind != partner::sio_device_kind::internal_squid &&
+            !created->set_sio_device_config(static_cast<partner::sio_port_id>(i),
+                                            cfg.sio[i]))
+            throw std::runtime_error("could not configure SIO port " + std::to_string(i + 1));
+    }
+    for (std::size_t i = 1; i < cfg.sio.size(); ++i) {
+        if (cfg.sio[i].kind == partner::sio_device_kind::internal_squid &&
+            !created->set_sio_device_config(static_cast<partner::sio_port_id>(i),
+                                            cfg.sio[i]))
+            throw std::runtime_error("could not configure internal Squid port");
+    }
+    for (std::size_t i = 0; i < cfg.pio.size(); ++i)
+        created->set_pio_device_config(static_cast<partner::pio_port_id>(i), cfg.pio[i]);
+    return created;
+}
+
 } // namespace
 
 void print_usage(const char *prog)
@@ -120,13 +224,13 @@ void print_usage(const char *prog)
     std::cerr << "  --boot TYPE            Firmware boot target: default|floppy\n";
     std::cerr << "  --nvram FILE           Shadow MM58167 NVRAM backing file\n";
     std::cerr << "                         (default selected by ROM)\n";
-    std::cerr << "  --terminal TYPE        Terminal profile: vt52|vt100|ansi\n";
+    std::cerr << "  --terminal TYPE        Partner P terminal profile: vt52|vt100|ansi\n";
     std::cerr << "  --model TYPE           Machine model: crt|gdp|auto (default: auto)\n";
     std::cerr << "  --covox-port PORT      Attach Covox to main PIO: 1=A, 2=B\n";
     std::cerr << "  --sio-tcp PORT DATA CONTROL\n";
-    std::cerr << "                         Attach PAKET port 2, 3, or 4 to a TCP bridge\n";
-    std::cerr << "  --sio-squid PORT       Attach internal Squid/Retro Vault to port 2, 3, or 4\n";
-    std::cerr << "                         (Partner CRT and G default: port 2)\n";
+    std::cerr << "                         Attach SIO selection 2, 3, or 4 to a TCP bridge\n";
+    std::cerr << "  --sio-squid PORT       Attach internal Squid/Retro Vault to SIO selection 2, 3, or 4\n";
+    std::cerr << "                         (2=SIO1B, 3=SIO2A, 4=SIO2B; default: 2)\n";
     std::cerr << "  --squid-payload BYTES  Internal Squid DATA payload: 16..112 (default: 112)\n";
     std::cerr << "  --dap PORT             Start the udap DAP server on 127.0.0.1:PORT\n";
     std::cerr << "  --commands TEXT        Type TEXT after the GUI opens; may be repeated\n";
@@ -137,6 +241,8 @@ void print_usage(const char *prog)
     std::cerr << "  --type-delay MS        Delay before the first startup key (default: 1000)\n";
     std::cerr << "  --type-interval MS     Delay between startup keys (default: 350)\n";
     std::cerr << "  --type-enter-delay MS  Delay after Enter when more keys follow (default: interval)\n";
+    std::cerr << "Persistent machine settings are stored as partner-configuration.json\n";
+    std::cerr << "in the platform-specific per-user application-data directory.\n";
 }
 
 int main(int argc, char **argv)
@@ -156,8 +262,6 @@ int main(int argc, char **argv)
     uint32_t squid_payload_bytes = squid_link_server::default_payload_bytes;
     bool fd0_explicit = false;
     bool fd1_explicit = false;
-    bool packaged_system_fd0 = false;
-    bool packaged_system_hdd = false;
     bool nvram_explicit = false;
     bool auto_boot_floppy = false;
     bool terminal_explicit = false;
@@ -167,6 +271,12 @@ int main(int argc, char **argv)
     uint32_t startup_interval_ms = 350;
     uint32_t startup_enter_delay_ms = 350;
     bool startup_enter_delay_explicit = false;
+    bool rom_explicit = false;
+    bool hdd_explicit = false;
+    bool system_hdd_profile = false;
+    bool boot_explicit = false;
+    bool model_explicit = false;
+    bool squid_payload_explicit = false;
 
     for (int i = 1; i < argc; i++)
     {
@@ -179,13 +289,13 @@ int main(int argc, char **argv)
         {
             if ((i + 1) >= argc) { std::cerr << "Error: --rom requires a value\n"; return 1; }
             rom_file = argv[++i];
+            rom_explicit = true;
         }
         else if (strcmp(argv[i], "--fd0") == 0 || strcmp(argv[i], "--disk") == 0)
         {
             if ((i + 1) >= argc) { std::cerr << "Error: --fd0 requires a value\n"; return 1; }
             fd0_file = argv[++i];
             fd0_explicit = true;
-            packaged_system_fd0 = false;
         }
         else if (strcmp(argv[i], "--fd1") == 0 || strcmp(argv[i], "--disk-b") == 0)
         {
@@ -197,23 +307,24 @@ int main(int argc, char **argv)
         {
             if ((i + 1) >= argc) { std::cerr << "Error: --hdd requires a value\n"; return 1; }
             hdd_file = argv[++i];
-            packaged_system_hdd = false;
+            hdd_explicit = true;
         }
         else if (strcmp(argv[i], "--system-floppy") == 0)
         {
             fd0_file = DEFAULT_PARTNER_SYSTEM_FD0;
             fd0_explicit = true;
-            packaged_system_fd0 = true;
         }
         else if (strcmp(argv[i], "--system-hdd") == 0)
         {
             hdd_file = DEFAULT_PARTNER_G_SYSTEM_HDD;
-            packaged_system_hdd = true;
+            hdd_explicit = true;
+            system_hdd_profile = true;
         }
         else if (strcmp(argv[i], "--system-crt-hdd") == 0)
         {
             hdd_file = DEFAULT_PARTNER_P_SYSTEM_HDD;
-            packaged_system_hdd = true;
+            hdd_explicit = true;
+            system_hdd_profile = true;
             auto_boot_floppy = false;
         }
         else if (strcmp(argv[i], "--boot") == 0)
@@ -223,6 +334,7 @@ int main(int argc, char **argv)
                 std::cerr << "Error: --boot requires a value: default|floppy\n";
                 return 1;
             }
+            boot_explicit = true;
             const char *value = argv[++i];
             if (strcmp(value, "default") == 0)
                 auto_boot_floppy = false;
@@ -339,6 +451,7 @@ int main(int argc, char **argv)
                 std::cerr << "Error: --squid-payload must be from 16 to 112\n";
                 return 1;
             }
+            squid_payload_explicit = true;
         }
         else if (strcmp(argv[i], "--commands") == 0 ||
                  strcmp(argv[i], "--command") == 0 ||
@@ -387,6 +500,7 @@ int main(int argc, char **argv)
                 return 1;
             }
             model = argv[++i];
+            model_explicit = true;
             if (model != "crt" && model != "gdp" && model != "auto")
             {
                 std::cerr << "Error: Unknown model: " << model << "\n";
@@ -403,189 +517,127 @@ int main(int argc, char **argv)
 
     try
     {
-        if (!squid_link_server::set_default_payload_bytes(
-                static_cast<std::uint8_t>(squid_payload_bytes)))
-        {
-            std::cerr << "Error: invalid internal Squid payload size\n";
-            return 1;
+        const std::filesystem::path configuration_path =
+            runtime_paths::user_file("partner-configuration.json");
+        machine_configuration active_configuration = default_machine_configuration();
+        std::error_code exists_error;
+        const bool configuration_exists =
+            std::filesystem::exists(configuration_path, exists_error) && !exists_error;
+        if (configuration_exists) {
+            std::string configuration_error;
+            machine_configuration loaded_configuration = active_configuration;
+            if (!load_machine_configuration(configuration_path, loaded_configuration,
+                                            configuration_error))
+                std::cerr << "[warning] Ignoring invalid configuration '"
+                          << configuration_path.string() << "': "
+                          << configuration_error << '\n';
+            else {
+                active_configuration = std::move(loaded_configuration);
+                std::cout << "[info] Loaded machine configuration: "
+                          << configuration_path.string() << '\n';
+            }
+        } else {
+            std::cout << "[info] Machine configuration will be saved to: "
+                      << configuration_path.string() << '\n';
         }
-        auto resolve_existing_path = [](const std::string &input) {
-            return runtime_paths::find_resource(input);
-        };
 
-        rom_file = resolve_existing_path(rom_file);
-        fd0_file = packaged_system_fd0
-            ? runtime_paths::mutable_resource_copy(DEFAULT_PARTNER_SYSTEM_FD0)
-            : resolve_existing_path(fd0_file);
-        if (!fd1_file.empty())
-            fd1_file = resolve_existing_path(fd1_file);
-        if (!hdd_file.empty()) {
-            hdd_file = packaged_system_hdd
-                ? runtime_paths::mutable_resource_copy(hdd_file)
-                : resolve_existing_path(hdd_file);
+        // Command-line options have field-level precedence over the JSON.
+        if (rom_explicit && !model_explicit) {
+            std::string low = rom_file;
+            for (char &c : low)
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            active_configuration.model = low.find("gdp") != std::string::npos
+                ? machine_model::gdp : machine_model::crt;
+        }
+        if (model_explicit) {
+            if (model == "auto") {
+                std::string low = rom_explicit ? rom_file : active_configuration.rom;
+                for (char &c : low) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+                active_configuration.model = low.find("gdp") != std::string::npos
+                    ? machine_model::gdp : machine_model::crt;
+            } else {
+                active_configuration.model = model == "gdp" ? machine_model::gdp : machine_model::crt;
+                if (!rom_explicit)
+                    active_configuration.rom = model == "gdp"
+                        ? "roms/partner_gdp.rom" : DEFAULT_LEGACY_CRT_ROM;
+            }
+        }
+        if (rom_explicit)
+            active_configuration.rom = rom_file;
+        if ((rom_explicit || model_explicit) && !terminal_explicit &&
+            active_configuration.model == machine_model::crt)
+            active_configuration.terminal = terminal_profile::vt52;
+        if (rom_explicit && is_partos_rom_path(rom_file)) {
+            if (!fd0_explicit) {
+                active_configuration.floppies[0].image = DEFAULT_PARTOS_FD0;
+                active_configuration.floppies[0].type = floppy_media_type::dos_720;
+            }
+            if (!hdd_explicit) {
+                active_configuration.hard_disk.image = DEFAULT_PARTOS_HDD;
+                active_configuration.hard_disk.type = hard_disk_type::st412;
+            }
+            if (!nvram_explicit)
+                active_configuration.cmos_file = DEFAULT_PARTOS_NVRAM;
+        }
+        if (fd0_explicit) {
+            active_configuration.floppies[0].image = fd0_file;
+            active_configuration.floppies[0].type = floppy_media_type::partner;
+        }
+        if (fd1_explicit) {
+            active_configuration.floppies[1].image = fd1_file;
+            active_configuration.floppies[1].type = floppy_media_type::partner;
+        }
+        if (hdd_explicit) {
+            active_configuration.hard_disk.image = hdd_file;
+            active_configuration.hard_disk.type = hard_disk_type::st412;
+        }
+        if (system_hdd_profile) {
+            active_configuration.floppies[0].image.clear();
+            active_configuration.floppies[0].type = floppy_media_type::free;
+            active_configuration.floppies[1].image.clear();
+            active_configuration.floppies[1].type = floppy_media_type::free;
         }
         if (nvram_explicit)
-            nvram_file = std::filesystem::absolute(nvram_file).lexically_normal().string();
-
-        bool gdp_model = false;
-        if (model == "gdp")
-            gdp_model = true;
-        else if (model == "auto")
-        {
-            std::string low = rom_file;
-            for (char &c : low) c = (char)std::tolower((unsigned char)c);
-            gdp_model = (low.find("gdp") != std::string::npos);
-        }
-
-        // Pick sensible default terminal when user doesn't force one:
-        // CRT -> VT52, GDP -> VT100.
-        if (!terminal_explicit)
-        {
-            term_profile = gdp_model ? terminal_profile::vt100_ansi : terminal_profile::vt52;
-        }
-
-        auto pick_rom_for_model = [&](bool want_gdp) -> std::string {
-            if (!want_gdp)
-                return rom_file;
-
-            std::string candidate = rom_file;
-            std::string low = candidate;
-            for (char &c : low) c = (char)std::tolower((unsigned char)c);
-            if (low.find("crt") == std::string::npos)
-                return rom_file;
-            const size_t crt_pos = low.find("crt");
-            if (crt_pos != std::string::npos)
-            {
-                candidate.replace(crt_pos, 3, "gdp");
-                if (std::filesystem::exists(candidate))
-                    return candidate;
-            }
-            const std::string fallback = resolve_existing_path("roms/partner_gdp.rom");
-            if (std::filesystem::exists(fallback))
-                return fallback;
-            return rom_file;
-        };
-
-        auto pick_disk_for_model = [&](bool want_gdp) -> std::string {
-            if (fd0_explicit)
-                return fd0_file;
-            if (is_partos_rom_path(rom_file))
-                return runtime_paths::mutable_resource_copy(DEFAULT_PARTOS_FD0);
-            const std::string preferred_name =
-                want_gdp ? "disks/fdd-partner-g.img" : DEFAULT_PARTNER_SYSTEM_FD0;
-            const std::string fallback_name =
-                want_gdp ? DEFAULT_PARTNER_SYSTEM_FD0 : "disks/fdd-partner-g.img";
-            const std::string preferred = resolve_existing_path(preferred_name);
-            const std::string fallback = resolve_existing_path(fallback_name);
-            if (std::filesystem::exists(preferred)) {
-                return runtime_paths::mutable_resource_copy(preferred_name);
-            }
-            if (std::filesystem::exists(fallback)) {
-                return runtime_paths::mutable_resource_copy(fallback_name);
-            }
-            return preferred;
-        };
-
-        auto make_emu = [&](bool want_gdp) -> std::unique_ptr<partner> {
-            const std::string selected_rom = pick_rom_for_model(want_gdp);
-            const std::string selected_fd1 = fd1_explicit ? fd1_file : std::string{};
-            const std::string selected_hdd =
-                !hdd_file.empty() ? hdd_file :
-                (is_partos_rom_path(selected_rom) ? runtime_paths::mutable_resource_copy(DEFAULT_PARTOS_HDD)
-                                                  : std::string{});
-            const bool auto_insert_floppy =
-                selected_hdd.empty() || fd0_explicit || is_partos_rom_path(selected_rom);
-            const std::string selected_fd0 =
-                auto_insert_floppy ? pick_disk_for_model(want_gdp) : std::string{};
-            const std::string selected_nvram =
-                nvram_explicit ? nvram_file :
-                (is_partos_rom_path(selected_rom)
-                    ? runtime_paths::user_file(DEFAULT_PARTOS_NVRAM).string()
-                    : runtime_paths::mutable_resource_copy(DEFAULT_PARTNER_NVRAM));
-            std::cout << "[info] model=" << (want_gdp ? "gdp" : "crt")
-                      << " rom=" << selected_rom
-                      << " fd0=" << (auto_insert_floppy ? selected_fd0 : std::string("(none)"))
-                      << " fd1=" << (selected_fd1.empty() ? std::string("(none)") : selected_fd1)
-                      << (selected_hdd.empty() ? "" : (" hdd=" + selected_hdd))
-                      << " nvram=" << selected_nvram
-                      << "\n";
-
-            std::unique_ptr<partner> created;
-            if (want_gdp)
-            {
-                auto gdp = std::make_unique<partner_gdp>(term_profile, selected_nvram);
-                gdp->load_rom(selected_rom);
-                if (auto_insert_floppy)
-                    gdp->load_disk(0, selected_fd0);
-                if (!selected_fd1.empty())
-                    gdp->load_disk(1, selected_fd1);
-                if (!selected_hdd.empty())
-                    gdp->load_hdd(selected_hdd);
-                gdp->reset();
-                created = std::move(gdp);
-            }
-            else
-            {
-                auto crt = std::make_unique<partner_crt>(term_profile, selected_nvram);
-                crt->load_rom(selected_rom);
-                if (auto_insert_floppy)
-                    crt->load_disk(0, selected_fd0);
-                if (!selected_fd1.empty())
-                    crt->load_disk(1, selected_fd1);
-                if (!selected_hdd.empty())
-                    crt->load_hdd(selected_hdd);
-                crt->reset();
-                created = std::move(crt);
-            }
-            return created;
-        };
-
-        std::unique_ptr<partner> emu = make_emu(gdp_model);
-        if (sio_squid_port != 0)
-        {
-            const auto port = sio_squid_port == 2 ? partner::sio_port_id::sio1_b :
-                (sio_squid_port == 3 ? partner::sio_port_id::sio2_a
-                                     : partner::sio_port_id::sio2_b);
-            partner::sio_device_config config;
-            config.kind = partner::sio_device_kind::internal_squid;
-            if (!emu->set_sio_device_config(port, config))
-            {
-                std::cerr << "Error: could not attach internal Squid to SIO port\n";
-                return 1;
-            }
-            std::cout << "[info] internal Squid attached to PAKET port "
-                      << sio_squid_port << "\n";
-        }
+            active_configuration.cmos_file =
+                std::filesystem::absolute(nvram_file).lexically_normal().string();
+        if (terminal_explicit)
+            active_configuration.terminal = term_profile;
+        if (boot_explicit)
+            active_configuration.boot = auto_boot_floppy
+                ? machine_boot_target::floppy : machine_boot_target::default_target;
+        if (squid_payload_explicit)
+            active_configuration.squid_payload_bytes = squid_payload_bytes;
         if (covox_port != 0)
-        {
-            const auto port = covox_port == 1 ? partner::pio_port_id::a
-                                              : partner::pio_port_id::b;
-            partner::pio_device_config config;
-            config.kind = partner::pio_device_kind::covox;
-            emu->set_pio_device_config(port, config);
-            std::cout << "[info] Covox attached to main PIO "
-                      << (covox_port == 1 ? "A" : "B")
-                      << " (program argument " << covox_port << ")\n";
-        }
-        if (sio_tcp_port != 0)
-        {
-            const auto port = sio_tcp_port == 2 ? partner::sio_port_id::sio1_b :
-                (sio_tcp_port == 3 ? partner::sio_port_id::sio2_a
-                                   : partner::sio_port_id::sio2_b);
-            partner::sio_device_config config;
-            config.kind = partner::sio_device_kind::tcp_bridge;
-            config.tcp_data_port = sio_tcp_data_port;
-            config.tcp_control_port = sio_tcp_control_port;
-            config.tcp_require_rts = true;
-            config.tcp_cts_follows_data_client = true;
-            if (!emu->set_sio_device_config(port, config))
-            {
-                std::cerr << "Error: could not attach TCP bridge to SIO port\n";
-                return 1;
+            active_configuration.pio[static_cast<std::size_t>(covox_port - 1)].kind =
+                partner::pio_device_kind::covox;
+        if (sio_squid_port != 0) {
+            for (std::size_t i = 1; i < active_configuration.sio.size(); ++i) {
+                if (active_configuration.sio[i].kind == partner::sio_device_kind::internal_squid)
+                    active_configuration.sio[i].kind = partner::sio_device_kind::none;
             }
-            std::cout << "[info] PAKET port " << sio_tcp_port
-                      << " attached to TCP " << sio_tcp_data_port
-                      << "/" << sio_tcp_control_port << "\n";
+            active_configuration.sio[static_cast<std::size_t>(sio_squid_port - 1)].kind =
+                partner::sio_device_kind::internal_squid;
+        }
+        if (sio_tcp_port != 0) {
+            auto &sio = active_configuration.sio[static_cast<std::size_t>(sio_tcp_port - 1)];
+            sio.kind = partner::sio_device_kind::tcp_bridge;
+            sio.tcp_data_port = sio_tcp_data_port;
+            sio.tcp_control_port = sio_tcp_control_port;
+            sio.tcp_require_rts = true;
+            sio.tcp_cts_follows_data_client = true;
+        }
+
+        std::unique_ptr<partner> emu = create_machine(active_configuration);
+        auto_boot_floppy = active_configuration.boot == machine_boot_target::floppy;
+        if (!configuration_exists) {
+            std::string initial_save_error;
+            if (!save_machine_configuration(configuration_path, active_configuration,
+                                            initial_save_error))
+                std::cerr << "[warning] Could not create machine configuration: "
+                          << initial_save_error << '\n';
+            else
+                std::cout << "[info] Created machine configuration: "
+                          << configuration_path.string() << '\n';
         }
 
         gui app_gui;
@@ -601,7 +653,9 @@ int main(int argc, char **argv)
                       << " XDG_SESSION_TYPE=" << (xdg ? xdg : "(unset)") << "\n";
             return 1;
         }
-        app_gui.set_terminal_profile(term_profile);
+        app_gui.set_terminal_profile(active_configuration.terminal);
+        app_gui.set_machine_configuration(active_configuration, configuration_path);
+        app_gui.machine_configuration_restarted(active_configuration);
         app_gui.set_remote_debugger(&remote_dbg);
 
         if (dap_port != 0)
@@ -934,6 +988,76 @@ int main(int argc, char **argv)
                 app_gui.render_panels(*emu, paused, action);
             }
             app_gui.end_frame();
+
+            if (auto requested = app_gui.take_machine_restart_request()) {
+                const machine_configuration previous_configuration = active_configuration;
+                const bool restart_debugger = remote_dbg.is_enabled();
+                const std::string debugger_host = remote_dbg.bind_host();
+                const uint16_t debugger_port = remote_dbg.bind_port();
+                std::string debugger_error;
+                if (restart_debugger && !remote_dbg.stop(&debugger_error)) {
+                    app_gui.set_machine_configuration_error(
+                        "Cannot restart while stopping the debugger: " + debugger_error);
+                } else {
+                    try {
+                        machine_configuration replacement_configuration = *requested;
+                        emu.reset();
+                        emu = create_machine(replacement_configuration);
+                        active_configuration = std::move(replacement_configuration);
+                        auto_boot_floppy =
+                            active_configuration.boot == machine_boot_target::floppy;
+                        auto_boot_key_sent = false;
+                        paused = false;
+                        resume_skip_bp = false;
+                        action = dbg_action::NONE;
+                        frame_tick_remainder = 0;
+                        next_host_frame = frame_clock::now() + host_frame_period;
+                        disp.clear_all();
+                        disp.update();
+                        app_gui.machine_configuration_restarted(active_configuration);
+
+                        std::string save_error;
+                        if (!save_machine_configuration(configuration_path,
+                                                        active_configuration,
+                                                        save_error))
+                            app_gui.set_machine_configuration_error(
+                                "Machine restarted, but the JSON could not be saved: " + save_error);
+                        else
+                            std::cout << "[info] Saved machine configuration: "
+                                      << configuration_path.string() << '\n';
+
+                        if (restart_debugger &&
+                            !remote_dbg.start(*emu, debugger_host, debugger_port,
+                                              &debugger_error))
+                            std::cerr << "[warning] Could not restart DAP server: "
+                                      << debugger_error << '\n';
+                    } catch (const std::exception &e) {
+                        const std::string restart_error = e.what();
+                        try {
+                            machine_configuration rollback_configuration =
+                                previous_configuration;
+                            emu.reset();
+                            emu = create_machine(rollback_configuration);
+                            active_configuration = std::move(rollback_configuration);
+                            auto_boot_floppy = active_configuration.boot ==
+                                machine_boot_target::floppy;
+                            app_gui.machine_configuration_restarted(active_configuration);
+                            app_gui.set_machine_configuration_error(
+                                "Restart failed; restored the previous machine: " +
+                                restart_error, &*requested);
+                            if (restart_debugger &&
+                                !remote_dbg.start(*emu, debugger_host, debugger_port,
+                                                  &debugger_error))
+                                std::cerr << "[warning] Could not restart DAP server after rollback: "
+                                          << debugger_error << '\n';
+                        } catch (const std::exception &rollback) {
+                            throw std::runtime_error(
+                                "machine restart failed (" + restart_error +
+                                ") and rollback failed (" + rollback.what() + ")");
+                        }
+                    }
+                }
+            }
 
             // TICKS_PER_FRAME represents exactly one 60 Hz slice of the
             // Partner's 4 MHz clock. Pace those slices against steady host
