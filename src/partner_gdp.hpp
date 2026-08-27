@@ -91,6 +91,7 @@ private:
     uint64_t ef9367_pins_ = 0;
     uint64_t avdc_pins_ = 0;
     bool avdc_restrict_ = false; // DADD13/LL latched at falling BLANK
+    bool gdp_pixel_latch_ = true; // active-low pixel sense returned on 36h D7
 
     // ST8 exposes the PAL-conditioned active-low AVDC interrupt, not raw VB.
     bool avdc_irq_edge_ = false;

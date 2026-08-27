@@ -1,75 +1,80 @@
 #include "squid_link_server.hpp"
 
-#include <array>
 #include <cstdint>
 #include <cstdio>
-#include <initializer_list>
 #include <vector>
 
 namespace {
-constexpr std::size_t frame_size = 20;
-constexpr std::size_t control_size = 3;
+constexpr std::uint8_t etx = 0xd3;
+constexpr std::uint8_t data_base = 0xd0;
+constexpr std::uint8_t hello = 0xe0;
+constexpr std::uint8_t hello_ack = 0xe1;
+constexpr std::uint8_t ack0 = 0xe2;
+constexpr std::uint8_t ack1 = 0xe3;
+constexpr std::uint8_t config = 0xe6;
+constexpr std::uint8_t config_ack = 0xe7;
 
-std::array<std::uint8_t, frame_size> make_frame(
-    std::uint8_t type, std::uint8_t channel, std::uint8_t sequence,
-    int acknowledged_sequence, const std::vector<std::uint8_t> &payload = {})
+std::uint8_t crc8(const std::uint8_t *data, std::size_t size)
 {
-    std::array<std::uint8_t, frame_size> frame{};
-    frame[0] = 0x7E;
-    frame[1] = static_cast<std::uint8_t>((channel << 4) | payload.size());
-    frame[2] = static_cast<std::uint8_t>(type << 5);
-    if (sequence != 0)
-        frame[2] |= 0x08;
-    if (acknowledged_sequence >= 0)
+    std::uint8_t crc = 0;
+    while (size-- != 0)
     {
-        frame[2] |= 0x04;
-        if (acknowledged_sequence != 0)
-            frame[2] |= 0x02;
+        crc ^= *data++;
+        for (unsigned int bit = 0; bit < 8; ++bit)
+            crc = static_cast<std::uint8_t>(
+                (crc & 0x80U) != 0 ? (crc << 1U) ^ 0x07U : crc << 1U);
     }
-    for (std::size_t index = 0; index < payload.size(); ++index)
-        frame[3 + index] = payload[index];
-    for (std::size_t index = 1; index < 18; ++index)
-        frame[18] ^= frame[index];
-    frame[19] = 0xD3;
+    return crc;
+}
+
+std::vector<std::uint8_t> control(std::uint8_t tag)
+{
+    return {tag, crc8(&tag, 1), etx};
+}
+
+std::vector<std::uint8_t> configuration(
+    std::uint8_t tag, std::uint8_t payload_bytes)
+{
+    std::vector<std::uint8_t> bytes{tag, payload_bytes};
+    bytes.push_back(crc8(bytes.data(), bytes.size()));
+    bytes.push_back(etx);
+    return bytes;
+}
+
+std::vector<std::uint8_t> data_frame(
+    std::uint8_t sequence, int acknowledged_sequence,
+    const std::vector<std::uint8_t> &payload)
+{
+    std::vector<std::uint8_t> frame;
+    std::uint8_t tag = static_cast<std::uint8_t>(
+        data_base | (sequence != 0 ? 0x04U : 0U));
+    if (acknowledged_sequence == 0)
+        tag |= 0x01U;
+    else if (acknowledged_sequence == 1)
+        tag |= 0x02U;
+    frame.push_back(tag);
+    frame.push_back(static_cast<std::uint8_t>(
+        0x30U | (payload.size() == 16 ? 0U : payload.size())));
+    frame.insert(frame.end(), payload.begin(), payload.end());
+    frame.push_back(crc8(frame.data(), frame.size()));
+    frame.push_back(etx);
     return frame;
 }
 
-void feed(squid_link_server &link,
-          const std::array<std::uint8_t, frame_size> &frame)
+void feed(squid_link_server &link, const std::vector<std::uint8_t> &bytes)
 {
-    for (std::uint8_t byte : frame)
-        link.receive_serial_byte(byte);
+    for (std::uint8_t byte : bytes)
+        (void)link.receive_serial_byte(byte);
+    link.service();
 }
 
-void feed_ack(squid_link_server &link, std::uint8_t sequence)
+std::vector<std::uint8_t> take_all(squid_link_server &link)
 {
-    link.receive_serial_byte(0xE0);
-    link.receive_serial_byte(static_cast<std::uint8_t>(
-        (3U << 5) | 0x04U | (sequence != 0 ? 0x02U : 0U)));
-    link.receive_serial_byte(0xCF);
-}
-
-std::array<std::uint8_t, frame_size> take_frame(squid_link_server &link)
-{
-    std::array<std::uint8_t, frame_size> frame{};
-    for (std::uint8_t &byte : frame)
-    {
-        if (!link.take_serial_byte(byte))
-            return {};
-    }
-    return frame;
-}
-
-
-std::array<std::uint8_t, control_size> take_control(squid_link_server &link)
-{
-    std::array<std::uint8_t, control_size> control{};
-    for (std::uint8_t &byte : control)
-    {
-        if (!link.take_serial_byte(byte))
-            return {};
-    }
-    return control;
+    std::vector<std::uint8_t> bytes;
+    std::uint8_t byte = 0;
+    while (link.take_serial_byte(byte))
+        bytes.push_back(byte);
+    return bytes;
 }
 }
 
@@ -83,84 +88,90 @@ int main()
     } \
 } while (0)
 
+    CHECK(squid_link_server::set_default_payload_bytes(64));
     squid_link_server link;
-    feed(link, make_frame(0, 0, 0, -1));
-    const auto hello_ack = take_frame(link);
+    CHECK(link.can_receive_serial_byte());
+    for (std::size_t index = 0;
+         index < squid_link_server::serial_input_capacity; ++index)
+        CHECK(link.receive_serial_byte(0));
+    CHECK(!link.can_receive_serial_byte());
+    CHECK(!link.receive_serial_byte(0));
+    link.service();
+    CHECK(link.can_receive_serial_byte());
+
+    feed(link, configuration(config, 112));
+    const auto greeting = take_all(link);
     CHECK(link.link_up());
-    CHECK(hello_ack[0] == 0x7E);
-    CHECK((hello_ack[2] >> 5) == 1);
+    CHECK(greeting == configuration(config_ack, 64));
 
-    // The 254-byte libsquid stream capacity includes the packet-length byte.
-    // Reject an application payload that PAKET cannot represent.
-    std::array<std::uint8_t,
-        squid_link_server::maximum_packet_size + 1> oversized_response{};
-    CHECK(!link.submit_response(link.session(), oversized_response.data(),
-                                oversized_response.size()));
+    std::vector<std::uint8_t> oversized(
+        squid_link_server::maximum_packet_size + 1U);
+    CHECK(!link.submit_response(
+        link.session(), oversized.data(), oversized.size()));
 
-    // A complete one-byte capabilities packet is length-prefixed in the
-    // channel-3 byte stream.
-    feed(link, make_frame(2, 3, 0, -1, {1, 0}));
-    const auto request_ack = take_control(link);
-    CHECK(request_ack[0] == 0xE0);
-    CHECK((request_ack[1] >> 5) == 3);
-    CHECK((request_ack[1] & 0x04) != 0);
-    CHECK((request_ack[1] & 0x02) == 0);
-    CHECK(request_ack[2] == 0xCF);
-    CHECK(link.pending_serial_bytes() == 0);
-
+    // One-byte capabilities request, preceded by the squid-server stream
+    // length. Wire v2 acknowledges it with a compact three-byte ACK0.
+    feed(link, data_frame(0, -1, {1, 0}));
+    CHECK(take_all(link) == control(ack0));
     squid_link_server::request request;
     CHECK(link.take_request(request));
     CHECK(request.payload == std::vector<std::uint8_t>({0}));
 
-    const std::uint8_t capabilities[] = {0x80, 0, 1, 0x0F, 5, 11, 243};
+    const std::uint8_t capabilities[] = {0x80, 0, 1, 0x0f, 5, 11, 245};
     CHECK(link.submit_response(request.session, capabilities,
                                sizeof(capabilities)));
-    const auto response = take_frame(link);
-    CHECK((response[1] >> 4) == 3);
-    CHECK((response[1] & 0x0F) == sizeof(capabilities) + 1);
-    CHECK(response[3] == sizeof(capabilities));
+    link.service();
+    const auto response = take_all(link);
+    CHECK(response.size() == sizeof(capabilities) + 5U);
+    CHECK((response[0] & 0xf8U) == data_base);
+    CHECK((response[1] >> 4U) == 3U);
+    CHECK((response[1] & 0x0fU) == sizeof(capabilities) + 1U);
+    CHECK(response[2] == sizeof(capabilities));
     for (std::size_t index = 0; index < sizeof(capabilities); ++index)
-        CHECK(response[4 + index] == capabilities[index]);
+        CHECK(response[index + 3U] == capabilities[index]);
+    CHECK(response[response.size() - 2U] ==
+          crc8(response.data(), response.size() - 2U));
+    CHECK(response.back() == etx);
+    feed(link, control(ack0));
+    CHECK(take_all(link).empty());
 
-    // Retire the host's response frame, then verify a request larger than one
-    // 15-byte Squid payload is reassembled without losing its length byte.
-    feed_ack(link, 0);
+    // A 255-byte plugin packet is legal in v2. Reassemble a 20-byte request
+    // split at the new 16-byte payload boundary.
     std::vector<std::uint8_t> first{20};
-    for (std::uint8_t value = 0; value < 14; ++value)
+    for (std::uint8_t value = 0; value < 15; ++value)
         first.push_back(value);
-    feed(link, make_frame(2, 3, 1, -1, first));
-    (void)take_frame(link);
+    feed(link, data_frame(1, -1, first));
+    CHECK(take_all(link) == control(ack1));
     std::vector<std::uint8_t> second;
-    for (std::uint8_t value = 14; value < 20; ++value)
+    for (std::uint8_t value = 15; value < 20; ++value)
         second.push_back(value);
-    feed(link, make_frame(2, 3, 0, -1, second));
-    (void)take_frame(link);
-
+    feed(link, data_frame(0, -1, second));
+    CHECK(take_all(link) == control(ack0));
     CHECK(link.take_request(request));
     CHECK(request.payload.size() == 20);
     for (std::uint8_t value = 0; value < 20; ++value)
         CHECK(request.payload[value] == value);
 
-    // If response DATA is ready when incoming DATA arrives, its CTRL byte
-    // carries the ACK and no separate three-byte control block is emitted.
-    squid_link_server piggyback_link;
-    feed(piggyback_link, make_frame(0, 0, 0, -1));
-    (void)take_frame(piggyback_link);
-    const std::uint8_t first_response[] = {0x11};
-    const std::uint8_t second_response[] = {0x22};
-    CHECK(piggyback_link.submit_response(piggyback_link.session(),
-                                         first_response,
-                                         sizeof(first_response)));
-    (void)take_frame(piggyback_link);
-    CHECK(piggyback_link.submit_response(piggyback_link.session(),
-                                         second_response,
-                                         sizeof(second_response)));
-    feed(piggyback_link, make_frame(2, 3, 0, 0, {1, 0}));
-    const auto piggybacked = take_frame(piggyback_link);
-    CHECK((piggybacked[2] >> 5) == 2);
-    CHECK((piggybacked[2] & 0x04) != 0);
-    CHECK((piggybacked[2] & 0x02) == 0);
-    CHECK(piggyback_link.pending_serial_bytes() == 0);
+    // CRC corruption is rejected, and the parser resynchronizes to the valid
+    // frame which immediately follows it in the same receive budget.
+    auto damaged = data_frame(1, -1, {1, 0x55});
+    damaged[2] ^= 0x80U;
+    auto valid = data_frame(1, -1, {1, 0x66});
+    damaged.insert(damaged.end(), valid.begin(), valid.end());
+    feed(link, damaged);
+    CHECK(take_all(link) == control(ack1));
+    CHECK(link.take_request(request));
+    CHECK(request.payload == std::vector<std::uint8_t>({0x66}));
+
+    const std::uint64_t old_session = link.session();
+    feed(link, control(hello));
+    CHECK(!link.link_up());
+    CHECK(!link.submit_response(old_session, capabilities,
+                                sizeof(capabilities)));
+    feed(link, control(hello));
+    CHECK(link.link_up());
+    CHECK(take_all(link) == control(hello_ack));
+    CHECK(link.session() != old_session);
 
 #undef CHECK
     if (failures == 0)

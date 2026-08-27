@@ -20,7 +20,7 @@ struct options {
     std::string rom;
     std::string nvram;
     std::string hdd;
-    std::string terminal = "vt52";
+    std::string terminal;
     std::vector<std::pair<int, std::string>> floppies;
     bool no_rom = false;
     bool verbose = false;
@@ -40,7 +40,7 @@ void usage(std::ostream &out)
         << "  --fd0 FILE        attach floppy drive 0 (also --fd1..--fd3)\n"
         << "  --hdd FILE        attach SASI hard-disk image\n"
         << "  --nvram FILE      persist the eight-byte RTC shadow; default is ephemeral\n"
-        << "  --terminal TYPE   vt52, vt100, or ansi (default: vt52)\n"
+        << "  --terminal TYPE   vt52, vt100, or ansi (default: model profile)\n"
         << "  --list-tools      print MCP tool definitions and exit\n"
         << "  --verbose         log protocol messages to stderr\n"
         << "  --version         print version and exit\n"
@@ -79,8 +79,11 @@ options parse_options(int argc, char **argv)
     }
     if (out.model != "crt" && out.model != "gdp")
         throw std::invalid_argument("--model must be crt or gdp");
-    if (out.terminal != "vt52" && out.terminal != "vt100" && out.terminal != "ansi")
+    if (!out.terminal.empty() && out.terminal != "vt52" &&
+        out.terminal != "vt100" && out.terminal != "ansi")
         throw std::invalid_argument("--terminal must be vt52, vt100, or ansi");
+    if (out.terminal.empty())
+        out.terminal = out.model == "gdp" ? "vt100" : "vt52";
     return out;
 }
 

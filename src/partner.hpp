@@ -114,6 +114,14 @@ public:
     const s1410_t& get_hdc() const { return hdc; }
     const idpartner_sasi_t& get_sasi() const { return sasi_; }
     const mm58167a_t& get_rtc() const { return rtc; }
+    // JJ12 is an optional motherboard link. Production system images expect
+    // it open; diagnostics can close it explicitly to route RTC INT to NMI.
+    void set_rtc_nmi_enabled(bool enabled) {
+        rtc_nmi_enabled_ = enabled;
+        if (!enabled)
+            pins &= ~Z80_NMI;
+    }
+    bool get_rtc_nmi_enabled() const { return rtc_nmi_enabled_; }
     // Seed MM58167 NVRAM ports (0xA8..0xAF) before page0_install copies them.
     void seed_cmos_nvram(const uint8_t *data, size_t len);
     uint8_t get_fdc_motor() const { return fdc_motor; }
@@ -140,14 +148,6 @@ public:
     }
     uint64_t get_tick_count() const { return tick_count; }
     bool get_iff1() const { return cpu.iff1; }
-    // debug memory-write trap: set dbg_wtrap_addr to watch; first write records
-    // the writing instruction's PC and the value. 0xFFFF disables it.
-    uint16_t dbg_wtrap_addr = 0xFFFF;
-    uint16_t dbg_wtrap_hi = 0;        // if >dbg_wtrap_addr, trap the [addr,hi] range
-    bool     dbg_wtrap_hit = false;
-    uint16_t dbg_wtrap_pc = 0;
-    uint8_t  dbg_wtrap_val = 0;
-    uint16_t dbg_wtrap_ix = 0, dbg_wtrap_hl = 0, dbg_wtrap_de = 0, dbg_wtrap_sp = 0;
     std::array<uint8_t, 8> dbg_im2_ack_vectors{};
     std::array<uint16_t, 8> dbg_im2_ack_pcs{};
     uint32_t dbg_im2_ack_count = 0;
@@ -242,6 +242,7 @@ protected:
     s1410_t hdc{};
     idpartner_sasi_t sasi_{};
     mm58167a_t rtc{};
+    bool rtc_nmi_enabled_ = false;
     uint8_t fdc_int_vector = 0;  // Port 0xE8
     uint8_t fdc_motor = 0;       // Port 0x98
     uint8_t fdc_int_state = 0;
@@ -251,6 +252,10 @@ protected:
     bool fdc_motor_running = false;
     bool dma_busreq_latched = false;
     bool dma_ready_input_ = false;
+    bool dma_cpu_yield_active_ = false;
+    bool dma_cpu_yield_left_boundary_ = false;
+    bool dma_cpu_suspended_ = false;
+    uint64_t cpu_resume_pins_ = 0;
     uint32_t dma_fdc_reads_ = 0;
     uint32_t dma_mem_writes_ = 0;
     uint32_t sasi_data_reads_ = 0;

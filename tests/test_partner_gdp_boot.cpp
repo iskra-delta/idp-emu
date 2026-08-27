@@ -58,15 +58,18 @@ int main()
                 "ROM did not emit the Partner banner");
     ok &= check(banner.find("TESTING MEMORY") != std::string::npos,
                 "ROM did not reach its memory test");
-    ok &= check(emu.get_ef9367().y == 0u,
-                "EF9367 command 05 did not reset both address registers");
+    ok &= check(emu.get_ef9367().y == 100u,
+                "Partner ROM lost its programmed Y=100 text baseline");
 
     auto frame = std::make_unique<display>();
     emu.render_to(*frame);
-    const size_t banner_band = lit_pixels(*frame, 420, display::FB_H);
+    const size_t banner_band = lit_pixels(*frame, 180, 420);
+    const size_t old_bottom_band = lit_pixels(*frame, 420, display::FB_H);
     const size_t total_pixels = lit_pixels(*frame, 0, display::FB_H);
     ok &= check(banner_band > 20000u,
-                "rendered banner is absent from its ROM-defined screen band");
+                "rendered banner is absent from its Y=100 screen band");
+    ok &= check(banner_band > old_bottom_band,
+                "rendered banner regressed to the bottom edge");
     ok &= check(total_pixels >= banner_band,
                 "rendered banner pixel accounting is inconsistent");
 

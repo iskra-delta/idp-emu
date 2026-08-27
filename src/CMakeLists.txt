@@ -1,14 +1,24 @@
 add_library(idp_internal_squid STATIC
     squid_link_server.cpp
     internal_squid_server.cpp
+    "${IDP_LIBSQUID_SOURCE_DIRECTORY}/lib/squid/portable/state.c"
+    "${IDP_LIBSQUID_SOURCE_DIRECTORY}/lib/squid/portable/init.c"
+    "${IDP_LIBSQUID_SOURCE_DIRECTORY}/lib/squid/portable/link.c"
+    "${IDP_LIBSQUID_SOURCE_DIRECTORY}/lib/squid/portable/ring.c"
+    "${IDP_LIBSQUID_SOURCE_DIRECTORY}/lib/squid/portable/burst.c"
+    "${IDP_LIBSQUID_SOURCE_DIRECTORY}/lib/squid/portable/socket.c"
     "${IDP_RETROVAULT_SOURCE_DIRECTORY}/retrovault_core.c"
     "${IDP_RETROVAULT_SOURCE_DIRECTORY}/retrovault_json.c"
 )
 target_include_directories(idp_internal_squid
     PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
     PRIVATE
+        "${IDP_LIBSQUID_SOURCE_DIRECTORY}/include"
+        "${IDP_LIBSQUID_SOURCE_DIRECTORY}/lib/squid/portable"
+        "${IDP_LIBSQUID_SOURCE_DIRECTORY}/lib/squid/contract"
         "${IDP_RETROVAULT_SOURCE_DIRECTORY}"
         "${retrovault_gateway_SOURCE_DIR}/include")
+target_compile_definitions(idp_internal_squid PRIVATE SQUID_MAX_SOCKETS=1)
 target_link_libraries(idp_internal_squid PUBLIC CURL::libcurl Threads::Threads)
 target_compile_features(idp_internal_squid PRIVATE c_std_11 cxx_std_23)
 

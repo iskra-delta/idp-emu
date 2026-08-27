@@ -98,7 +98,8 @@ int main()
     CHECK(emu.io_read(0x1E) == 0xFF);
 
     emu.io_write(0xC7, 0xC3); // every C0h..C7h address selects the DMA
-    CHECK(emu.get_dma().wr[4] == 0xC3);
+    CHECK(emu.get_dma().wr[6] == 0x00); // RESET clears the register image
+    CHECK(!emu.get_dma().enabled);
 
     // The schematic priority is CTC before DMA.
     emu.reset();
@@ -129,6 +130,23 @@ int main()
     bus = emu.daisy(Z80_RETI);
     CHECK((emu.get_fdc_int_state() & 0x04u) == 0u);
     CHECK((bus & Z80_IEIO) != 0);
+
+    // The motherboard directly wires E67 ZC/TO0 (pin 7) to CLK/TRG1
+    // (pin 22). With both channels counting one rising edge, the first XX1
+    // edge must therefore propagate through channel 1 and clear the motor
+    // latch through ZC/TO1 on the following system clock.
+    std::vector<uint8_t> halt_rom(partner::rom_size, 0x76);
+    emu.load_debug_rom(halt_rom);
+    emu.reset();
+    emu.io_write(0xC8, 0x57);
+    emu.io_write(0xC8, 0x01);
+    emu.io_write(0xC9, 0x57);
+    emu.io_write(0xC9, 0x01);
+    emu.io_write(0x98, 0x01);
+    CHECK((emu.io_read(0x98) & 0x01u) != 0u);
+    for (int clock = 0; clock < 1300; ++clock)
+        emu.tick();
+    CHECK((emu.io_read(0x98) & 0x01u) == 0u);
 
     fs::remove(nvram, ec);
 #undef CHECK

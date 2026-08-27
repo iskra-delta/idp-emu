@@ -621,16 +621,41 @@ static int test_status_interrupt_lightpen_and_memory_request()
     CHECK((ef9367_read(&gdp, 0x2C) & 0x01u) == 0u);
 
     ef9367_reset(&gdp);
+    gdp.cr1 = 0x40u; /* enable READY interrupt */
+    gdp.scan_ctr = 36u * 96u + 23u; /* first occupied display CK */
+    gdp.vblank = false;
+    gdp.previous_vblank = false;
     ef9367_command(&gdp, 0x0F);
-    bool saw_mw = false;
-    bool saw_release = false;
+    CHECK(!gdp.ready);
+    CHECK((ef9367_read(&gdp, 0x2F) & 0x04u) == 0u);
+
+    /* ALL remains low for 64 display-memory cycles. The request must wait
+       until phase 87, then hold active-low MW for one complete EF CK. */
     pins = idle_pins();
-    for (int i = 0; i < 8; ++i) {
+    unsigned waited_ck = 0u;
+    for (int i = 0; i < 400 && (pins & EF9367_MW) != 0u; ++i) {
+        const uint16_t previous_scan = gdp.scan_ctr;
         pins = ef9367_tick(&gdp, pins);
-        if ((pins & EF9367_MW) == 0u) saw_mw = true;
-        if (saw_mw && (pins & EF9367_MW) != 0u) saw_release = true;
+        if (gdp.scan_ctr != previous_scan)
+            waited_ck++;
+        CHECK((ef9367_read(&gdp, 0x2F) & 0x04u) == 0u);
     }
-    CHECK(saw_mw && saw_release);
+    CHECK(waited_ck == 64u);
+    CHECK((pins & EF9367_MW) == 0u);
+    CHECK(!gdp.ready);
+
+    unsigned active_ck = 0u;
+    for (int i = 0; i < 16 && (pins & EF9367_MW) == 0u; ++i) {
+        const uint16_t previous_scan = gdp.scan_ctr;
+        pins = ef9367_tick(&gdp, pins);
+        if (gdp.scan_ctr != previous_scan)
+            active_ck++;
+    }
+    CHECK(active_ck == 1u);
+    CHECK((pins & EF9367_MW) != 0u);
+    CHECK(gdp.ready);
+    CHECK((ef9367_read(&gdp, 0x2F) & 0xC4u) == 0xC4u);
+    CHECK((pins & EF9367_IRQ) == 0u);
 
     gdp.cr1 = 0x04;
     pins = ef9367_tick(&gdp, idle_pins());

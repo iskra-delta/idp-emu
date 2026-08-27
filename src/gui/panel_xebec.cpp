@@ -8,12 +8,13 @@ const char *phase_name(s1410_phase_t phase)
 {
     switch (phase)
     {
-    case S1410_PHASE_IDLE:         return "IDLE";
-    case S1410_PHASE_AWAIT_CONFIG: return "CFG";
-    case S1410_PHASE_READ_DATA:    return "READ";
-    case S1410_PHASE_WRITE_DATA:   return "WRITE";
-    case S1410_PHASE_RESPONSE:     return "RESP";
-    default:                       return "?";
+    case S1410_PHASE_IDLE:       return "IDLE";
+    case S1410_PHASE_COMMAND:    return "COMMAND";
+    case S1410_PHASE_READ_DATA:  return "DATA IN";
+    case S1410_PHASE_WRITE_DATA: return "DATA OUT";
+    case S1410_PHASE_STATUS:     return "STATUS";
+    case S1410_PHASE_MESSAGE:    return "MESSAGE";
+    default:                     return "?";
     }
 }
 

@@ -128,6 +128,87 @@ static void draw_test_pixel(partner_gdp_test_shim &emu, uint16_t x, uint16_t y)
     emu.write_port(0x20, 0x80); // zero-length small vector plots X,Y
 }
 
+static bool gdp_wait_ready_like_cgraf(partner_gdp_test_shim &emu)
+{
+    size_t guard = 1000u;
+    while ((emu.read_port(0x2F) & 0x04u) == 0u && guard-- != 0u)
+        emu.tick();
+    return guard != 0u;
+}
+
+static bool read_gdp_pixel_like_cgraf(partner_gdp_test_shim &emu,
+                                      uint16_t x, uint16_t y,
+                                      uint8_t &board_value)
+{
+    if (!gdp_wait_ready_like_cgraf(emu))
+        return false;
+    emu.write_port(0x28, (uint8_t)(x >> 8));
+    emu.write_port(0x29, (uint8_t)x);
+    emu.write_port(0x2A, (uint8_t)(y >> 8));
+    emu.write_port(0x2B, (uint8_t)y);
+    emu.write_port(0x20, 0x0F);
+    if ((emu.read_port(0x2F) & 0x04u) != 0u)
+        return false;
+    if (!gdp_wait_ready_like_cgraf(emu))
+        return false;
+    board_value = emu.read_port(0x36);
+    return true;
+}
+
+static bool test_gdp_pixel_read_latch()
+{
+    partner_gdp_test_shim emu(terminal_profile::vt100_ansi);
+    emu.reset();
+
+    /* Program GDP-local PIO A as the ROM does: 512-line format, read page 0,
+       write page 0. The IC1 latch powers up to the inactive/high sense. */
+    emu.write_port(0x31, 0x07);
+    emu.write_port(0x31, 0x0F);
+    emu.write_port(0x30, 0x18);
+    if ((emu.read_port(0x36) & 0x80u) == 0u) {
+        std::puts("test_partner_gdp_memacc: FAIL pixel latch reset polarity");
+        return false;
+    }
+
+    draw_test_pixel(emu, 100u, 100u);
+    uint8_t value = 0u;
+    if (!read_gdp_pixel_like_cgraf(emu, 100u, 100u, value) ||
+        (value & 0x80u) != 0u) {
+        std::puts("test_partner_gdp_memacc: FAIL set GDP pixel did not drive active-low D7");
+        return false;
+    }
+
+    /* IC1 retains the sampled value until another 0Fh access completes. */
+    for (int i = 0; i < 32; ++i)
+        emu.tick();
+    if ((emu.read_port(0x36) & 0x80u) != 0u) {
+        std::puts("test_partner_gdp_memacc: FAIL GDP pixel latch did not retain D7");
+        return false;
+    }
+
+    if (!read_gdp_pixel_like_cgraf(emu, 101u, 100u, value) ||
+        (value & 0x80u) == 0u) {
+        std::puts("test_partner_gdp_memacc: FAIL clear GDP pixel did not release active-low D7");
+        return false;
+    }
+
+    /* Direct access follows WBNK. Page 0 contains the set pixel, page 1 is
+       still clear even though RBNK continues to display page 0. */
+    emu.write_port(0x30, 0x1A);
+    if (!read_gdp_pixel_like_cgraf(emu, 100u, 100u, value) ||
+        (value & 0x80u) == 0u) {
+        std::puts("test_partner_gdp_memacc: FAIL direct pixel read ignored WBNK");
+        return false;
+    }
+    emu.write_port(0x30, 0x18);
+    if (!read_gdp_pixel_like_cgraf(emu, 100u, 100u, value) ||
+        (value & 0x80u) != 0u) {
+        std::puts("test_partner_gdp_memacc: FAIL direct pixel read did not return page 0");
+        return false;
+    }
+    return true;
+}
+
 static bool avdc_wait_access_like_hardware(partner_gdp_test_shim &emu)
 {
     size_t guard = 200000u;
@@ -325,6 +406,8 @@ static bool test_ultimate_avdc_access_and_ready(bool columns132)
 
 int main()
 {
+    if (!test_gdp_pixel_read_latch())
+        return 1;
     if (!test_user_defined_characters_and_dot_stretch())
         return 1;
     if (!test_user_defined_character_port_protocol())

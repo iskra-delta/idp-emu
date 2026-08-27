@@ -68,7 +68,7 @@ def replace_file(image_path: Path, payload_path: Path, filename: str) -> None:
         logical_size += byte_count
         expected_extent += (byte_count + EXTENT_SIZE - 1) // EXTENT_SIZE
 
-    if len(payload) > logical_size or logical_size - len(payload) >= 128:
+    if len(payload) > logical_size:
         raise ValueError(
             f"{payload_path} is {len(payload)} bytes but the existing CP/M "
             f"record allocation represents {logical_size} bytes"

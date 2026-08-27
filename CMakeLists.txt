@@ -57,9 +57,16 @@ option(IDP_STATIC_RUNTIME
 option(IDP_BUILD_PROBES
     "Build developer-only floppy and GDP diagnostic probes" OFF)
 set(IDP_RETROVAULT_COMMIT
-    "c003deb4647e63a7a1db864222f008c0621493c9"
+    "bac605387ad152e4e92cb03644388b4836cb4eaa"
     CACHE STRING "Pinned Retro Vault protocol implementation revision")
 mark_as_advanced(IDP_RETROVAULT_COMMIT)
+set(IDP_LIBSQUID_COMMIT
+    "50039278d4f74f24891e6e78166f2cee96f3a316"
+    CACHE STRING "Pinned Squid wire protocol implementation revision")
+mark_as_advanced(IDP_LIBSQUID_COMMIT)
+set(IDP_LIBSQUID_SOURCE_DIR "" CACHE PATH
+    "Use a local libsquid checkout instead of the pinned revision")
+mark_as_advanced(IDP_LIBSQUID_SOURCE_DIR)
 
 if(IDP_STATIC_RUNTIME AND MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
@@ -224,9 +231,9 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(imgui)
 
-# Compile only the platform-neutral Retro Vault request/JSON core into the
-# emulator. The POSIX squid-server executable, serial transport and plugin
-# loader are intentionally not built or shipped.
+# Compile the platform-neutral Retro Vault request/JSON core and the exact
+# portable Squid wire engine into the emulator. The POSIX squid-server
+# executable, serial transport and plugin loader are not built or shipped.
 FetchContent_Declare(
     retrovault_gateway
     GIT_REPOSITORY https://github.com/retro-plastics/squid-server.git
@@ -239,6 +246,29 @@ if(NOT retrovault_gateway_POPULATED)
 endif()
 set(IDP_RETROVAULT_SOURCE_DIRECTORY
     "${retrovault_gateway_SOURCE_DIR}/lib/retrovault")
+
+if(NOT IDP_LIBSQUID_SOURCE_DIR)
+    get_filename_component(IDP_LIBSQUID_SIBLING
+        "${CMAKE_SOURCE_DIR}/../../retro-plastics/libsquid" ABSOLUTE)
+    if(EXISTS "${IDP_LIBSQUID_SIBLING}/include/squid/snet.h")
+        set(IDP_LIBSQUID_SOURCE_DIR "${IDP_LIBSQUID_SIBLING}")
+    endif()
+endif()
+if(IDP_LIBSQUID_SOURCE_DIR)
+    set(IDP_LIBSQUID_SOURCE_DIRECTORY "${IDP_LIBSQUID_SOURCE_DIR}")
+else()
+    FetchContent_Declare(
+        libsquid_internal
+        GIT_REPOSITORY https://github.com/retro-plastics/libsquid.git
+        GIT_TAG        ${IDP_LIBSQUID_COMMIT}
+        GIT_SHALLOW    FALSE
+    )
+    FetchContent_GetProperties(libsquid_internal)
+    if(NOT libsquid_internal_POPULATED)
+        FetchContent_Populate(libsquid_internal)
+    endif()
+    set(IDP_LIBSQUID_SOURCE_DIRECTORY "${libsquid_internal_SOURCE_DIR}")
+endif()
 
 set(IDP_IMGUI_OPENGL3_BACKEND
     "${imgui_SOURCE_DIR}/backends/imgui_impl_opengl3.cpp")

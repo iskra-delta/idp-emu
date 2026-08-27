@@ -132,7 +132,9 @@ READY, and bit 3 is coordinate overflow. Bits 4, 5, and 6 latch enabled
 light-pen, vertical-blank, and READY interrupts; bit 7 reports their combined
 interrupt state. Reading `0x20` acknowledges those latches, while `0x2F` is a
 non-destructive status read. READY is low while the modeled command BUSY count
-is nonzero. Software must not issue another command until it is high.
+is nonzero. Command `0x0F` also holds READY low while its memory request is
+pending and during the complete `MW` cycle. Software must not issue another
+command until READY is high.
 
 CTRL1 bits 0 and 1 select down/up and pen/eraser. CTRL2 bits 1:0 select line
 style, bit 2 selects tilted characters, and bit 3 selects vertical character
@@ -170,6 +172,7 @@ with the phase-aware formula above.
 | Solid block `0x0A` | `48PQ` | Draws `5P x 8Q`, then advances by the normal `6P` character pitch; timing includes the sixth spacing column. |
 | Solid block `0x0B` | `16PQ` | `4P * 4Q`. |
 | Clear/reset/scan `0x04`, `0x06`, `0x07`, `0x0C` | wait to next VB falling edge + 25,200 or 50,400 CK | One field in 256-line/non-interlaced format; two fields in 512-line/interlaced format. |
+| Direct memory request `0x0F` | wait for next free memory cycle + 1 CK | READY is low while pending and while `MW` is active. The worst normal-display wait is 64 CK. |
 
 For standard vectors, `steps` and `dots` are:
 
@@ -204,6 +207,29 @@ accepted; READY remains low for the duration above. Thus CPU-visible command
 latency is modeled, but partially drawn vectors and progressive clear tearing
 are not yet exposed.
 
+### Direct graphics-memory access and the port `0x36` pixel latch
+
+In the 525-line timing diagram, each line is 96 EF clocks. The collective
+display-memory interval begins after 23 CK and lasts 64 CK. During active
+display lines 36 through 243, `ALL` is low over that interval. The same
+64-cycle interval is occupied by refresh on vertical-blank lines 10 through
+13, 26 through 29, and 248 through 251. Command `0x0F` waits until `ALL` is
+high, asserts active-low `MW` for one complete free CK, and raises READY only
+after that CK has ended.
+
+The EF9367 provides the address and handshake but no internal pixel-data
+register. Partner sheet 7 completes the path externally: IC22 derives `LOAD`
+from the `MW` memory cycle, IC1 latches active-low `DOUT`, and IC15 returns its
+Q output on CPU D7 when port `0x36` is read. D4 simultaneously carries the
+AVDC `RESTRICT` latch. A successful access therefore uses:
+
+```text
+set X/Y -> command 0Fh -> poll port 2Fh READY -> read port 36h D7 -> invert D7
+```
+
+The latch follows `WBNK` and retains its value until another direct-access
+cycle completes. There is no byte-wide GDP-memory path to the Z80.
+
 ### EF line patterns and XOR
 
 CTRL2 patterns restart at phase zero for each vector:
@@ -231,7 +257,7 @@ The Partner does not expose the SCN2674 as a flat twelve-register window:
 | --- | --- | --- |
 | `0x34` | character interface latch | character interface latch |
 | `0x35` | attribute interface latch | attribute interface latch |
-| `0x36` | board `RESTRICT` bit (`0x10`) | GDP external scroll latch |
+| `0x36` | active-low GDP pixel D7 plus AVDC `RESTRICT` D4 | GDP external scroll latch |
 | `0x37` | `0xFF` | no AVDC effect |
 | `0x38` | interrupt register | initialization-register data |
 | `0x39` | status register | command register |

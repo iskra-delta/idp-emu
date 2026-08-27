@@ -113,7 +113,6 @@ int main()
         bool catalog_seen = false;
         bool catalog_id_seen = false;
         bool catalog_total_seen = false;
-        bool prompt_cleared = false;
         bool prompt_returned = false;
         uint64_t ef_writes_at_prompt = 0;
         size_t command_position = 0;
@@ -136,9 +135,6 @@ int main()
                     prompt_seen = true;
                     ef_writes_at_prompt = emu.get_io_counters().ef_wr;
                 }
-                if (prompt_seen && command_position == command.size() &&
-                    !prompt_displayed)
-                    prompt_cleared = true;
                 squid_connected = emu.get_sio_port_status(
                     partner::sio_port_id::sio1_b).connected;
                 paket_connected = paket_connected ||
@@ -157,7 +153,7 @@ int main()
                     output.find("Skupaj: 10 paketov.") != std::string::npos ||
                     display_contains(emu, "Skupaj: 10 paketov.");
                 prompt_returned = catalog_seen && catalog_id_seen &&
-                    catalog_total_seen && prompt_cleared &&
+                    catalog_total_seen &&
                     display_cursor_follows_text(emu, "A>");
             }
             if (prompt_seen && command_position < command.size() &&

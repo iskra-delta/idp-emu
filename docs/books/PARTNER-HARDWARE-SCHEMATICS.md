@@ -74,7 +74,7 @@ flowchart TB
         EF[EF9367 20h-2Fh]
         AVDC[SCN2674 34h-3Fh]
         GPO[Z80 PIO 30h-33h]
-        GLUE[Scroll/sync latch 36h]
+        GLUE[Pixel/restrict/scroll glue 36h]
     end
 
     CPU --- BUS
@@ -329,11 +329,17 @@ PartOS kernel uses CTC base `0x88` (ch3 VBL = `0x8E`), HD DMA `0x90`, FDC `0xE8`
 | `/CE` | I/O decode `C0h` |
 | D0..D7 | Data bus |
 | `/BUSREQ`, `/BUSACK` | CPU bus arbitration |
-| `/RDY` | Glue from FDC (`0xF1` execute) and SASI DRQ |
+| `RDY` | E34 OR: latched FDC DRQ or inverted expansion `DMARQ-` |
 | IEI | ← CTC IEO |
 | IEO | → SIO #1 IEI |
 
 Used for floppy and HDD sector transfers.
+
+Partner ROM writes standard Z8410 register streams. It selects byte mode,
+active-high ready, and CE-only operation. Byte mode releases `BUSREQ` after
+each byte; burst mode releases it when ready drops after completing the current
+byte; continuous mode retains the bus while waiting. E33 pin 16 is
+`CE/WAIT`, while ready is E33 pin 25.
 
 ### 7.2 Z80 CTC (U7) — ports `0xC8..0xCF`
 
@@ -341,14 +347,14 @@ Used for floppy and HDD sector transfers.
 |----|------|-------------|-------------|
 | 0 | C8/CC | `XX1` from MC14411 F13 (1600 Hz) | System timer; **ZCTO0 → ch1** |
 | 1 | C9/CD | `CLKTRG1` ← ZCTO0 | Floppy motor timeout |
-| 2 | CA/CE | `/TRG2` | Spare |
+| 2 | CA/CE | E67 pin 21 unconnected | Spare |
 | 3 | CB/CF | optional `CLKTRG3` ← conditioned `AVDINT-` | Display event counter |
 
 Motor timeout glue (`partner.cpp`):
 
 ```
 CTC ch0 ZCTO0 ──► CTC ch1 CLKTRG1
-CTC ch1 ZCTO1 ──► /MOTOR_ON (port 98h latch clear)
+CTC ch1 ZCTO1 ──► E91 OR + E94 inverter ──► motor-latch /CLR
 ```
 
 Port `98h`:
@@ -390,8 +396,15 @@ Emulator routes Port A/B to virtual printer and Covox when configured in NVRAM.
 | Signal | Connection |
 |--------|------------|
 | `/INT` | Discrete request/in-service daisy glue (§6.2) |
-| `/DMA` | To Z80 DMA `/RDY` glue |
+| `DRQ`/`DACK` | E107 request latch and E34 DMA-ready/acknowledge glue |
+| `TC` pin 16 | E108 AND of `BUSAK+` and inverted DMA `INT1-`/EOB pulse |
 | Drive 0..3 | 34-pin floppy connectors |
+
+The TC connection is why a Partner floppy transfer completes on the DMA block
+boundary. It is not correct to finish an 8272 command simply after copying one
+emulator sector. The GDP ROM additionally exposes the physical propagation
+order: for its one-sector command with `EOT=R`, ST1.EN remains visible at the
+DMA terminal-count boundary while ST0 reports normal completion.
 
 ### 7.7 SASI adapter (U12) — `0x10..0x1F`
 
@@ -416,8 +429,10 @@ are not decoded. DMA can stream to/from the data function when DRQ is asserted.
 | B2h | Counter reset / sync |
 | BFh | Test register |
 
-The RTC periodic/alarm `/INT` output passes through an inverter and the JJ12
-option to CPU `/NMI`. Reading interrupt status clears the latched source.
+The RTC periodic/alarm `/INT` output passes through an inverter and optional
+link JJ12 to CPU `/NMI`. The emulator leaves JJ12 open by default, matching the
+standard CP/M system whose `0066h` vector is not an RTC handler. Reading
+interrupt status clears the latched source.
 
 ---
 
@@ -505,12 +520,19 @@ PIO-controlled dots-per-character divider.
 | Direction | Function |
 |-----------|----------|
 | Read bit4 | `RESTRICT`: DADD13/last-line value latched by IC26 (74S374) at falling `BLANK`; high throughout the last scan line of a character row |
+| Read bit7 | Active-low GDP pixel latched by IC1 (74LS74) when EF9367 command `0Fh` completes its next-free `MW` memory cycle |
 | Write | Scroll latch |
 
-This read is not HSYNC. With row-table addressing enabled, the SCN2674 uses
+Bit 4 is not HSYNC. With row-table addressing enabled, the SCN2674 uses
 the blanking interval of the last scan line to fetch the next row address.
 Software waits for bit 4 to go high and then low before accessing the AVDC,
 thereby beginning its access sequence at line zero of the following row.
+
+The GDP path is only one bit wide. IC68/IC70 and IC24 select `DOUT` from the
+graphics RAM outputs, IC22 derives `LOAD` from `MW`, and IC15 gates the IC1
+latch onto CPU D7. The original `CGRAF.COM` issues `0Fh`, polls EF READY at
+`2Fh`, reads `36h`, then inverts D7. No GDP byte or word is connected to the
+CPU bus.
 
 ---
 
@@ -576,7 +598,7 @@ MOTOR_ON, CTC_ZCTO0, CTC_ZCTO1
 Build and run emulator tests after any schematic-derived firmware:
 
 ```bash
-cmake -S . -B build && cmake --build build -j4
+cmake -S . -B tests/dump/build && cmake --build tests/dump/build -j4
 cd build && ctest --output-on-failure
 ```
 

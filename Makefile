@@ -1,6 +1,6 @@
 .PHONY: all configure build stage clean test fetch
 
-BUILD_DIR := build
+BUILD_DIR := tests/dump/build
 BIN_DIR := bin
 
 # udap (https://github.com/retro-vault/udap) provides the DAP debugger

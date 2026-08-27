@@ -2,7 +2,7 @@
 /*#
     # idpartner_sasi.h
 
-    Minimal Iskra Delta Partner SASI adapter.
+    Iskra Delta Partner SASI adapter.
 
     This models the board-side adapter that maps CPU ports 0x10..0x12 onto a
     SASI target. It follows the same split as MAME's Partner SASI card:
@@ -52,19 +52,16 @@ static inline bool _idpartner_sasi_req(const idpartner_sasi_t *adp) {
     if (!adp->target || !adp->target->present) {
         return false;
     }
-    if ((adp->target->phase == S1410_PHASE_IDLE) &&
-        adp->session_active && adp->data_enable && !adp->sel_latched) {
-        return true;
-    }
     switch (adp->target->phase) {
-        case S1410_PHASE_AWAIT_CONFIG:
+        case S1410_PHASE_COMMAND:
             return true;
         case S1410_PHASE_READ_DATA:
             return adp->target->data_idx < adp->target->data_len;
         case S1410_PHASE_WRITE_DATA:
             return adp->target->data_idx < adp->target->data_len;
-        case S1410_PHASE_RESPONSE:
-            return adp->target->response_idx < adp->target->response_len;
+        case S1410_PHASE_STATUS:
+        case S1410_PHASE_MESSAGE:
+            return true;
         default:
             return false;
     }
@@ -93,30 +90,21 @@ static inline bool _idpartner_sasi_io(const idpartner_sasi_t *adp) {
         return false;
     }
     return (adp->target->phase == S1410_PHASE_READ_DATA) ||
-           (adp->target->phase == S1410_PHASE_RESPONSE);
+           (adp->target->phase == S1410_PHASE_STATUS) ||
+           (adp->target->phase == S1410_PHASE_MESSAGE);
 }
 
 static inline bool _idpartner_sasi_cd(const idpartner_sasi_t *adp) {
     if (!adp->target) {
         return false;
     }
-    /* Partner firmware may poll for command/status phase after data transfer
-       while the adapter has already dropped to idle with ATN/data path active. */
-    if ((adp->target->phase == S1410_PHASE_IDLE) &&
-        adp->session_active && adp->data_enable && !adp->sel_latched) {
-        return true;
-    }
-    return (adp->target->phase == S1410_PHASE_AWAIT_CONFIG) ||
-           (adp->target->phase == S1410_PHASE_RESPONSE);
+    return (adp->target->phase == S1410_PHASE_COMMAND) ||
+           (adp->target->phase == S1410_PHASE_STATUS) ||
+           (adp->target->phase == S1410_PHASE_MESSAGE);
 }
 
 static inline bool _idpartner_sasi_msg(const idpartner_sasi_t *adp) {
-    /* The currently supported S1410 command set ends in a status response and
-       does not enter a separate SASI message phase. Keep the board's MSG bit
-       explicit so a future target phase can drive it without changing the
-       adapter register contract. */
-    (void)adp;
-    return false;
+    return adp->target && adp->target->phase == S1410_PHASE_MESSAGE;
 }
 
 static inline bool _idpartner_sasi_bsy(const idpartner_sasi_t *adp) {

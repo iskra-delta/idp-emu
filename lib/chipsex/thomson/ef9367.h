@@ -132,6 +132,7 @@ void ef9367_write(ef9367_t *gdp, uint8_t port, uint8_t data);
 void ef9367_command(ef9367_t *gdp, uint8_t cmd);
 bool ef9367_load_charset_rom(ef9367_t *gdp, const uint8_t *rom, uint32_t size);
 void ef9367_clear_framebuffers(ef9367_t *gdp);
+bool ef9367_read_current_pixel(const ef9367_t *gdp);
 
 #ifdef __cplusplus
 }
@@ -161,23 +162,37 @@ static inline uint8_t* _ef9367_fb_page(ef9367_t *gdp, uint8_t bank) {
     return gdp->fb[(bank & 1u) ? 1 : 0];
 }
 
-static inline void _ef9367_set_px(ef9367_t *gdp, int x, int y, bool on) {
+static inline const uint8_t* _ef9367_const_fb_page(const ef9367_t *gdp,
+                                                    uint8_t bank) {
+    return gdp->fb[(bank & 1u) ? 1 : 0];
+}
+
+static inline bool _ef9367_pixel_address(const ef9367_t *gdp,
+                                          int x, int y,
+                                          uint32_t *pixel_address) {
     const bool mode_256 = !gdp->mode_512_lines;
     const int logical_h = mode_256 ? 256 : 512;
     if (gdp->cr1 & 0x08u) {
         x &= 1023;
         y &= logical_h - 1;
-    } else {
-        if ((x < 0) || (x >= 1024) || (y < 0) || (y >= logical_h))
-            return;
+    } else if ((x < 0) || (x >= 1024) || (y < 0) || (y >= logical_h)) {
+        return false;
     }
+
     /* EF9367 logical space is bottom-left origin (x right, y up).
-       1024x512 mode stores all 512 raster rows.
-       1024x256 mode stores only 256 rows (32KB); scanout stretch is external. */
+       1024x512 mode stores all 512 raster rows. 1024x256 mode stores only
+       256 rows; vertical doubling is performed by the display path. */
     const int base_fb_y = mode_256 ? (255 - y) : (511 - y);
     const int fb_mod = mode_256 ? 256 : 512;
     const int fb_y = (base_fb_y - gdp->scroll_offset) & (fb_mod - 1);
-    const uint32_t p = (uint32_t)fb_y * 1024u + (uint32_t)x;
+    *pixel_address = (uint32_t)fb_y * 1024u + (uint32_t)x;
+    return true;
+}
+
+static inline void _ef9367_set_px(ef9367_t *gdp, int x, int y, bool on) {
+    uint32_t p = 0;
+    if (!_ef9367_pixel_address(gdp, x, y, &p))
+        return;
     const uint32_t byte_ix = p >> 3;
     const uint8_t bit = (uint8_t)(1u << (p & 7u));
     uint8_t *fb = _ef9367_fb_page(gdp, gdp->write_bank);
@@ -186,19 +201,9 @@ static inline void _ef9367_set_px(ef9367_t *gdp, int x, int y, bool on) {
 }
 
 static inline void _ef9367_flip_px(ef9367_t *gdp, int x, int y) {
-    const bool mode_256 = !gdp->mode_512_lines;
-    const int logical_h = mode_256 ? 256 : 512;
-    if (gdp->cr1 & 0x08u) {
-        x &= 1023;
-        y &= logical_h - 1;
-    } else {
-        if ((x < 0) || (x >= 1024) || (y < 0) || (y >= logical_h))
-            return;
-    }
-    const int base_fb_y = mode_256 ? (255 - y) : (511 - y);
-    const int fb_mod = mode_256 ? 256 : 512;
-    const int fb_y = (base_fb_y - gdp->scroll_offset) & (fb_mod - 1);
-    const uint32_t p = (uint32_t)fb_y * 1024u + (uint32_t)x;
+    uint32_t p = 0;
+    if (!_ef9367_pixel_address(gdp, x, y, &p))
+        return;
     const uint32_t byte_ix = p >> 3;
     const uint8_t bit = (uint8_t)(1u << (p & 7u));
     uint8_t *fb = _ef9367_fb_page(gdp, gdp->write_bank);
@@ -548,6 +553,15 @@ void ef9367_clear_framebuffers(ef9367_t *gdp) {
     memset(gdp->fb, 0, sizeof(gdp->fb));
 }
 
+bool ef9367_read_current_pixel(const ef9367_t *gdp) {
+    CHIPS_ASSERT(gdp);
+    uint32_t p = 0;
+    if (!_ef9367_pixel_address(gdp, (int)gdp->x, (int)gdp->y, &p))
+        return false;
+    const uint8_t *fb = _ef9367_const_fb_page(gdp, gdp->write_bank);
+    return (fb[p >> 3] & (uint8_t)(1u << (p & 7u))) != 0u;
+}
+
 static inline uint8_t _ef9367_read_idx(ef9367_t *gdp, uint8_t idx) {
     switch (idx & 0x0F) {
         case 0x0: { /* status; this address acknowledges IRQ latches */
@@ -604,7 +618,7 @@ static inline void _ef9367_write_idx(ef9367_t *gdp, uint8_t idx, uint8_t data) {
         case 0xB: gdp->y = (uint16_t)((gdp->y & 0xFF00u) | data); break;
         default: break;
     }
-    gdp->ready = true;
+    gdp->ready = !gdp->mw_request && !gdp->mw_active;
     gdp->status = _ef9367_status(gdp);
 }
 
@@ -631,6 +645,24 @@ void ef9367_set_board_inputs(ef9367_t *gdp, uint64_t pins) {
     gdp->scroll_offset = (pins & EF9367_SCRLM) ? 0 : (int8_t)gdp->scroll_latch;
 }
 
+static inline bool _ef9367_memory_cycle_free(const ef9367_t *gdp) {
+    /* The 525-line timing diagram is 96 CK per line. ALL is low during the
+       64-cycle memory window beginning after 23 CK. In normal write mode
+       that window is occupied by display on lines 36..243 and by the three
+       four-line vertical-blank refresh periods shown in the datasheet. */
+    const uint16_t line = (uint16_t)(gdp->scan_ctr / 96u);
+    const uint16_t phase = (uint16_t)(gdp->scan_ctr % 96u);
+    if ((phase < 23u) || (phase >= 87u))
+        return true;
+
+    const bool refresh = ((line >= 10u) && (line <= 13u)) ||
+                         ((line >= 26u) && (line <= 29u)) ||
+                         ((line >= 248u) && (line <= 251u));
+    const bool display = ((gdp->cr1 & 0x04u) == 0u) &&
+                         (line >= 36u) && (line <= 243u);
+    return !refresh && !display;
+}
+
 uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
     CHIPS_ASSERT(gdp);
 
@@ -643,7 +675,7 @@ uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
     /* Advance exactly one 4 MHz Partner master tick. EF CK is QD from the
        board's 24 MHz video-clock counter, so it advances three times per
        eight Partner ticks. The 525-line field contains 25,200 EF CK cycles. */
-    const bool was_ready = gdp->busy_ticks == 0;
+    const bool was_ready = gdp->ready && (gdp->busy_ticks == 0);
     if (gdp->busy_ticks)
         gdp->busy_ticks--;
     gdp->ck_phase = (uint8_t)(gdp->ck_phase + 3u);
@@ -662,8 +694,6 @@ uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
     gdp->vblank = (gdp->scan_ctr < (36u * 96u)) ||
                   (gdp->scan_ctr >= (244u * 96u));
 
-    if (!was_ready && gdp->busy_ticks == 0 && (gdp->cr1 & 0x40u))
-        gdp->irq_latches |= 0x40u;
     const bool vblank_rising = gdp->vblank && !gdp->previous_vblank;
     if (vblank_rising && (gdp->cr1 & 0x20u))
         gdp->irq_latches |= 0x20u;
@@ -689,16 +719,21 @@ uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
             gdp->irq_latches |= 0x10u;
     }
 
-    /* Command 0F requests exactly one next-free display-memory cycle. */
+    /* Command 0F requests exactly one next-free display-memory cycle. MW is
+       low for that complete CK. READY rises only when the cycle ends, which
+       is the completion handshake used by the Partner CGRAF pixel reader. */
     if (ck_edge) {
         if (gdp->mw_active) {
             gdp->mw_active = false;
-        } else if (gdp->mw_request) {
+        } else if (gdp->mw_request && _ef9367_memory_cycle_free(gdp)) {
             gdp->mw_request = false;
             gdp->mw_active = true;
         }
     }
-    gdp->ready = true;
+    gdp->ready = !gdp->mw_request && !gdp->mw_active;
+    const bool is_ready = gdp->ready && (gdp->busy_ticks == 0);
+    if (!was_ready && is_ready && (gdp->cr1 & 0x40u))
+        gdp->irq_latches |= 0x40u;
     gdp->status = _ef9367_status(gdp);
 
     ef9367_set_board_inputs(gdp, pins);
@@ -713,7 +748,7 @@ uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
         }
     }
 
-    gdp->ready = true;
+    gdp->ready = !gdp->mw_request && !gdp->mw_active;
     gdp->status = _ef9367_status(gdp);
     if (gdp->vblank) {
         pins |= EF9367_VBLANK;
@@ -852,7 +887,7 @@ void ef9367_command(ef9367_t *gdp, uint8_t cmd) {
             break;
     }
     gdp->busy_ticks = busy_ticks;
-    gdp->ready = true;
+    gdp->ready = !gdp->mw_request && !gdp->mw_active;
     gdp->status = _ef9367_status(gdp);
 }
 

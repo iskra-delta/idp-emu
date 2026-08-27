@@ -466,7 +466,8 @@ partner::sio_port_status partner::get_sio_port_status(sio_port_id port) const
         break;
     }
     case sio_device_kind::internal_squid:
-        cts = true;
+        cts = internal_squid_ == nullptr ||
+            internal_squid_->can_receive_serial_byte();
         dcd = true;
         connected = internal_squid_ != nullptr && internal_squid_->link_up();
         st.detail = internal_squid_ != nullptr
@@ -1241,8 +1242,11 @@ void partner::apply_sio_modem_inputs(uint64_t &bus_pins, sio_port_id port_a, sio
         }
         case sio_device_kind::internal_squid:
             // This is a direct virtual cable. It is present even before the
-            // guest completes the Squid handshake.
-            cts = true;
+            // guest completes the Squid handshake. CTS is live backpressure
+            // from the server's bounded input queue; the SIO's Auto Enables
+            // mode prevents another guest byte from starting while it is low.
+            cts = internal_squid_ == nullptr ||
+                internal_squid_->can_receive_serial_byte();
             dcd = true;
             break;
         }
@@ -1276,7 +1280,7 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
              internal_squid_ != nullptr &&
              tick_count >= rt.next_internal_squid_poll_tick)
     {
-        internal_squid_->service(rt.rx_fifo);
+        internal_squid_->service(rt.rx_fifo, ch.rts);
         rt.next_internal_squid_poll_tick = tick_count + 2048;
     }
 
@@ -1339,8 +1343,8 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
         {
             if (internal_squid_ == nullptr)
                 internal_squid_ = std::make_unique<internal_squid_server>();
-            internal_squid_->receive_serial_byte(tx);
-            internal_squid_->service(rt.rx_fifo);
+            (void)internal_squid_->receive_serial_byte(tx);
+            internal_squid_->service(rt.rx_fifo, ch.rts);
             rt.next_internal_squid_poll_tick = tick_count + 2048;
         }
         else if (cfg.kind == sio_device_kind::mouse_logitech)
@@ -1361,6 +1365,11 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
     }
 
     if (rt.rx_fifo.empty())
+        return;
+
+    // An internal Squid cable observes the guest's RTS line. Bytes already
+    // staged at the cable remain pending until the guest advertises room.
+    if (cfg.kind == sio_device_kind::internal_squid && !ch.rts)
         return;
 
     const uint8_t data = rt.rx_fifo.front();
@@ -1488,6 +1497,7 @@ void partner::load_disk(int drive, const std::string &path)
     }
 
     i8272_set_drive_ready(&fdc, drive, true);
+    i8272_set_drive_media(&fdc, drive, disk.heads > 1, false, 1);
 }
 
 std::string partner::get_disk_path(int drive) const
@@ -1711,6 +1721,10 @@ void partner::reset()
     fdc_motor_running = false;
     dma_busreq_latched = false;
     dma_ready_input_ = false;
+    dma_cpu_yield_active_ = false;
+    dma_cpu_yield_left_boundary_ = false;
+    dma_cpu_suspended_ = false;
+    cpu_resume_pins_ = pins;
     dma_fdc_reads_ = 0;
     dma_mem_writes_ = 0;
     dma_port_writes_ = 0;
@@ -1781,17 +1795,29 @@ void partner::tick()
             fdc.cmd_code, fdc.data_idx, fdc.data_len,
             fdc.result_idx, fdc.result_len);
     }
-    // JJ12 connects the MM58167's active-high interrupt, through the board
-    // inverter, to the CPU's active-low NMI input. CHIPS pin masks represent
-    // assertion rather than electrical polarity, so reflect it as Z80_NMI.
+    // Closing optional link JJ12 connects the MM58167's active-high interrupt,
+    // through the board inverter, to the CPU's active-low NMI input. Standard
+    // Partner configurations leave it open; their CP/M 0066h vector is not an
+    // RTC handler. CHIPS pin masks represent assertion rather than electrical
+    // polarity, so reflect a fitted link as Z80_NMI.
     const uint64_t rtc_pins = mm58167a_tick(&rtc, mm58167a_bus_idle());
-    if (rtc_pins & MM58167A_INT)
+    if (rtc_nmi_enabled_ && (rtc_pins & MM58167A_INT))
         pins |= Z80_NMI;
     else
         pins &= ~Z80_NMI;
     const uint64_t prev_pins = pins;
 
     const bool cpu_ticked = !dma_owns_bus();
+    if (cpu_ticked && dma_cpu_suspended_) {
+        /* DMA bus cycles reuse the shared address/data/control pin mask. The
+           real CPU retains its unfinished cycle internally while BUSACK is
+           active, so restore the last CPU-side pins before resuming it. */
+        const uint64_t asynchronous = pins & (Z80_INT | Z80_NMI);
+        pins = (cpu_resume_pins_ & ~(Z80_INT | Z80_NMI)) | asynchronous;
+        dma_cpu_suspended_ = false;
+    } else if (!cpu_ticked) {
+        dma_cpu_suspended_ = true;
+    }
     if (cpu_ticked)
     {
         // IM2 ack data is sampled by the CPU during internal step 1657.
@@ -1845,6 +1871,19 @@ void partner::tick()
 
         service_cpu_bus(pins);
 
+        /* Z8410 byte mode releases BUSREQ after every byte. The CPU core has
+           no BUSREQ/BUSACK pins of its own, so let it run through an actual
+           instruction boundary before granting the DMA again. Merely waiting
+           four host ticks can freeze the core in the middle of a bus cycle and
+           later resume it on DMA-owned address/data pins. */
+        if (dma_cpu_yield_active_) {
+            if (!z80_opdone(&cpu)) {
+                dma_cpu_yield_left_boundary_ = true;
+            } else if (dma_cpu_yield_left_boundary_) {
+                dma_cpu_yield_active_ = false;
+            }
+        }
+
         // The DMA register port is programmed by CPU I/O instructions, but the
         // DMA core itself is level-sensitive and would otherwise decode the
         // same byte across multiple T-states. Handle port 0xC0 explicitly on
@@ -1867,6 +1906,10 @@ void partner::tick()
             service_cpu_dma_port_write(pins);
         if (dma_rd_now && !dma_rd_prev)
             Z80_SET_DATA(pins, z80dma_read(&dma));
+
+        // Preserve CPU-owned bus state before CTC/DMA/peripheral ticks reuse
+        // the shared pin mask. This is the state the CPU sees after BUSACK.
+        cpu_resume_pins_ = pins;
     }
 
     // Tick peripheral chips in interrupt daisy chain order
@@ -1918,7 +1961,7 @@ void partner::tick()
                 // for the matching write-back cycle to complete.
                 ready = true;
             } else if (partner_fdc_port(src_port) && (src_port & 1u)) {
-                ready = (fdc.phase == I8272_PHASE_EXECUTE);
+                ready = i8272_drq(&fdc);
             } else if (partner_sasi_port(src_port) && partner_sasi_function(src_port) == 1) {
                 ready = idpartner_sasi_drq(&sasi_);
             }
@@ -1935,7 +1978,7 @@ void partner::tick()
                 if (dma.state == Z80DMA_STATE_WRITE) {
                     ready = true;
                 } else if (partner_fdc_port(dst_port) && (dst_port & 1u)) {
-                    ready = (fdc.phase == I8272_PHASE_EXECUTE);
+                    ready = i8272_drq(&fdc);
                 } else if (partner_sasi_port(dst_port) && partner_sasi_function(dst_port) == 1) {
                     ready = idpartner_sasi_drq(&sasi_);
                 }
@@ -1953,6 +1996,11 @@ void partner::tick()
 
     const z80dma_state_t dma_state_before = dma.state;
     pins = z80dma_tick(&dma, pins);
+    if (dma_state_before == Z80DMA_STATE_WRITE &&
+        dma.mode == Z80DMA_MODE_BYTE && dma.byte_gap_ticks != 0) {
+        dma_cpu_yield_active_ = true;
+        dma_cpu_yield_left_boundary_ = false;
+    }
     if (dma.enabled && (pins & Z80DMA_BUSACK) && (pins & Z80DMA_RD))
         service_dma_read_bus(pins);
     dma_busreq_latched = (pins & Z80DMA_BUSREQ) != 0;
@@ -2042,14 +2090,17 @@ void partner::tick()
 
 void partner::restore_drive_ready_flags()
 {
-    for (int i = 0; i < I8272_MAX_DRIVES; i++)
+    for (int i = 0; i < I8272_MAX_DRIVES; i++) {
         i8272_set_drive_ready(&fdc, i, !disks_[i].data.empty());
+        i8272_set_drive_media(&fdc, i, disks_[i].heads > 1, false, 1);
+    }
     if (disks_[1].data.empty() &&
         !disks_[0].data.empty() &&
         disks_[2].data.empty() &&
         disks_[3].data.empty())
     {
         i8272_set_drive_ready(&fdc, 1, true);
+        i8272_set_drive_media(&fdc, 1, disks_[0].heads > 1, false, 1);
     }
 }
 
@@ -2265,6 +2316,9 @@ void partner::service_dma_read_bus(uint64_t &bus_pins)
              partner_sasi_function((uint8_t)src_addr) == 1)
         data = sasi_data_read_for_bus();
     else if (bus_pins & Z80DMA_IORQ) {
+        if (partner_fdc_port((uint8_t)src_addr) && (src_addr & 1u) &&
+            dma.bytes_remaining == 1)
+            i8272_terminal_count(&fdc);
         data = io_read((uint8_t)src_addr);
         if (partner_fdc_port((uint8_t)src_addr) && (src_addr & 1u))
             dma_fdc_reads_++;
@@ -2292,6 +2346,9 @@ void partner::service_dma_write_bus(uint64_t &bus_pins)
         dma_mem_writes_++;
     }
     else if (bus_pins & Z80DMA_IORQ) {
+        if (partner_fdc_port((uint8_t)addr) && (addr & 1u) &&
+            dma.bytes_remaining == 0)
+            i8272_terminal_count(&fdc);
         io_write(addr & 0xFF, data);
     }
 }
@@ -2340,12 +2397,19 @@ void partner::service_fdc_daisy(uint64_t &bus_pins, bool cpu_ticked)
 
 bool partner::dma_transfer_pending() const
 {
-    return dma.enabled && (dma.port_a.block_length > 0 || dma.port_b.block_length > 0);
+    return dma.enabled && (dma.bytes_remaining > 0 ||
+        dma.port_a.block_length > 0 || dma.port_b.block_length > 0);
 }
 
 bool partner::dma_owns_bus() const
 {
     if (!dma.enabled)
+        return false;
+    // In Z8410 byte mode BUSREQ is released after every byte so the CPU can
+    // execute at least one complete machine cycle.  The DMA core counts that
+    // four-clock minimum explicitly; board-level RDY glue must not reacquire
+    // the bus during the gap.
+    if (dma_cpu_yield_active_ || dma.byte_gap_ticks != 0)
         return false;
     if (dma_busreq_latched || (dma.state != Z80DMA_STATE_IDLE))
         return true;
@@ -2363,7 +2427,7 @@ bool partner::dma_owns_bus() const
             partner_sasi_function(src_port) == 1)
             return idpartner_sasi_drq(&sasi_);
         if (!src.is_memory && partner_fdc_port(src_port) && (src_port & 1u))
-            return (fdc.phase == I8272_PHASE_EXECUTE);
+            return i8272_drq(&fdc);
     }
     return false;
 }
@@ -2396,16 +2460,6 @@ uint8_t partner::read_boot_rom(uint16_t addr) const
 
 void partner::write_mem(uint16_t addr, uint8_t data)
 {
-    if (!dbg_wtrap_hit &&
-        (addr == dbg_wtrap_addr ||
-         (dbg_wtrap_hi > dbg_wtrap_addr && addr >= dbg_wtrap_addr && addr <= dbg_wtrap_hi))) {
-        dbg_wtrap_hit = true;
-        dbg_wtrap_pc = cpu.pc;
-        dbg_wtrap_val = data;
-        dbg_wtrap_addr = addr;          // report which address was hit
-        dbg_wtrap_ix = cpu.ix; dbg_wtrap_hl = cpu.hl;
-        dbg_wtrap_de = cpu.de; dbg_wtrap_sp = cpu.sp;
-    }
     if (addr == 0xF9C1) {
         const uint32_t idx = dbg_irref_count & 0xFu;
         dbg_irref_values[idx] = data;
@@ -2620,7 +2674,8 @@ void partner::io_write(uint16_t port, uint8_t data)
         }();
         if (trace_sio && ((uint8_t)port == 0xDA || (uint8_t)port == 0xDB))
             std::fprintf(stderr, "[sio] wr pc=%04X port=%02X data=%02X\n",
-                cpu.pc, (unsigned int)((uint8_t)port), (unsigned int)data);
+                cpu.pc,
+                (unsigned int)((uint8_t)port), (unsigned int)data);
         z80sio_cpu_write(&sio, (uint8_t)port, data);
         if (channel_reset)
             reset_internal_squid_session(channel == Z80SIO_CHANNEL_B

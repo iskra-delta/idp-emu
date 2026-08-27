@@ -38,6 +38,13 @@ signals modeled by the Xebec/SASI path. The behavioral companion note is
 - The adapter is selected throughout `10h..1fh`; A2 and A3 are ignored and
   A1:A0 select the four local functions.
 - Status is D7 `REQ`, D6 `IO`, D5 `MSG`, D4 `CD`, and D3 `BSY`.
+- U11's control latch uses D5 for `DRQ_ENB`, D1 for `EN_DATA`, and D0 for
+  `SEL`; those are the `22h`, `02h`, and `01h` combinations visible in the
+  original ROM transfer routines.
 - Function 2 reads and the unused function 3 read float high as `ffh`.
 - REQ/DACK/DMARQ transitions are sampled once per CPU or DMA bus cycle so one
   stretched I/O access cannot consume multiple bytes.
+- The target holds BSY from selection through the final byte. Completion is a
+  status byte (`IO+CD`) followed by a separate null message byte
+  (`IO+CD+MSG`), after which BSY drops. The previous combined response phase
+  could not drive the schematic's MSG status input and is no longer used.

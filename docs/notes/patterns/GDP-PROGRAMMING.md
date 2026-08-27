@@ -83,6 +83,10 @@ define emulation rules that match ROM behavior.
 - Scroll latch `0x36` is currently modeled as a board-level write offset that
   matches Partner ROM startup behavior more closely than a pure scanout offset.
 - EF read/write bank selection from GDP PIO (`RBNK`/`WRNK`) is implemented.
+- EF command `0x0F` requests the next free graphics-memory cycle. READY stays
+  low while the request waits for `ALL` to become high and throughout the
+  active `MW` cycle. At completion, Partner board glue latches the addressed
+  write-bank pixel and returns its active-low sense on port `0x36` bit 7.
 - GDP and AVDC planes are blended additively in the renderer (overlap appears brighter).
 - Renderer uses centered GDP plane composition inside full display raster.
 - Remaining work is mostly visual parity/detail tuning rather than basic GDP command-path bring-up.
@@ -121,3 +125,62 @@ define emulation rules that match ROM behavior.
 - Continue hardware validation of AVDC setup-window edge cases and mixed-plane
   cursor/blink presentation. Core row-table, split, interlace, delayed-command,
   and CMAC divider timing now have focused regression coverage.
+
+## Reading a GDP pixel
+
+The Partner has no CPU-visible byte or word path from GDP memory. The card
+implements the EF9367 datasheet's suggested external direct-access register as
+a one-bit latch. Port `0x36` therefore has direction-dependent board glue:
+
+| Access | Function |
+| --- | --- |
+| Read D7 | active-low GDP pixel latched by the last completed command `0x0F` |
+| Read D4 | AVDC `RESTRICT` timing latch |
+| Write | GDP scroll latch |
+
+The original Partner `CGRAF.COM` uses the following protocol. Status is read
+at `0x2F`, rather than `0x20`, so polling does not acknowledge pending EF
+interrupt latches.
+
+```asm
+; Input: HL = X, DE = Y
+; Output: A = 80h for a set pixel, 00h for a clear pixel
+
+gdp_read_pixel:
+        call    gdp_wait
+
+        ld      a,l
+        out     (29h),a         ; X low
+        ld      a,h
+        out     (28h),a         ; X high nibble
+        ld      a,e
+        out     (2bh),a         ; Y low
+        ld      a,d
+        out     (2ah),a         ; Y high nibble
+
+        ld      a,0fh
+        out     (20h),a         ; request next free memory cycle
+        call    gdp_wait         ; wait until MW cycle and LOAD have completed
+
+        in      a,(36h)
+        cpl                     ; D7 is active-low
+        and     80h
+        ret
+
+gdp_wait:
+        in      a,(2fh)         ; non-destructive STATUS alias
+        and     04h             ; READY
+        jr      z,gdp_wait
+        ret
+```
+
+Direct access follows `WBNK`, the drawing page. To inspect the page currently
+being displayed, first make `WBNK` equal `RBNK`, taking care not to disturb the
+other PIO-A control bits. The current format and scroll mapping also apply.
+
+This is not a fast framebuffer-copy interface. During active display the
+request may wait through the remainder of a 64-CK `ALL`-low memory window,
+which is at most about 42.7 microseconds at the Partner's 1.5 MHz EF clock.
+Reading eight pixels requires eight command/request/latch/read sequences. For
+sprite restoration, use `XORM` and redraw the same shape, or maintain a CPU
+shadow bitmap when the actual background bits are needed.

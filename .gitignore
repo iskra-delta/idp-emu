@@ -1,10 +1,8 @@
 # Build directories.
-build/
 bin/
 dist/
 tools/zx0/build/
 tools/zx0/bin/
-partos/Testing/
 __pycache__/
 *.py[cod]
 

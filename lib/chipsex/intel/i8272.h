@@ -23,8 +23,12 @@
     - Main Status Register (MSR) at port 0xF0
     - Data Register at port 0xF1
     - Command/Result phase state machine
-    - Commands: SPECIFY, RECALIBRATE, SENSE INTERRUPT STATUS, READ DATA,
-      WRITE DATA, FORMAT TRACK, SEEK
+    - Commands used by Partner firmware: SPECIFY, SENSE DRIVE STATUS,
+      RECALIBRATE, SENSE INTERRUPT STATUS, READ/WRITE DATA, READ ID,
+      FORMAT TRACK, and SEEK
+    - DMA request and terminal-count behavior, including multi-sector
+      progression and the documented requirement that EOT is not a substitute
+      for terminal count
     - Per-drive state (track, head, motor)
     - Sector read/write via callbacks
     - CHIPS-style pin-level bus tick (`i8272_tick_pins`)
@@ -124,7 +128,9 @@ extern "C" {
 /*--- MSR (Main Status Register) bits, read from port 0xF0 ---*/
 #define I8272_MSR_RQM       (1 << 7)   /* Request for Master: 1=ready */
 #define I8272_MSR_DIO       (1 << 6)   /* Data direction: 1=FDC->CPU, 0=CPU->FDC */
-#define I8272_MSR_EXM       (1 << 5)   /* Execution mode */
+#define I8272_MSR_NDM       (1 << 5)   /* Non-DMA execution mode */
+/* Kept as a source-compatible spelling; Intel names bit 5 NDM, not EXM. */
+#define I8272_MSR_EXM       I8272_MSR_NDM
 #define I8272_MSR_CB        (1 << 4)   /* FDC busy */
 #define I8272_MSR_D3B       (1 << 3)   /* Drive 3 busy */
 #define I8272_MSR_D2B       (1 << 2)   /* Drive 2 busy */
@@ -156,12 +162,17 @@ extern "C" {
 #define I8272_ST2_CM        (1 << 6)   /* Control Mark */
 #define I8272_ST2_DD        (1 << 5)   /* Data Error in Data Field */
 #define I8272_ST2_WC        (1 << 4)   /* Wrong Cylinder */
+#define I8272_ST2_SH        (1 << 3)   /* Scan Equal Hit */
+#define I8272_ST2_SN        (1 << 2)   /* Scan Not Satisfied */
 #define I8272_ST2_BC        (1 << 1)   /* Bad Cylinder */
 #define I8272_ST2_MD        (1 << 0)   /* Missing Data Address Mark */
 
 /*--- Command codes (lower 5 bits) ---*/
 #define I8272_CMD_SPECIFY           0x03
+#define I8272_CMD_READ_TRACK        0x02
 #define I8272_CMD_SENSE_DRIVE       0x04
+#define I8272_CMD_WRITE_DELETED     0x09
+#define I8272_CMD_READ_DELETED      0x0C
 #define I8272_CMD_RECALIBRATE       0x07
 #define I8272_CMD_SENSE_INT         0x08
 #define I8272_CMD_READ_DATA         0x06
@@ -169,6 +180,9 @@ extern "C" {
 #define I8272_CMD_READ_ID           0x0A
 #define I8272_CMD_FORMAT_TRACK      0x0D
 #define I8272_CMD_SEEK              0x0F
+#define I8272_CMD_SCAN_EQUAL        0x11
+#define I8272_CMD_SCAN_LOW_EQUAL    0x19
+#define I8272_CMD_SCAN_HIGH_EQUAL   0x1D
 
 /*--- FDC state machine phases ---*/
 typedef enum {
@@ -181,8 +195,8 @@ typedef enum {
 /*--- Max drives ---*/
 #define I8272_MAX_DRIVES    4
 
-/*--- Max sector buffer (512 bytes per sector) ---*/
-#define I8272_SECTOR_SIZE   512
+/*--- Largest sector size encoded by the three-bit N field ---*/
+#define I8272_SECTOR_SIZE   8192
 
 /*--- Per-drive state ---*/
 typedef struct {
@@ -190,6 +204,10 @@ typedef struct {
     uint8_t head;
     bool motor;
     bool ready;
+    bool two_sided;
+    bool write_protected;
+    bool fault;
+    uint8_t sector_size_code;
 } i8272_drive_t;
 
 /*--- Callback: read a sector from disk image ---*/
@@ -236,6 +254,7 @@ typedef struct {
     uint32_t irq_delay;
     bool irq_sets_sense;
     bool irq_enters_result;
+    uint8_t seek_busy_mask;
     uint32_t exec_delay;
     bool exec_pending;
 
@@ -243,6 +262,13 @@ typedef struct {
     uint8_t data_buf[I8272_SECTOR_SIZE];
     uint16_t data_len;
     uint16_t data_idx;
+    uint16_t transfer_size;
+    uint8_t transfer_eot;
+    uint8_t transfer_dtl;
+    uint8_t transfer_kind;
+    uint8_t scan_step;
+    int8_t scan_compare;
+    bool terminal_count;
     /* last sector transfer request (debug visibility) */
     uint8_t last_us;
     uint8_t last_c;
@@ -270,6 +296,12 @@ uint64_t i8272_irq_pins(i8272_t *fdc, uint64_t pins);
 /* Board-facing drive input/control lines. */
 void i8272_set_drive_ready(i8272_t *fdc, int drive, bool ready);
 void i8272_set_drive_motor(i8272_t *fdc, int drive, bool on);
+void i8272_set_drive_media(i8272_t *fdc, int drive, bool two_sided,
+                           bool write_protected, uint8_t sector_size_code);
+/* Drive TC high for the current DMA byte. The board schematic generates this
+   from the Z80 DMA end-of-block pulse while BUSACK is asserted. */
+void i8272_terminal_count(i8272_t *fdc);
+bool i8272_drq(const i8272_t *fdc);
 /* Schedule the controller's reset-complete interrupt response. */
 void i8272_schedule_reset_irq(i8272_t *fdc, uint32_t delay_ticks);
 /* Read Main Status Register (port 0xF0) */
@@ -300,26 +332,47 @@ void i8272_write_data(i8272_t *fdc, uint8_t data);
 */
 static uint8_t _i8272_cmd_length(uint8_t cmd_code) {
     switch (cmd_code) {
+        case I8272_CMD_READ_TRACK:      return 9;
         case I8272_CMD_SPECIFY:         return 3;   /* cmd + 2 params */
         case I8272_CMD_SENSE_DRIVE:     return 2;   /* cmd + 1 param */
         case I8272_CMD_RECALIBRATE:     return 2;   /* cmd + 1 param */
         case I8272_CMD_SENSE_INT:       return 1;   /* cmd only */
         case I8272_CMD_READ_DATA:       return 9;   /* cmd + 8 params */
         case I8272_CMD_WRITE_DATA:      return 9;   /* cmd + 8 params */
+        case I8272_CMD_WRITE_DELETED:   return 9;
+        case I8272_CMD_READ_DELETED:    return 9;
         case I8272_CMD_READ_ID:         return 2;   /* cmd + 1 param */
         case I8272_CMD_FORMAT_TRACK:    return 6;   /* cmd + 5 params */
         case I8272_CMD_SEEK:            return 3;   /* cmd + 2 params */
+        case I8272_CMD_SCAN_EQUAL:       return 9;
+        case I8272_CMD_SCAN_LOW_EQUAL:   return 9;
+        case I8272_CMD_SCAN_HIGH_EQUAL:  return 9;
         default:                        return 1;   /* invalid: just the byte */
     }
 }
 
 static uint16_t _i8272_sector_size(uint8_t n) {
-    uint16_t sector_size = (n == 0) ? 128 : (128 << n);
-    if (sector_size > I8272_SECTOR_SIZE) {
-        sector_size = I8272_SECTOR_SIZE;
-    }
-    return sector_size;
+    if (n > 6)
+        n = 6;
+    return (uint16_t)(128U << n);
 }
+
+static uint16_t _i8272_transfer_size(uint8_t n, uint8_t dtl) {
+    /* For N=0 the 8272 uses DTL only when it is less than 128. */
+    if (n == 0 && dtl < 128)
+        return dtl;
+    return _i8272_sector_size(n);
+}
+
+enum {
+    _I8272_XFER_NONE = 0,
+    _I8272_XFER_READ,
+    _I8272_XFER_WRITE,
+    _I8272_XFER_READ_TRACK,
+    _I8272_XFER_SCAN_EQUAL,
+    _I8272_XFER_SCAN_LOW_EQUAL,
+    _I8272_XFER_SCAN_HIGH_EQUAL,
+};
 
 /*
     _i8272_cmd_name (for debug, not used at runtime but kept for reference)
@@ -360,6 +413,28 @@ void i8272_set_drive_motor(i8272_t *fdc, int drive, bool on) {
     CHIPS_ASSERT(fdc);
     CHIPS_ASSERT((drive >= 0) && (drive < I8272_MAX_DRIVES));
     fdc->drive[drive].motor = on;
+}
+
+void i8272_set_drive_media(i8272_t *fdc, int drive, bool two_sided,
+                           bool write_protected, uint8_t sector_size_code) {
+    CHIPS_ASSERT(fdc);
+    CHIPS_ASSERT((drive >= 0) && (drive < I8272_MAX_DRIVES));
+    fdc->drive[drive].two_sided = two_sided;
+    fdc->drive[drive].write_protected = write_protected;
+    fdc->drive[drive].sector_size_code = sector_size_code > 6
+        ? 6 : sector_size_code;
+}
+
+void i8272_terminal_count(i8272_t *fdc) {
+    CHIPS_ASSERT(fdc);
+    if (fdc->phase == I8272_PHASE_EXECUTE)
+        fdc->terminal_count = true;
+}
+
+bool i8272_drq(const i8272_t *fdc) {
+    CHIPS_ASSERT(fdc);
+    return fdc->phase == I8272_PHASE_EXECUTE && !fdc->ndma &&
+           fdc->data_idx < fdc->data_len;
 }
 
 void i8272_schedule_reset_irq(i8272_t *fdc, uint32_t delay_ticks) {
@@ -467,6 +542,8 @@ static void _i8272_exec_recalibrate(i8272_t *fdc) {
     fdc->drive[us].track = 0;
     fdc->st0 = I8272_ST0_SE | (us & 0x03);
     _i8272_enter_idle(fdc);
+    fdc->seek_busy_mask = (uint8_t)(1U << us);
+    fdc->msr |= fdc->seek_busy_mask;
     /*
         Delay completion slightly so the ROM reaches its EI/HALT wait point
         before INTRQ appears.
@@ -519,6 +596,15 @@ static void _i8272_exec_sense_drive(i8272_t *fdc) {
     if (fdc->drive[us].ready) {
         st3 |= 0x20;  /* RDY bit */
     }
+    if (fdc->drive[us].two_sided) {
+        st3 |= 0x08;  /* TS bit */
+    }
+    if (fdc->drive[us].write_protected) {
+        st3 |= 0x40;  /* WP bit */
+    }
+    if (fdc->drive[us].fault) {
+        st3 |= 0x80;  /* FT bit */
+    }
     fdc->result[0] = st3;
     fdc->result_len = 1;
     _i8272_enter_result(fdc);
@@ -536,7 +622,108 @@ static void _i8272_exec_seek(i8272_t *fdc) {
     fdc->drive[us].track = ncn;
     fdc->st0 = I8272_ST0_SE | (us & 0x03);
     _i8272_enter_idle(fdc);
+    fdc->seek_busy_mask = (uint8_t)(1U << us);
+    fdc->msr |= fdc->seek_busy_mask;
     _i8272_schedule_irq(fdc, 64, true, false);
+}
+
+static void _i8272_set_execution_msr(i8272_t *fdc, bool fdc_to_host) {
+    fdc->msr = I8272_MSR_RQM | I8272_MSR_CB;
+    if (fdc_to_host)
+        fdc->msr |= I8272_MSR_DIO;
+    if (fdc->ndma)
+        fdc->msr |= I8272_MSR_NDM;
+}
+
+static void _i8272_finish_data_command(i8272_t *fdc) {
+    _i8272_set_rw_result(fdc, fdc->last_c, fdc->last_h,
+                         fdc->last_r, fdc->last_n);
+    fdc->terminal_count = false;
+    _i8272_enter_result(fdc);
+    _i8272_schedule_irq(fdc, 1024, false, false);
+}
+
+static bool _i8272_load_read_sector(i8272_t *fdc) {
+    const bool ok = fdc->read_sector && fdc->read_sector(
+        fdc->last_us, fdc->last_c, fdc->last_h, fdc->last_r, fdc->last_n,
+        fdc->data_buf, fdc->user_data);
+    fdc->last_read_ok = ok;
+    if (ok) {
+        fdc->data_len = fdc->transfer_size;
+        fdc->data_idx = 0;
+        return true;
+    }
+    fdc->st0 = I8272_ST0_IC_AT |
+               (uint8_t)((fdc->last_h << 2) | fdc->last_us);
+    fdc->st1 = I8272_ST1_ND | I8272_ST1_MA;
+    fdc->st2 = 0;
+    fdc->data_len = 0;
+    fdc->data_idx = 0;
+    _i8272_finish_data_command(fdc);
+    return false;
+}
+
+static void _i8272_read_sector_complete(i8272_t *fdc) {
+    if (fdc->terminal_count) {
+        /* On the Partner, DMA EOB reaches TC through the BUSACK/INT1 glue
+           after the final DACK. If that byte is EOT the real ROM observes
+           ST1.EN while ST0 still reports normal completion. */
+        if (fdc->last_r >= fdc->transfer_eot)
+            fdc->st1 |= I8272_ST1_EN;
+        _i8272_finish_data_command(fdc);
+        return;
+    }
+    if (fdc->last_r < fdc->transfer_eot) {
+        ++fdc->last_r;
+        (void)_i8272_load_read_sector(fdc);
+        return;
+    }
+    if (fdc->transfer_kind == _I8272_XFER_READ_TRACK) {
+        _i8272_finish_data_command(fdc);
+        return;
+    }
+    /* Intel's programming note is explicit: EOT does not terminate a normal
+       DMA transfer. Without TC the controller tries beyond EOT and reports
+       end of cylinder. */
+    fdc->st0 = I8272_ST0_IC_AT |
+               (uint8_t)((fdc->last_h << 2) | fdc->last_us);
+    fdc->st1 |= I8272_ST1_EN;
+    _i8272_finish_data_command(fdc);
+}
+
+static void _i8272_write_sector_complete(i8272_t *fdc) {
+    bool ok = false;
+    if (fdc->write_sector) {
+        ok = fdc->write_sector(
+            fdc->last_us, fdc->last_c, fdc->last_h, fdc->last_r, fdc->last_n,
+            fdc->data_buf, fdc->user_data);
+    }
+    if (!ok) {
+        fdc->st0 = fdc->drive[fdc->last_us].ready
+            ? (uint8_t)(I8272_ST0_IC_AT | (fdc->last_h << 2) | fdc->last_us)
+            : (uint8_t)(I8272_ST0_IC_AT | I8272_ST0_NR |
+                        (fdc->last_h << 2) | fdc->last_us);
+        fdc->st1 = fdc->drive[fdc->last_us].write_protected
+            ? I8272_ST1_NW : I8272_ST1_ND;
+        _i8272_finish_data_command(fdc);
+        return;
+    }
+    if (fdc->terminal_count) {
+        if (fdc->last_r >= fdc->transfer_eot)
+            fdc->st1 |= I8272_ST1_EN;
+        _i8272_finish_data_command(fdc);
+        return;
+    }
+    if (fdc->last_r < fdc->transfer_eot) {
+        ++fdc->last_r;
+        fdc->data_idx = 0;
+        fdc->data_len = fdc->transfer_size;
+        return;
+    }
+    fdc->st0 = I8272_ST0_IC_AT |
+               (uint8_t)((fdc->last_h << 2) | fdc->last_us);
+    fdc->st1 |= I8272_ST1_EN;
+    _i8272_finish_data_command(fdc);
 }
 
 /*
@@ -554,6 +741,7 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
     uint8_t r  = fdc->cmd[4];  /* sector */
     uint8_t n  = fdc->cmd[5];  /* sector size code (0=128, 1=256, 2=512, 3=1024) */
     uint8_t eot = fdc->cmd[6]; /* end-of-track sector */
+    uint8_t dtl = fdc->cmd[8];
     fdc->last_us = us;
     fdc->last_c = c;
     fdc->last_h = h;
@@ -570,27 +758,18 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
     fdc->st1 = 0;
     fdc->st2 = 0;
 
-    /* Calculate sector size */
-    const uint16_t sector_size = _i8272_sector_size(n);
+    fdc->transfer_size = _i8272_transfer_size(n, dtl);
+    fdc->transfer_eot = eot;
+    fdc->transfer_dtl = dtl;
+    fdc->terminal_count = false;
+    fdc->transfer_kind = (fdc->cmd_code == I8272_CMD_READ_TRACK)
+        ? _I8272_XFER_READ_TRACK : _I8272_XFER_READ;
 
     const bool drive_ready = fdc->drive[us].ready;
-    bool ok = false;
-    if (drive_ready && fdc->read_sector) {
-        ok = fdc->read_sector(us, c, h, r, n, fdc->data_buf, fdc->user_data);
-    }
+    bool ok = drive_ready && fdc->read_sector != NULL;
     if (ok) {
-        /* Success */
-        fdc->data_len = sector_size;
-        fdc->data_idx = 0;
         fdc->st0 |= I8272_ST0_IC_NT;
-        /*
-            uPD765/i8272 sets ST1.EN when the transfer reaches EOT.
-            GDP Partner ROM uses one-sector READ DATA with EOT=R and expects
-            ST1=0x80 as success marker.
-        */
-        if (r == eot) {
-            fdc->st1 |= I8272_ST1_EN;
-        }
+        ok = _i8272_load_read_sector(fdc);
     } else if (!drive_ready) {
         /*
             No medium is a drive-status failure, not a sector lookup failure.
@@ -610,18 +789,16 @@ static void _i8272_exec_read_data(i8272_t *fdc) {
     }
     fdc->last_read_ok = ok;
 
-    /* Prepare result phase */
-    _i8272_set_rw_result(fdc, c, h, r, n);
-
     if (ok && fdc->data_len > 0) {
         /* Enter transfer phase immediately: data is sourced by DMA pacing. */
         fdc->phase = I8272_PHASE_EXECUTE;
-        fdc->msr = I8272_MSR_RQM | I8272_MSR_DIO | I8272_MSR_EXM | I8272_MSR_CB;
+        _i8272_set_execution_msr(fdc, true);
     } else {
         /*
             Command failed before data phase: expose result immediately and
             assert IRQ so firmware can consume ST0/ST1/ST2.
         */
+        _i8272_set_rw_result(fdc, c, h, r, n);
         _i8272_enter_result(fdc);
         /*
             Keep RESULT visible immediately, but delay INTRQ slightly so ROM
@@ -647,6 +824,7 @@ static void _i8272_exec_write_data(i8272_t *fdc) {
     const uint8_t r  = fdc->cmd[4];
     const uint8_t n  = fdc->cmd[5];
     const uint8_t eot = fdc->cmd[6];
+    const uint8_t dtl = fdc->cmd[8];
     fdc->last_us = us;
     fdc->last_c = c;
     fdc->last_h = h;
@@ -659,20 +837,22 @@ static void _i8272_exec_write_data(i8272_t *fdc) {
     fdc->st2 = 0;
     fdc->data_len = 0;
     fdc->data_idx = 0;
+    fdc->transfer_size = _i8272_transfer_size(n, dtl);
+    fdc->transfer_eot = eot;
+    fdc->transfer_dtl = dtl;
+    fdc->terminal_count = false;
+    fdc->transfer_kind = _I8272_XFER_WRITE;
 
     if (!fdc->drive[us].ready) {
         fdc->st0 = I8272_ST0_IC_ATRDY;
         fdc->st1 = I8272_ST1_NW;
-    } else if (!fdc->write_sector) {
+    } else if (fdc->drive[us].write_protected || !fdc->write_sector) {
         fdc->st0 = I8272_ST0_IC_AT;
         fdc->st1 = I8272_ST1_NW;
     } else {
-        fdc->data_len = _i8272_sector_size(n);
+        fdc->data_len = fdc->transfer_size;
         fdc->data_idx = 0;
         fdc->st0 = I8272_ST0_IC_NT;
-        if (r == eot) {
-            fdc->st1 |= I8272_ST1_EN;
-        }
     }
 
     _i8272_set_rw_result(fdc, c, h, r, n);
@@ -680,10 +860,83 @@ static void _i8272_exec_write_data(i8272_t *fdc) {
     if (fdc->data_len > 0) {
         /* Enter data-receive phase: host/DMA pushes bytes into the FDC. */
         fdc->phase = I8272_PHASE_EXECUTE;
-        fdc->msr = I8272_MSR_RQM | I8272_MSR_EXM | I8272_MSR_CB;
+        _i8272_set_execution_msr(fdc, false);
     } else {
         _i8272_enter_result(fdc);
         _i8272_schedule_irq(fdc, 1024, false, false);
+    }
+}
+
+static bool _i8272_scan_hit(const i8272_t *fdc) {
+    switch (fdc->transfer_kind) {
+        case _I8272_XFER_SCAN_EQUAL:
+            return fdc->scan_compare == 0;
+        case _I8272_XFER_SCAN_LOW_EQUAL:
+            return fdc->scan_compare <= 0;
+        case _I8272_XFER_SCAN_HIGH_EQUAL:
+            return fdc->scan_compare >= 0;
+        default:
+            return false;
+    }
+}
+
+static void _i8272_scan_sector_complete(i8272_t *fdc) {
+    if (_i8272_scan_hit(fdc)) {
+        fdc->st2 = I8272_ST2_SH;
+        _i8272_finish_data_command(fdc);
+        return;
+    }
+    if (fdc->terminal_count) {
+        fdc->st2 = I8272_ST2_SN;
+        _i8272_finish_data_command(fdc);
+        return;
+    }
+
+    const uint16_t next = (uint16_t)fdc->last_r + fdc->scan_step;
+    if (next <= fdc->transfer_eot) {
+        fdc->last_r = (uint8_t)next;
+        fdc->scan_compare = 0;
+        (void)_i8272_load_read_sector(fdc);
+        return;
+    }
+    fdc->st2 = I8272_ST2_SN;
+    _i8272_finish_data_command(fdc);
+}
+
+static void _i8272_exec_scan(i8272_t *fdc) {
+    const uint8_t us = fdc->cmd[1] & 0x03;
+    const uint8_t hd = (fdc->cmd[1] >> 2) & 0x01;
+    fdc->last_us = us;
+    fdc->last_c = fdc->cmd[2];
+    fdc->last_h = fdc->cmd[3];
+    fdc->last_r = fdc->cmd[4];
+    fdc->last_n = fdc->cmd[5];
+    fdc->transfer_eot = fdc->cmd[6];
+    fdc->transfer_dtl = fdc->cmd[8];
+    /* Scan byte 8 is STP, not DTL. N=0 therefore still means 128 bytes. */
+    fdc->transfer_size = _i8272_sector_size(fdc->last_n);
+    fdc->scan_step = fdc->cmd[8] == 2 ? 2 : 1;
+    fdc->scan_compare = 0;
+    fdc->terminal_count = false;
+    fdc->st0 = 0;
+    fdc->st1 = 0;
+    fdc->st2 = 0;
+    if (fdc->cmd_code == I8272_CMD_SCAN_EQUAL)
+        fdc->transfer_kind = _I8272_XFER_SCAN_EQUAL;
+    else if (fdc->cmd_code == I8272_CMD_SCAN_LOW_EQUAL)
+        fdc->transfer_kind = _I8272_XFER_SCAN_LOW_EQUAL;
+    else
+        fdc->transfer_kind = _I8272_XFER_SCAN_HIGH_EQUAL;
+
+    if (!fdc->drive[us].ready) {
+        fdc->st0 = I8272_ST0_IC_AT | I8272_ST0_NR |
+                   (uint8_t)((hd << 2) | us);
+        _i8272_finish_data_command(fdc);
+        return;
+    }
+    if (_i8272_load_read_sector(fdc)) {
+        fdc->phase = I8272_PHASE_EXECUTE;
+        _i8272_set_execution_msr(fdc, false);
     }
 }
 
@@ -743,7 +996,7 @@ static void _i8272_exec_format_track(i8272_t *fdc) {
     fdc->data_len = exec_bytes;
     fdc->data_idx = 0;
     fdc->phase = I8272_PHASE_EXECUTE;
-    fdc->msr = I8272_MSR_RQM | I8272_MSR_EXM | I8272_MSR_CB;
+    _i8272_set_execution_msr(fdc, false);
 }
 
 /*
@@ -756,6 +1009,18 @@ static void _i8272_exec_read_id(i8272_t *fdc) {
     uint8_t us = fdc->cmd[1] & 0x03;
     uint8_t hd = (fdc->cmd[1] >> 2) & 0x01;
 
+    if (!fdc->drive[us].ready) {
+        fdc->st0 = I8272_ST0_IC_AT | I8272_ST0_NR |
+                   (uint8_t)(hd << 2) | (us & 0x03);
+        fdc->st1 = 0;
+        fdc->st2 = 0;
+        _i8272_set_rw_result(fdc, fdc->drive[us].track, hd, 0,
+                             fdc->drive[us].sector_size_code);
+        _i8272_enter_result(fdc);
+        _i8272_schedule_irq(fdc, 1024, false, false);
+        return;
+    }
+
     fdc->st0 = I8272_ST0_IC_NT | (hd << 2) | (us & 0x03);
     fdc->st1 = 0;
     fdc->st2 = 0;
@@ -766,10 +1031,11 @@ static void _i8272_exec_read_id(i8272_t *fdc) {
     fdc->result[3] = fdc->drive[us].track;
     fdc->result[4] = hd;
     fdc->result[5] = 1;    /* sector 1 */
-    fdc->result[6] = 2;    /* 512 bytes */
+    fdc->result[6] = fdc->drive[us].sector_size_code;
     fdc->result_len = 7;
 
     _i8272_enter_result(fdc);
+    _i8272_schedule_irq(fdc, 1024, false, false);
 }
 
 /*
@@ -794,11 +1060,17 @@ static void _i8272_execute_command(i8272_t *fdc) {
         case I8272_CMD_SENSE_DRIVE:     _i8272_exec_sense_drive(fdc); break;
         case I8272_CMD_RECALIBRATE:     _i8272_exec_recalibrate(fdc); break;
         case I8272_CMD_SENSE_INT:       _i8272_exec_sense_int(fdc); break;
-        case I8272_CMD_READ_DATA:       _i8272_exec_read_data(fdc); break;
-        case I8272_CMD_WRITE_DATA:      _i8272_exec_write_data(fdc); break;
+        case I8272_CMD_READ_TRACK:
+        case I8272_CMD_READ_DATA:
+        case I8272_CMD_READ_DELETED:    _i8272_exec_read_data(fdc); break;
+        case I8272_CMD_WRITE_DATA:
+        case I8272_CMD_WRITE_DELETED:   _i8272_exec_write_data(fdc); break;
         case I8272_CMD_FORMAT_TRACK:    _i8272_exec_format_track(fdc); break;
         case I8272_CMD_READ_ID:         _i8272_exec_read_id(fdc); break;
         case I8272_CMD_SEEK:            _i8272_exec_seek(fdc); break;
+        case I8272_CMD_SCAN_EQUAL:
+        case I8272_CMD_SCAN_LOW_EQUAL:
+        case I8272_CMD_SCAN_HIGH_EQUAL: _i8272_exec_scan(fdc); break;
         default:                        _i8272_exec_invalid(fdc); break;
     }
 }
@@ -846,10 +1118,18 @@ void i8272_reset(i8272_t *fdc) {
     fdc->irq_delay = 0;
     fdc->irq_sets_sense = false;
     fdc->irq_enters_result = false;
+    fdc->seek_busy_mask = 0;
     fdc->exec_delay = 0;
     fdc->exec_pending = false;
     fdc->data_len = 0;
     fdc->data_idx = 0;
+    fdc->transfer_size = 0;
+    fdc->transfer_eot = 0;
+    fdc->transfer_dtl = 0;
+    fdc->transfer_kind = _I8272_XFER_NONE;
+    fdc->scan_step = 1;
+    fdc->scan_compare = 0;
+    fdc->terminal_count = false;
     fdc->last_us = 0;
     fdc->last_c = 0;
     fdc->last_h = 0;
@@ -862,6 +1142,10 @@ void i8272_reset(i8272_t *fdc) {
         fdc->drive[i].head = 0;
         fdc->drive[i].motor = false;
         fdc->drive[i].ready = false;
+        fdc->drive[i].two_sided = false;
+        fdc->drive[i].write_protected = false;
+        fdc->drive[i].fault = false;
+        fdc->drive[i].sector_size_code = 1;
     }
 
     /* RQM=1, ready for commands */
@@ -882,9 +1166,10 @@ void i8272_tick(i8272_t *fdc) {
         if (fdc->exec_delay == 0) {
             fdc->exec_pending = false;
             fdc->phase = I8272_PHASE_EXECUTE;
-            fdc->msr = I8272_MSR_RQM | I8272_MSR_EXM | I8272_MSR_CB;
-            if ((fdc->cmd_code != I8272_CMD_WRITE_DATA) &&
-                (fdc->cmd_code != I8272_CMD_FORMAT_TRACK)) {
+            _i8272_set_execution_msr(fdc, false);
+            if ((fdc->cmd_code == I8272_CMD_READ_DATA) ||
+                (fdc->cmd_code == I8272_CMD_READ_DELETED) ||
+                (fdc->cmd_code == I8272_CMD_READ_TRACK)) {
                 fdc->msr |= I8272_MSR_DIO;
             }
         }
@@ -897,6 +1182,8 @@ void i8272_tick(i8272_t *fdc) {
     }
     if (fdc->irq_sets_sense) {
         fdc->int_pending = true;
+        fdc->msr &= (uint8_t)~fdc->seek_busy_mask;
+        fdc->seek_busy_mask = 0;
     }
     if (fdc->irq_enters_result) {
         _i8272_enter_result(fdc);
@@ -958,22 +1245,14 @@ uint8_t i8272_read_data(i8272_t *fdc) {
     CHIPS_ASSERT(fdc);
 
     if ((fdc->phase == I8272_PHASE_EXECUTE) &&
-        (fdc->cmd_code == I8272_CMD_READ_DATA)) {
+        ((fdc->cmd_code == I8272_CMD_READ_DATA) ||
+         (fdc->cmd_code == I8272_CMD_READ_DELETED) ||
+         (fdc->cmd_code == I8272_CMD_READ_TRACK))) {
         /* Execution phase: return sector data bytes */
         if (fdc->data_idx < fdc->data_len) {
             uint8_t data = fdc->data_buf[fdc->data_idx++];
-            if (fdc->data_idx >= fdc->data_len) {
-                /*
-                    End-of-transfer: raise IRQ and enter RESULT phase so CPU
-                    can fetch ST0..N response bytes.
-                */
-                _i8272_enter_result(fdc);
-                /*
-                    Schedule (don't instant-fire) completion IRQ to avoid
-                    racing ahead of firmware's HALT wait point.
-                */
-                _i8272_schedule_irq(fdc, 1024, false, false);
-            }
+            if (fdc->terminal_count || fdc->data_idx >= fdc->data_len)
+                _i8272_read_sector_complete(fdc);
             return data;
         }
     }
@@ -997,30 +1276,38 @@ void i8272_write_data(i8272_t *fdc, uint8_t data) {
 
     if ((fdc->phase == I8272_PHASE_EXECUTE) &&
         ((fdc->cmd_code == I8272_CMD_WRITE_DATA) ||
-         (fdc->cmd_code == I8272_CMD_FORMAT_TRACK))) {
+         (fdc->cmd_code == I8272_CMD_WRITE_DELETED))) {
+        if (fdc->data_idx < fdc->data_len) {
+            fdc->data_buf[fdc->data_idx++] = data;
+            if (fdc->terminal_count && fdc->data_idx < fdc->data_len) {
+                fdc->st0 = I8272_ST0_IC_AT |
+                           (uint8_t)((fdc->last_h << 2) | fdc->last_us);
+                fdc->st1 = I8272_ST1_OR;
+                _i8272_finish_data_command(fdc);
+            } else if (fdc->data_idx >= fdc->data_len) {
+                _i8272_write_sector_complete(fdc);
+            }
+        }
+    }
+    else if ((fdc->phase == I8272_PHASE_EXECUTE) &&
+             ((fdc->cmd_code == I8272_CMD_SCAN_EQUAL) ||
+              (fdc->cmd_code == I8272_CMD_SCAN_LOW_EQUAL) ||
+              (fdc->cmd_code == I8272_CMD_SCAN_HIGH_EQUAL))) {
+        if (fdc->data_idx < fdc->data_len) {
+            const uint8_t disk_data = fdc->data_buf[fdc->data_idx++];
+            if (fdc->scan_compare == 0 && disk_data != data)
+                fdc->scan_compare = disk_data < data ? -1 : 1;
+            if (fdc->terminal_count || fdc->data_idx >= fdc->data_len)
+                _i8272_scan_sector_complete(fdc);
+        }
+    }
+    else if ((fdc->phase == I8272_PHASE_EXECUTE) &&
+             (fdc->cmd_code == I8272_CMD_FORMAT_TRACK)) {
         if (fdc->data_idx < fdc->data_len) {
             fdc->data_buf[fdc->data_idx++] = data;
             if (fdc->data_idx >= fdc->data_len) {
-                bool ok = false;
-                if (fdc->cmd_code == I8272_CMD_WRITE_DATA) {
-                    ok = false;
-                    if (fdc->write_sector) {
-                        ok = fdc->write_sector(
-                            fdc->last_us, fdc->last_c, fdc->last_h, fdc->last_r, fdc->last_n,
-                            fdc->data_buf, fdc->user_data);
-                    }
-                    if (!ok) {
-                        fdc->st0 = fdc->drive[fdc->last_us].ready ?
-                            I8272_ST0_IC_AT : I8272_ST0_IC_ATRDY;
-                        fdc->st1 &= (uint8_t)~I8272_ST1_EN;
-                        fdc->st1 |= I8272_ST1_NW;
-                        _i8272_set_rw_result(
-                            fdc, fdc->last_c, fdc->last_h, fdc->last_r, fdc->last_n);
-                    }
-                } else {
-                    ok = _i8272_finalize_format_track(
-                        fdc, fdc->last_us, fdc->cmd[3], fdc->cmd[5]);
-                }
+                (void)_i8272_finalize_format_track(
+                    fdc, fdc->last_us, fdc->cmd[3], fdc->cmd[5]);
                 _i8272_enter_result(fdc);
                 _i8272_schedule_irq(fdc, 1024, false, false);
             }

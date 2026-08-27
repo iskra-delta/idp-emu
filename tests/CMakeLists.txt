@@ -12,6 +12,10 @@ add_executable(test_z80dma test_z80dma.cpp)
 target_link_libraries(test_z80dma PRIVATE chipsex)
 add_test(NAME z80dma_unit COMMAND test_z80dma)
 
+add_executable(test_z80ctc test_z80ctc.cpp)
+target_link_libraries(test_z80ctc PRIVATE chipsex)
+add_test(NAME z80ctc_unit COMMAND test_z80ctc)
+
 add_executable(test_squid_link_server test_squid_link_server.cpp)
 target_link_libraries(test_squid_link_server PRIVATE idp_internal_squid)
 add_test(NAME squid_link_server_unit COMMAND test_squid_link_server)
@@ -131,6 +135,10 @@ target_link_libraries(test_partner_crt_hdd_boot PRIVATE
     chipsex SDL2::SDL2 OpenGL::GL)
 
 add_test(NAME partner_crt_hdd_boot_integration COMMAND test_partner_crt_hdd_boot)
+set_tests_properties(partner_crt_hdd_boot_integration PROPERTIES
+    # Start five seconds before a minute boundary. With JJ12 incorrectly
+    # forced closed this edge diverts CP/M through 0066h before the prompt.
+    ENVIRONMENT "IDP_FIXED_RTC=1700000035")
 
 add_executable(test_z80pio
     test_z80pio.cpp
@@ -206,6 +214,36 @@ target_link_libraries(test_partner_gdp_hdd_boot PRIVATE
     chipsex SDL2::SDL2 OpenGL::GL)
 
 add_test(NAME partner_gdp_hdd_boot_integration COMMAND test_partner_gdp_hdd_boot)
+
+if(UNIX)
+    add_executable(test_partner_paket_flow
+        test_partner_paket_flow.cpp
+        ../src/chips_impl.cpp
+        ../src/partner.cpp
+        ../src/partner_crt.cpp
+        ../src/partner_gdp.cpp
+        ../src/partner_gdp_keyboard.cpp
+        ../src/terminal/terminal_factory.cpp
+        ../src/terminal/vt52_terminal.cpp
+        ../src/gui/display.cpp
+    )
+    target_include_directories(test_partner_paket_flow PRIVATE
+        ${CMAKE_SOURCE_DIR}/src)
+    target_compile_definitions(test_partner_paket_flow PRIVATE
+        GL_GLEXT_PROTOTYPES
+        IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
+    )
+    target_link_libraries(test_partner_paket_flow PRIVATE
+        chipsex SDL2::SDL2 OpenGL::GL idp_internal_squid)
+    add_test(NAME partner_p_paket_flow_integration
+        COMMAND test_partner_paket_flow)
+    set_tests_properties(partner_p_paket_flow_integration PROPERTIES
+        ENVIRONMENT "IDP_TEST_PAKET_MODEL=p")
+    add_test(NAME partner_g_paket_flow_integration
+        COMMAND test_partner_paket_flow)
+    set_tests_properties(partner_g_paket_flow_integration PROPERTIES
+        ENVIRONMENT "IDP_TEST_PAKET_MODEL=g")
+endif()
 
 add_executable(test_partner_external_im2
     test_partner_external_im2.cpp

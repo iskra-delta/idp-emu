@@ -18,8 +18,10 @@ public:
     internal_squid_server &operator=(const internal_squid_server &) = delete;
 
     void reset_link();
-    void receive_serial_byte(std::uint8_t byte);
-    void service(std::deque<std::uint8_t> &serial_receive_queue);
+    bool can_receive_serial_byte() const;
+    bool receive_serial_byte(std::uint8_t byte);
+    void service(std::deque<std::uint8_t> &serial_receive_queue,
+                 bool guest_ready);
 
     bool link_up() const;
     bool busy() const;

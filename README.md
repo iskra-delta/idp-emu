@@ -50,9 +50,9 @@ make
 Equivalent raw CMake commands:
 
 ```bash
-cmake -S . -B build
-cmake --build build
-cmake --install build --prefix "$PWD/bin"
+cmake -S . -B tests/dump/build
+cmake --build tests/dump/build
+cmake --install tests/dump/build --prefix "$PWD/bin"
 ```
 
 ## Clean
@@ -224,9 +224,10 @@ prompt, running `PAKET` therefore lists the current Partner software catalog
 without an external server, proxy, serial bridge, or helper process. In
 **Devices**, the same internal service can be moved to either of the other free
 SIO channels; the TCP Bridge remains available as a separate attachment type.
-The bundled client detects the Partner display board at runtime and uses the
-standard CP/M console with ANSI terminal controls on both models.
-Downloads refresh their byte counter after every 128-byte CP/M record.
+The bundled client detects the Partner display board at runtime and uses only
+plain text through the standard CP/M console on both models. It does not clear
+the screen, change text attributes, draw decorative rules, or animate a
+progress line. Catalog and search results use a compact aligned ID/name table.
 
 The Windows package keeps `partner.exe`, `idp-mcp.exe`, and both batch runners
 together in the application folder under Program Files. Third-party libraries

@@ -198,7 +198,7 @@ Reusable tests currently present:
 Run:
 
 ```bash
-cmake -S . -B build
+cmake -S . -B tests/dump/build
 cmake --build build -j4
 cd build && ctest --output-on-failure
 ```

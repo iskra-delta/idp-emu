@@ -54,20 +54,20 @@ jobs:
           runVcpkgInstall: false
       - name: Configure
         run: >-
-          cmake -S . -B build -G Ninja
+          cmake -S . -B tests/dump/build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DIDP_STATIC_RUNTIME=ON
           -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake
           -DVCPKG_TARGET_TRIPLET=x64-linux
       - name: Verify compiled version matches tag
-        run: test "$(tr -d '\r\n' < build/idp-version.txt)" = "${{ steps.version.outputs.value }}"
+        run: test "$(tr -d '\r\n' < tests/dump/build/idp-version.txt)" = "${{ steps.version.outputs.value }}"
       - name: Build and test
         run: |
-          cmake --build build --parallel 2
-          ctest --test-dir build --output-on-failure
+          cmake --build tests/dump/build --parallel 2
+          ctest --test-dir tests/dump/build --output-on-failure
       - name: Stage and verify partnerp/partnerg tree
         run: |
-          cmake --install build --prefix "$PWD/dist/tree"
+          cmake --install tests/dump/build --prefix "$PWD/dist/tree"
           python3 scripts/package/verify_bundle.py \
             --root dist/tree --platform linux --version "${{ steps.version.outputs.value }}"
       - name: Build Ubuntu and portable packages
@@ -122,20 +122,20 @@ jobs:
           runVcpkgInstall: false
       - name: Configure
         run: >-
-          cmake -S . -B build -G Ninja
+          cmake -S . -B tests/dump/build -G Ninja
           -DCMAKE_BUILD_TYPE=Release
           -DCMAKE_TOOLCHAIN_FILE=${VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake
           -DVCPKG_TARGET_TRIPLET=${{ matrix.triplet }}
           -DCMAKE_OSX_DEPLOYMENT_TARGET=12.0
       - name: Verify compiled version matches tag
-        run: test "$(tr -d '\r\n' < build/idp-version.txt)" = "${{ steps.version.outputs.value }}"
+        run: test "$(tr -d '\r\n' < tests/dump/build/idp-version.txt)" = "${{ steps.version.outputs.value }}"
       - name: Build and test
         run: |
-          cmake --build build --parallel 2
-          ctest --test-dir build --output-on-failure
+          cmake --build tests/dump/build --parallel 2
+          ctest --test-dir tests/dump/build --output-on-failure
       - name: Stage and verify partnerp/partnerg tree
         run: |
-          cmake --install build --prefix "$PWD/dist/tree"
+          cmake --install tests/dump/build --prefix "$PWD/dist/tree"
           python3 scripts/package/verify_bundle.py \
             --root dist/tree --platform macos --version "${{ steps.version.outputs.value }}"
       - name: Build macOS and portable packages
@@ -192,7 +192,7 @@ jobs:
           $toolchain = Join-Path $env:VCPKG_ROOT "scripts/buildsystems/vcpkg.cmake"
           $cmakeArgs = @(
             "-S", ".",
-            "-B", "build",
+            "-B", "tests/dump/build",
             "-G", "Ninja",
             "-DCMAKE_BUILD_TYPE=Release",
             "-DIDP_STATIC_RUNTIME=ON",
@@ -205,20 +205,20 @@ jobs:
         env:
           IDP_RELEASE_VERSION: ${{ steps.version.outputs.value }}
         run: |
-          $compiledVersion = (Get-Content build/idp-version.txt -Raw).Trim()
+          $compiledVersion = (Get-Content tests/dump/build/idp-version.txt -Raw).Trim()
           if ($compiledVersion -ne $env:IDP_RELEASE_VERSION) {
             throw "Compiled version $compiledVersion does not match tag $env:IDP_RELEASE_VERSION"
           }
       - name: Build and test
         shell: pwsh
         run: |
-          cmake --build build --parallel 2
+          cmake --build tests/dump/build --parallel 2
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          ctest --test-dir build --output-on-failure
+          ctest --test-dir tests/dump/build --output-on-failure
       - name: Stage and verify partnerp/partnerg tree
         shell: pwsh
         run: |
-          cmake --install build --prefix "$PWD/dist/tree"
+          cmake --install tests/dump/build --prefix "$PWD/dist/tree"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           python scripts/package/verify_bundle.py `
             --root dist/tree --platform windows --version "${{ steps.version.outputs.value }}"

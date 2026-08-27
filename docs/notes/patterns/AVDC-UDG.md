@@ -50,7 +50,7 @@ across that line.
 | --- | --- | --- |
 | `34h` | write | character/data latch |
 | `35h` | write | attribute latch |
-| `36h` bit 4 | read | Partner `RESTRICT` access timing |
+| `36h` bits 7/4 | read | active-low GDP pixel latch / Partner AVDC `RESTRICT` timing |
 | `38h` | write | selected AVDC register data |
 | `39h` bit 5 | read | AVDC ready (`RDFLG`) |
 | `39h` | write | AVDC command |
@@ -70,7 +70,8 @@ the board's safe access interval. Also wait for port `39h` bit 5 before issuing
 the next memory operation.
 
 Port `36h` is direction-sensitive on the Partner GDP board: reading gets the
-`RESTRICT` latch, while writing controls the GDP scroll latch.
+GDP pixel latch on D7 and `RESTRICT` on D4, while writing controls the GDP
+scroll latch. AVDC code must mask D4 as the example does.
 
 ## Complete Z80 CP/M example
 

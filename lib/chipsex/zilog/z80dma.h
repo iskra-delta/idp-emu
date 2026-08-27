@@ -40,16 +40,16 @@
     - Memory-to-memory, memory-to-I/O, I/O-to-memory transfers
     - Byte, continuous, and burst transfer modes
     - Auto-restart capability
-    - Search and match operations
     - Interrupt on end of block
     - Full BUSREQ/BUSACK handshake
     - Interrupt daisy chain protocol
 
     ## Not Implemented (yet):
 
-    - Ready signal timing (WAIT states)
-    - Precise cycle-by-cycle timing
-    - DMA request pins (RDY A/B)
+    - Search and search/transfer execution (the programming registers decode,
+      but the transfer engine currently implements sequential transfers)
+    - CE/WAIT cycle extension
+    - Half-clock early bus-control termination
 
     ## Usage:
 
@@ -69,10 +69,13 @@
 
     pins = z80dma_write(&dma, 0x14);  // WR1: Port A is memory, increment
     pins = z80dma_write(&dma, 0x28);  // WR2: Port B is I/O, fixed address
+    pins = z80dma_write(&dma, 0x85);  // WR4: Byte mode, B low address follows
     pins = z80dma_write(&dma, 0x10);  // Port B address
-
-    pins = z80dma_write(&dma, 0xCF);  // WR4: Continuous mode, enable DMA
-    pins = z80dma_write(&dma, 0x87);  // WR6: Load, enable after block
+    pins = z80dma_write(&dma, 0x8A);  // WR5: RDY active high, CE only
+    pins = z80dma_write(&dma, 0xCF);  // WR6: Load addresses and byte counter
+    pins = z80dma_write(&dma, 0x05);  // WR0: Port A is the source
+    pins = z80dma_write(&dma, 0xCF);  // WR6: Reload after direction change
+    pins = z80dma_write(&dma, 0x87);  // WR6: Enable DMA
     ~~~
 
     On each system tick:
@@ -174,6 +177,7 @@ typedef enum {
     Z80DMA_STATE_READ,          // Driving source address/read strobe
     Z80DMA_STATE_READ_LATCH,    // Sampling source data after the bus responds
     Z80DMA_STATE_WRITE,         // Writing to destination
+    Z80DMA_STATE_WAIT_READY,    // Continuous mode owns bus while RDY is inactive
     Z80DMA_STATE_SEARCH,        // Searching/comparing data
     Z80DMA_STATE_VERIFY,        // Verify mode
 } z80dma_state_t;
@@ -216,12 +220,29 @@ typedef struct {
     bool search_mode;           // Search/match enabled
     bool auto_restart;          // Auto-restart on end of block
     bool interrupt_enable;      // Interrupt on end of block
+    bool interrupt_on_eob;      // WR4 interrupt condition
+    bool interrupt_on_ready;    // WR4 interrupt condition
+    bool ready_active_high;     // WR5 RDY polarity
+    bool force_ready;           // WR6 FORCE READY command
+    bool wait_enabled;          // WR5 CE/WAIT multiplex selection
+    bool stop_on_match;         // WR3 search control
+    bool status_affects_vector; // WR4 interrupt-vector option
+    bool enable_after_reti;     // WR6 command B7
 
     uint8_t data_latch;         // Data being transferred
-    uint8_t cmd_buffer[6];      // Multi-byte command buffer
-    uint8_t cmd_bytes_needed;   // Bytes still needed for current command
-    uint8_t cmd_bytes_received; // Bytes received so far
-    uint8_t compat_state;       // Boot-ROM compatibility parser state
+    uint8_t cmd_buffer[8];      // Associated-register queue
+    uint8_t cmd_bytes_needed;   // Queue length
+    uint8_t cmd_bytes_received; // Queue cursor
+    uint8_t compat_state;       // Kept for source compatibility; always zero
+    uint16_t programmed_length; // WR0 N-1 block length
+    uint16_t byte_counter;      // RR1/RR2, increments after each read cycle
+    uint32_t bytes_remaining;   // 1..65536 after LOAD
+    uint8_t byte_gap_ticks;     // CPU clocks yielded after a byte-mode transfer
+    uint8_t read_mask;          // WR6 read-register selection
+    uint8_t read_index;
+    uint8_t read_count;
+    bool ready;                 // Last interpreted RDY level for RR0
+    bool operation_occurred;    // RR0 bit 0
 
     uint64_t pins;              // Last pin state
 } z80dma_t;
@@ -272,628 +293,432 @@ uint64_t z80dma_init(z80dma_t *dma)
 void z80dma_reset(z80dma_t *dma)
 {
     CHIPS_ASSERT(dma);
-
-    // Clear ports
-    memset(&dma->port_a, 0, sizeof(z80dma_port_t));
-    memset(&dma->port_b, 0, sizeof(z80dma_port_t));
-
-    // Clear registers
-    memset(dma->wr, 0, sizeof(dma->wr));
-    dma->status = 0;
-    dma->int_vector = 0;
-
-    // Reset state
+    memset(dma, 0, sizeof(*dma));
     dma->state = Z80DMA_STATE_IDLE;
     dma->mode = Z80DMA_MODE_BYTE;
-    dma->int_state = 0;
-    dma->enabled = false;
     dma->direction_ab = true;
-    dma->search_mode = false;
-    dma->auto_restart = false;
-    dma->interrupt_enable = false;
-
-    dma->cmd_bytes_needed = 0;
-    dma->cmd_bytes_received = 0;
-    dma->compat_state = 0;
+    /* Direct users historically presented RDY as an active-high virtual pin.
+       A programmed WR5 overrides this before the DMA can be enabled. */
+    dma->ready_active_high = true;
 }
 
-/* Decode WR0 - Base register */
+enum {
+    Z80DMA_ASSOC_A_ADDR_LO = 1,
+    Z80DMA_ASSOC_A_ADDR_HI,
+    Z80DMA_ASSOC_LENGTH_LO,
+    Z80DMA_ASSOC_LENGTH_HI,
+    Z80DMA_ASSOC_A_TIMING,
+    Z80DMA_ASSOC_B_TIMING,
+    Z80DMA_ASSOC_MASK,
+    Z80DMA_ASSOC_MATCH,
+    Z80DMA_ASSOC_B_ADDR_LO,
+    Z80DMA_ASSOC_B_ADDR_HI,
+    Z80DMA_ASSOC_INTERRUPT,
+    Z80DMA_ASSOC_PULSE,
+    Z80DMA_ASSOC_VECTOR,
+    Z80DMA_ASSOC_READ_MASK
+};
+
+static void _z80dma_disable(z80dma_t *dma)
+{
+    dma->enabled = false;
+    dma->status &= (uint8_t)~Z80DMA_STATUS_BUSY;
+    dma->state = Z80DMA_STATE_IDLE;
+    dma->byte_gap_ticks = 0;
+    dma->pins &= ~Z80DMA_BUSREQ;
+}
+
+static void _z80dma_queue(z80dma_t *dma, uint8_t assoc)
+{
+    CHIPS_ASSERT(dma->cmd_bytes_needed < sizeof(dma->cmd_buffer));
+    dma->cmd_buffer[dma->cmd_bytes_needed++] = assoc;
+}
+
+static void _z80dma_begin_queue(z80dma_t *dma)
+{
+    dma->cmd_bytes_needed = 0;
+    dma->cmd_bytes_received = 0;
+}
+
+static void _z80dma_mirror_length(z80dma_t *dma, uint32_t count)
+{
+    const uint16_t visible = (uint16_t)count;
+    dma->port_a.block_length = visible;
+    dma->port_b.block_length = visible;
+}
+
+static void _z80dma_update_start_length(z80dma_t *dma)
+{
+    const uint16_t count = (uint16_t)(dma->programmed_length + 1u);
+    dma->port_a.start_length = count;
+    dma->port_b.start_length = count;
+}
+
+static void _z80dma_load(z80dma_t *dma)
+{
+    dma->port_a.address = dma->port_a.start_address;
+    dma->port_b.address = dma->port_b.start_address;
+    dma->bytes_remaining = (uint32_t)dma->programmed_length + 1u;
+    dma->byte_counter = 0;
+    _z80dma_mirror_length(dma, dma->bytes_remaining);
+    dma->status &= (uint8_t)~(Z80DMA_STATUS_EOB | Z80DMA_STATUS_MATCH);
+    dma->force_ready = false;
+    dma->state = Z80DMA_STATE_IDLE;
+}
+
+static void _z80dma_decode_address_mode(z80dma_port_t *port, uint8_t data)
+{
+    const uint8_t mode = (uint8_t)((data >> 4) & 3u);
+    port->decrement = mode == 0;
+    port->increment = mode == 1;
+}
+
+static void _z80dma_associated_write(z80dma_t *dma, uint8_t assoc, uint8_t data)
+{
+    switch (assoc) {
+        case Z80DMA_ASSOC_A_ADDR_LO:
+            dma->port_a.start_address = (uint16_t)((dma->port_a.start_address & 0xFF00u) | data);
+            break;
+        case Z80DMA_ASSOC_A_ADDR_HI:
+            dma->port_a.start_address = (uint16_t)((dma->port_a.start_address & 0x00FFu) | ((uint16_t)data << 8));
+            break;
+        case Z80DMA_ASSOC_LENGTH_LO:
+            dma->programmed_length = (uint16_t)((dma->programmed_length & 0xFF00u) | data);
+            _z80dma_update_start_length(dma);
+            break;
+        case Z80DMA_ASSOC_LENGTH_HI:
+            dma->programmed_length = (uint16_t)((dma->programmed_length & 0x00FFu) | ((uint16_t)data << 8));
+            _z80dma_update_start_length(dma);
+            break;
+        case Z80DMA_ASSOC_A_TIMING:
+            dma->port_a.timing = data;
+            break;
+        case Z80DMA_ASSOC_B_TIMING:
+            dma->port_b.timing = data;
+            break;
+        case Z80DMA_ASSOC_MASK:
+            dma->mask_byte = data;
+            break;
+        case Z80DMA_ASSOC_MATCH:
+            dma->match_byte = data;
+            break;
+        case Z80DMA_ASSOC_B_ADDR_LO:
+            dma->port_b.start_address = (uint16_t)((dma->port_b.start_address & 0xFF00u) | data);
+            break;
+        case Z80DMA_ASSOC_B_ADDR_HI:
+            dma->port_b.start_address = (uint16_t)((dma->port_b.start_address & 0x00FFu) | ((uint16_t)data << 8));
+            break;
+        case Z80DMA_ASSOC_INTERRUPT:
+            dma->interrupt_on_ready = (data & 0x40u) != 0;
+            dma->status_affects_vector = (data & 0x20u) != 0;
+            dma->interrupt_on_eob = (data & 0x02u) != 0;
+            if (data & 0x08u)
+                _z80dma_queue(dma, Z80DMA_ASSOC_PULSE);
+            if (data & 0x10u)
+                _z80dma_queue(dma, Z80DMA_ASSOC_VECTOR);
+            break;
+        case Z80DMA_ASSOC_PULSE:
+            dma->pulse_control = data;
+            break;
+        case Z80DMA_ASSOC_VECTOR:
+            dma->int_vector = data;
+            break;
+        case Z80DMA_ASSOC_READ_MASK:
+            dma->read_mask = data;
+            break;
+        default:
+            CHIPS_ASSERT(false);
+            break;
+    }
+}
+
 static void _z80dma_decode_wr0(z80dma_t *dma, uint8_t data)
 {
     dma->wr[0] = data;
-    uint8_t base = (data >> 3) & 0x0F;
-
-    // Bit 2: Transfer direction (0=B->A, 1=A->B)
-    dma->direction_ab = (data & 0x04) != 0;
-
-    // Bits 3-6: Base register group
-    switch (base) {
-        case 0: // WR0 only
-            break;
-        case 1: // Port A start address (2 bytes follow)
-            dma->cmd_bytes_needed = 2;
-            break;
-        case 2: // Port A block length (2 bytes follow)
-            dma->cmd_bytes_needed = 2;
-            break;
-        case 3: // Port A timing (1 byte follows)
-            dma->cmd_bytes_needed = 1;
-            break;
-        case 4: // Port B start address (2 bytes follow)
-            dma->cmd_bytes_needed = 2;
-            break;
-        case 5: // Port B block length (2 bytes follow)
-            dma->cmd_bytes_needed = 2;
-            break;
-        case 6: // Port B timing (1 byte follows)
-            dma->cmd_bytes_needed = 1;
-            break;
-        case 7: // Interrupt control (1 byte follows)
-            dma->cmd_bytes_needed = 1;
-            break;
-        case 8: // Pulse control (1 byte follows)
-            dma->cmd_bytes_needed = 1;
-            break;
-        case 9: // Interrupt vector (1 byte follows)
-            dma->cmd_bytes_needed = 1;
-            break;
-    }
-
-    dma->cmd_buffer[0] = data;
-    dma->cmd_bytes_received = 1;
+    dma->direction_ab = (data & 0x04u) != 0;
+    dma->search_mode = (data & 0x03u) != 0x01u;
+    _z80dma_begin_queue(dma);
+    if (data & 0x08u) _z80dma_queue(dma, Z80DMA_ASSOC_A_ADDR_LO);
+    if (data & 0x10u) _z80dma_queue(dma, Z80DMA_ASSOC_A_ADDR_HI);
+    if (data & 0x20u) _z80dma_queue(dma, Z80DMA_ASSOC_LENGTH_LO);
+    if (data & 0x40u) _z80dma_queue(dma, Z80DMA_ASSOC_LENGTH_HI);
 }
 
-/* Complete multi-byte WR0 command */
-static void _z80dma_complete_wr0(z80dma_t *dma)
-{
-    uint8_t base = (dma->cmd_buffer[0] >> 3) & 0x0F;
-
-    switch (base) {
-        case 1: // Port A start address
-            dma->port_a.start_address = dma->cmd_buffer[1] | (dma->cmd_buffer[2] << 8);
-            dma->port_a.address = dma->port_a.start_address;
-            break;
-        case 2: // Port A block length
-            dma->port_a.start_length = dma->cmd_buffer[1] | (dma->cmd_buffer[2] << 8);
-            dma->port_a.block_length = dma->port_a.start_length;
-            break;
-        case 3: // Port A timing
-            dma->port_a.timing = dma->cmd_buffer[1];
-            break;
-        case 4: // Port B start address
-            dma->port_b.start_address = dma->cmd_buffer[1] | (dma->cmd_buffer[2] << 8);
-            dma->port_b.address = dma->port_b.start_address;
-            break;
-        case 5: // Port B block length
-            dma->port_b.start_length = dma->cmd_buffer[1] | (dma->cmd_buffer[2] << 8);
-            dma->port_b.block_length = dma->port_b.start_length;
-            break;
-        case 6: // Port B timing
-            dma->port_b.timing = dma->cmd_buffer[1];
-            break;
-        case 7: // Interrupt control
-            dma->interrupt_enable = (dma->cmd_buffer[1] & 0x20) != 0;
-            break;
-        case 8: // Pulse control
-            dma->pulse_control = dma->cmd_buffer[1];
-            break;
-        case 9: // Interrupt vector
-            dma->int_vector = dma->cmd_buffer[1];
-            break;
-    }
-}
-
-/* Decode WR1 - Port A mode */
 static void _z80dma_decode_wr1(z80dma_t *dma, uint8_t data)
 {
     dma->wr[1] = data;
-    dma->port_a.is_memory = (data & 0x08) != 0;
-
-    uint8_t addr_mode = data & 0x03;
-    dma->port_a.increment = (addr_mode == 0);
-    dma->port_a.decrement = (addr_mode == 1);
+    dma->port_a.is_memory = (data & 0x08u) == 0;
+    _z80dma_decode_address_mode(&dma->port_a, data);
+    _z80dma_begin_queue(dma);
+    if (data & 0x40u) _z80dma_queue(dma, Z80DMA_ASSOC_A_TIMING);
 }
 
-/* Decode WR2 - Port B mode */
 static void _z80dma_decode_wr2(z80dma_t *dma, uint8_t data)
 {
     dma->wr[2] = data;
-    dma->port_b.is_memory = (data & 0x08) != 0;
-
-    uint8_t addr_mode = data & 0x03;
-    dma->port_b.increment = (addr_mode == 0);
-    dma->port_b.decrement = (addr_mode == 1);
+    dma->port_b.is_memory = (data & 0x08u) == 0;
+    _z80dma_decode_address_mode(&dma->port_b, data);
+    _z80dma_begin_queue(dma);
+    if (data & 0x40u) _z80dma_queue(dma, Z80DMA_ASSOC_B_TIMING);
 }
 
-/* Decode WR3 - Mask byte (for search) */
 static void _z80dma_decode_wr3(z80dma_t *dma, uint8_t data)
 {
     dma->wr[3] = data;
-    if (dma->cmd_bytes_needed > 0) {
-        dma->cmd_buffer[dma->cmd_bytes_received++] = data;
-        dma->cmd_bytes_needed--;
-        if (dma->cmd_bytes_needed == 0) {
-            // All bytes received, process command
-            uint8_t cmd = (dma->cmd_buffer[0] >> 5) & 0x03;
-            if (cmd == 1) { // Search mode
-                dma->mask_byte = dma->cmd_buffer[1];
-                dma->search_mode = true;
-            }
-        }
-    } else {
-        // Single byte command
-        dma->cmd_buffer[0] = data;
-        uint8_t cmd = (data >> 5) & 0x03;
-        if (cmd == 1) { // Mask follows
-            dma->cmd_bytes_needed = 1;
-            dma->cmd_bytes_received = 1;
-        }
-    }
-}
-
-/* Decode WR4 - Mode/status control */
-static void _z80dma_decode_wr4(z80dma_t *dma, uint8_t data)
-{
-    dma->wr[4] = data;
-
-    // Bits 0-1: Transfer mode
-    dma->mode = (z80dma_transfer_mode_t)(data & 0x03);
-
-    // Bit 4: Auto restart
-    dma->auto_restart = (data & 0x10) != 0;
-
-    // Bit 6: Enable DMA (after programming)
-    if (data & 0x40) {
+    dma->stop_on_match = (data & 0x04u) != 0;
+    dma->interrupt_enable = (data & 0x20u) != 0;
+    _z80dma_begin_queue(dma);
+    if (data & 0x08u) _z80dma_queue(dma, Z80DMA_ASSOC_MASK);
+    if (data & 0x10u) _z80dma_queue(dma, Z80DMA_ASSOC_MATCH);
+    if (data & 0x40u) {
         dma->enabled = true;
         dma->status |= Z80DMA_STATUS_BUSY;
     }
-
-    // Bit 7: DMA enable (immediate)
-    if (data & 0x80) {
-        dma->enabled = false;
-        dma->status &= ~Z80DMA_STATUS_BUSY;
-    }
 }
 
-/* Decode WR5 - Ready/interrupt control */
+static void _z80dma_decode_wr4(z80dma_t *dma, uint8_t data)
+{
+    dma->wr[4] = data;
+    switch ((data >> 5) & 3u) {
+        case 0: dma->mode = Z80DMA_MODE_BYTE; break;
+        case 1: dma->mode = Z80DMA_MODE_CONTINUOUS; break;
+        case 2: dma->mode = Z80DMA_MODE_BURST; break;
+        default: dma->mode = Z80DMA_MODE_BYTE; break;
+    }
+    _z80dma_begin_queue(dma);
+    if (data & 0x04u) _z80dma_queue(dma, Z80DMA_ASSOC_B_ADDR_LO);
+    if (data & 0x08u) _z80dma_queue(dma, Z80DMA_ASSOC_B_ADDR_HI);
+    if (data & 0x10u) _z80dma_queue(dma, Z80DMA_ASSOC_INTERRUPT);
+}
+
 static void _z80dma_decode_wr5(z80dma_t *dma, uint8_t data)
 {
     dma->wr[5] = data;
-    // Ready control bits - not fully implemented
+    dma->auto_restart = (data & 0x20u) != 0;
+    dma->wait_enabled = (data & 0x10u) != 0;
+    dma->ready_active_high = (data & 0x08u) != 0;
+    _z80dma_begin_queue(dma);
 }
 
-/* Decode WR6 - Command register */
 static void _z80dma_decode_wr6(z80dma_t *dma, uint8_t data)
 {
     dma->wr[6] = data;
+    if (data != 0x87u)
+        _z80dma_disable(dma);
 
-    uint8_t cmd = (data >> 3) & 0x0F;
-
-    switch (cmd) {
-        case 0: // Reset
-            z80dma_reset(dma);
+    switch (data) {
+        case 0xC3: z80dma_reset(dma); break;
+        case 0xC7: dma->port_a.timing = 0; break;
+        case 0xCB: dma->port_b.timing = 0; break;
+        case 0xCF: _z80dma_load(dma); break;
+        case 0xD3:
+            dma->bytes_remaining = (uint32_t)dma->programmed_length + 1u;
+            dma->byte_counter = 0;
+            _z80dma_mirror_length(dma, dma->bytes_remaining);
+            dma->status &= (uint8_t)~Z80DMA_STATUS_EOB;
             break;
-        case 1: // Reset port A timing
-            dma->port_a.timing = 0;
-            break;
-        case 2: // Reset port B timing
-            dma->port_b.timing = 0;
-            break;
-        case 3: // Load
-            dma->port_a.block_length = dma->port_a.start_length;
-            dma->port_b.block_length = dma->port_b.start_length;
-            break;
-        case 4: // Continue
-            dma->enabled = true;
-            dma->status |= Z80DMA_STATUS_BUSY;
-            break;
-        case 5: // Disable interrupts
+        case 0xAF: dma->interrupt_enable = false; break;
+        case 0xAB: dma->interrupt_enable = true; break;
+        case 0xA3:
             dma->interrupt_enable = false;
-            break;
-        case 6: // Enable interrupts
-            dma->interrupt_enable = true;
-            break;
-        case 7: // Reset and disable interrupts
             dma->int_state = 0;
-            dma->interrupt_enable = false;
             break;
-        case 8: // Enable after EOP
-            // Will enable when End Of Process occurs
+        case 0xB7: dma->enable_after_reti = true; break;
+        case 0xBF:
+            dma->read_mask = 0x01;
+            dma->read_index = 0;
+            dma->read_count = 1;
             break;
-        case 9: // Read status byte
-            // Status will be read on next read cycle
+        case 0x8B: dma->status &= (uint8_t)~(Z80DMA_STATUS_MATCH | Z80DMA_STATUS_EOB); break;
+        case 0xA7:
+            dma->read_index = 0;
+            dma->read_count = 7;
             break;
-        case 10: // Reinitialize status byte
-            dma->status &= ~(Z80DMA_STATUS_MATCH | Z80DMA_STATUS_EOB);
-            break;
-        case 11: // Initiate read sequence
-            // For reading counter/status
-            break;
-        case 12: // Force ready
-            break;
-        case 13: // Enable DMA
+        case 0xB3: dma->force_ready = true; break;
+        case 0x87:
             dma->enabled = true;
             dma->status |= Z80DMA_STATUS_BUSY;
+            dma->state = Z80DMA_STATE_IDLE;
             break;
-        case 14: // Disable DMA
-            dma->enabled = false;
-            dma->status &= ~Z80DMA_STATUS_BUSY;
+        case 0x83: break;
+        case 0xBB:
+            _z80dma_begin_queue(dma);
+            _z80dma_queue(dma, Z80DMA_ASSOC_READ_MASK);
             break;
-        case 15: // Read mask follows
-            dma->cmd_bytes_needed = 1;
-            dma->cmd_bytes_received = 1;
-            dma->cmd_buffer[0] = data;
-            break;
+        default: break;
     }
 }
 
-/* Write to DMA register */
 uint64_t z80dma_write(z80dma_t *dma, uint8_t data)
 {
     CHIPS_ASSERT(dma);
 
-    /*
-        Compatibility parser for the Partner boot ROM DMA sequences.
-
-        The ROM programs the Z80 DMA with a small subset of commands using the
-        byte stream:
-
-            79 <A-addr lo> <A-addr hi> <len lo> <len hi>
-            14 28
-            95 <B-port>
-            ...
-            87
-
-        The generic decoder below doesn't currently classify those bytes
-        correctly, which leaves the DMA idle while the FDC waits in EXECUTE.
-        Handle the boot-time subset explicitly so the DMA can move sector bytes
-        from a fixed I/O port into RAM.
-    */
-    if (dma->compat_state != 0) {
-        switch (dma->compat_state) {
-            case 1:
-                dma->cmd_buffer[1] = data;
-                dma->compat_state = 2;
-                return dma->pins;
-            case 2:
-                dma->cmd_buffer[2] = data;
-                dma->compat_state = 3;
-                return dma->pins;
-            case 3:
-                dma->cmd_buffer[3] = data;
-                dma->compat_state = 4;
-                return dma->pins;
-            case 4: {
-                dma->cmd_buffer[4] = data;
-                dma->port_a.start_address = (uint16_t)(dma->cmd_buffer[1] | (dma->cmd_buffer[2] << 8));
-                dma->port_a.address = dma->port_a.start_address;
-                /*
-                    The ROM programs the transfer count as N-1, so convert it to
-                    an actual byte count for the simplified transfer loop.
-                */
-                uint16_t raw_len = (uint16_t)(dma->cmd_buffer[3] | (dma->cmd_buffer[4] << 8));
-                dma->port_a.start_length = (uint16_t)(raw_len + 1);
-                dma->port_a.block_length = dma->port_a.start_length;
-                /*
-                    The simplified transfer loop decrements the source port's
-                    counter. Mirror the programmed block length into both ports
-                    so B->A Partner boot transfers don't terminate immediately
-                    with port B length still at zero.
-                */
-                dma->port_b.start_length = dma->port_a.start_length;
-                dma->port_b.block_length = dma->port_b.start_length;
-                dma->compat_state = 0;
-                return dma->pins;
-            }
-            case 5:
-                dma->port_b.start_address = data;
-                dma->port_b.address = dma->port_b.start_address;
-                dma->compat_state = 6;
-                return dma->pins;
-            case 6:
-                /*
-                    Partner boot blocks include a filler byte after the fixed
-                    I/O port number before the port timing byte.
-                */
-                dma->compat_state = 7;
-                return dma->pins;
-            case 7:
-                /*
-                    The GDP hard-disk table has one filler byte after its fixed
-                    I/O port, while the CRT floppy table has two. In the GDP
-                    form this byte is already timing/control value 0x8A; in the
-                    CRT form it is the second filler and timing follows. The
-                    shorter 0x85 form enters state 9 directly.
-                */
-                dma->port_b.is_memory = false;
-                if (data == 0x8Au) {
-                    dma->port_b.timing = data;
-                    dma->compat_state = 10;
-                } else {
-                    dma->compat_state = 9;
-                }
-                return dma->pins;
-            case 8:
-                /*
-                    Later Partner floppy loader code uses a shorter variant:
-
-                        ... 28 85 <B-port> 8A CF 01 CF 87
-
-                    so after the 0x85 marker the next byte is still the fixed
-                    I/O port number, and the byte after that is already the
-                    timing/control value.
-                */
-                dma->port_b.start_address = data;
-                dma->port_b.address = dma->port_b.start_address;
-                dma->compat_state = 9;
-                return dma->pins;
-            case 9:
-                /*
-                    Fixed-I/O timing/control, followed by the Partner trailer:
-
-                        CF 01 CF 87   (device -> RAM)
-                        CF 05 CF 87   (RAM -> device)
-
-                    Keep consuming the trailer here instead of dropping into
-                    the generic decoder, where its literals look like unrelated
-                    register commands.
-                */
-                dma->port_b.timing = data;
-                dma->port_b.is_memory = false;
-                dma->compat_state = 10;
-                return dma->pins;
-            case 10:
-                dma->wr[4] = data;
-                dma->mode = Z80DMA_MODE_CONTINUOUS;
-                dma->compat_state = 11;
-                return dma->pins;
-            case 11:
-                /*
-                    The fixed trailer's middle byte is a compact WR0 direction
-                    selector in the Partner BIOS tables: 0x01 selects B->A
-                    (device to RAM), while 0x05 selects A->B (RAM to device).
-                    Decode bit 2 here without restarting the compatibility
-                    parser; dropping this byte leaves every floppy write in
-                    read direction and the 8272 waits forever for its sector.
-                */
-                dma->direction_ab = (data & 0x04u) != 0u;
-                dma->compat_state = 12;
-                return dma->pins;
-            case 12:
-                dma->wr[4] = data;
-                dma->mode = Z80DMA_MODE_CONTINUOUS;
-                dma->compat_state = 13;
-                return dma->pins;
-            case 13:
-                dma->wr[6] = data;
-                dma->port_a.address = dma->port_a.start_address;
-                dma->port_a.block_length = dma->port_a.start_length;
-                dma->port_b.address = dma->port_b.start_address;
-                dma->port_b.block_length = dma->port_b.start_length;
-                dma->enabled = true;
-                dma->status |= Z80DMA_STATUS_BUSY;
-                dma->state = Z80DMA_STATE_IDLE;
-                dma->compat_state = 0;
-                return dma->pins;
-            default:
-                dma->compat_state = 0;
-                break;
-        }
-    }
-
-    switch (data) {
-        case 0x05:
-            z80dma_reset(dma);
-            return dma->pins;
-        case 0x79:
-            dma->direction_ab = false;     // Port B (I/O) -> Port A (memory)
-            dma->compat_state = 1;         // Expect A address + count
-            return dma->pins;
-        case 0x7D:
-            // WR0 with bit 2 set: A->B direction (Port A memory -> Port B I/O).
-            // Same address+count programming as 0x79; only the transfer
-            // direction differs, so device writes (RAM -> FDC/SASI) work too.
-            dma->direction_ab = true;      // Port A (memory) -> Port B (I/O)
-            dma->compat_state = 1;         // Expect A address + count
-            return dma->pins;
-        case 0x14:
-            dma->wr[1] = data;
-            dma->port_a.is_memory = true;
-            dma->port_a.increment = true;
-            dma->port_a.decrement = false;
-            return dma->pins;
-        case 0x28:
-            dma->wr[2] = data;
-            return dma->pins;
-        case 0x95:
-            dma->wr[2] = data;
-            dma->port_b.is_memory = false;
-            dma->port_b.increment = false;
-            dma->port_b.decrement = false;
-            dma->compat_state = 5;         // Expect fixed I/O port + filler + timing
-            return dma->pins;
-        case 0x85:
-            dma->wr[2] = data;
-            dma->port_b.is_memory = false;
-            dma->port_b.increment = false;
-            dma->port_b.decrement = false;
-            dma->compat_state = (data == 0x85) ? 8 : 5;
-            return dma->pins;
-        case 0xCF:
-            dma->wr[4] = data;
-            dma->mode = Z80DMA_MODE_CONTINUOUS;
-            return dma->pins;
-        case 0x87:
-            dma->wr[6] = data;
-            dma->port_a.address = dma->port_a.start_address;
-            dma->port_a.block_length = dma->port_a.start_length;
-            dma->port_b.address = dma->port_b.start_address;
-            dma->enabled = true;
-            dma->status |= Z80DMA_STATUS_BUSY;
-            return dma->pins;
-        case 0x8A:
-            /* WR5 (wait/ready control) — swallow without corrupting port_b.is_memory.
-               The generic decoder would mis-classify this as a WR2 byte and set
-               port_b.is_memory=true, redirecting DMA reads from FDC I/O port 0xF1
-               to RAM address 0xF1 instead. */
-            return dma->pins;
-        default:
-            break;
-    }
-
-    // Handle multi-byte commands
-    if (dma->cmd_bytes_needed > 0) {
-        dma->cmd_buffer[dma->cmd_bytes_received++] = data;
-        dma->cmd_bytes_needed--;
-
-        if (dma->cmd_bytes_needed == 0) {
-            // Command complete
-            _z80dma_complete_wr0(dma);
-        }
+    if (dma->cmd_bytes_received < dma->cmd_bytes_needed) {
+        const uint8_t assoc = dma->cmd_buffer[dma->cmd_bytes_received++];
+        _z80dma_associated_write(dma, assoc, data);
+        if (dma->cmd_bytes_received == dma->cmd_bytes_needed)
+            _z80dma_begin_queue(dma);
         return dma->pins;
     }
 
-    // Decode register based on first bits
-    uint8_t reg = (data >> 6) & 0x03;
+    /* Every control byte other than ENABLE DMA disables bus requests. WR3's
+       enable bit is applied again by its decoder below. */
+    if (data != 0x87u)
+        _z80dma_disable(dma);
 
-    if ((data & 0x80) == 0) {
-        // WR0 base register
+    if ((data & 0x83u) == 0x83u) {
+        _z80dma_decode_wr6(dma, data);
+    } else if ((data & 0xC7u) == 0x82u) {
+        _z80dma_decode_wr5(dma, data);
+    } else if ((data & 0x83u) == 0x81u) {
+        _z80dma_decode_wr4(dma, data);
+    } else if ((data & 0x83u) == 0x80u) {
+        _z80dma_decode_wr3(dma, data);
+    } else if ((data & 0x87u) == 0x04u) {
+        _z80dma_decode_wr1(dma, data);
+    } else if ((data & 0x87u) == 0x00u) {
+        _z80dma_decode_wr2(dma, data);
+    } else if (((data & 0x80u) == 0) && ((data & 0x03u) != 0)) {
         _z80dma_decode_wr0(dma, data);
-    } else {
-        // WR1-WR6
-        switch (reg) {
-            case 1: _z80dma_decode_wr1(dma, data); break;
-            case 2: _z80dma_decode_wr2(dma, data); break;
-            case 3: _z80dma_decode_wr3(dma, data); break;
-        }
-
-        if ((data & 0xC0) == 0xC0) {
-            // WR4-WR6
-            uint8_t subreg = (data >> 5) & 0x01;
-            if (subreg == 0) {
-                _z80dma_decode_wr4(dma, data);
-            } else {
-                uint8_t wr56 = (data >> 3) & 0x01;
-                if (wr56 == 0) {
-                    _z80dma_decode_wr5(dma, data);
-                } else {
-                    _z80dma_decode_wr6(dma, data);
-                }
-            }
-        }
     }
-
     return dma->pins;
 }
 
-/* Read DMA status */
+static uint8_t _z80dma_status_byte(const z80dma_t *dma)
+{
+    uint8_t value = 0;
+    if (dma->operation_occurred) value |= 0x01u;
+    if (dma->ready) value |= 0x02u;
+    if ((dma->int_state & (Z80DMA_INT_NEEDED | Z80DMA_INT_REQUESTED)) == 0)
+        value |= 0x08u;
+    if ((dma->status & Z80DMA_STATUS_MATCH) == 0) value |= 0x10u;
+    if ((dma->status & Z80DMA_STATUS_EOB) == 0) value |= 0x20u;
+    return value;
+}
+
+static uint8_t _z80dma_read_register(const z80dma_t *dma, uint8_t bit)
+{
+    switch (bit) {
+        case 0: return _z80dma_status_byte(dma);
+        case 1: return (uint8_t)(dma->byte_counter & 0xFFu);
+        case 2: return (uint8_t)(dma->byte_counter >> 8);
+        case 3: return (uint8_t)(dma->port_a.address & 0xFFu);
+        case 4: return (uint8_t)(dma->port_a.address >> 8);
+        case 5: return (uint8_t)(dma->port_b.address & 0xFFu);
+        case 6: return (uint8_t)(dma->port_b.address >> 8);
+        default: return 0xFF;
+    }
+}
+
 uint8_t z80dma_read(z80dma_t *dma)
 {
     CHIPS_ASSERT(dma);
-
-    // Return status byte
-    uint8_t status = dma->status;
-
-    // Add counter LSB in lower bits (simplified)
-    status |= (dma->port_a.block_length & 0x7F);
-
-    return status;
+    if (dma->read_count != 0) {
+        while (dma->read_index < 7u) {
+            const uint8_t bit = dma->read_index++;
+            if (dma->read_mask & (1u << bit))
+                return _z80dma_read_register(dma, bit);
+        }
+        dma->read_count = 0;
+    }
+    return _z80dma_status_byte(dma);
 }
 
-/* Perform one byte transfer */
-static uint64_t _z80dma_transfer_byte(z80dma_t *dma, uint64_t pins)
+static bool _z80dma_ready(const z80dma_t *dma, uint64_t pins)
+{
+    const bool pin_high = (pins & Z80DMA_RDY) != 0;
+    return dma->force_ready || (pin_high == dma->ready_active_high);
+}
+
+static void _z80dma_ensure_remaining(z80dma_t *dma)
+{
+    if (dma->bytes_remaining == 0 &&
+        (dma->port_a.block_length != 0 || dma->port_b.block_length != 0)) {
+        dma->bytes_remaining = dma->port_a.block_length != 0
+            ? dma->port_a.block_length : dma->port_b.block_length;
+        _z80dma_mirror_length(dma, dma->bytes_remaining);
+    }
+}
+
+static void _z80dma_advance_address(z80dma_port_t *port)
+{
+    if (port->increment)
+        ++port->address;
+    else if (port->decrement)
+        --port->address;
+}
+
+static uint64_t _z80dma_finish_byte(z80dma_t *dma, uint64_t pins, bool ready)
+{
+    CHIPS_ASSERT(dma->bytes_remaining != 0);
+    --dma->bytes_remaining;
+    _z80dma_mirror_length(dma, dma->bytes_remaining);
+
+    if (dma->bytes_remaining == 0) {
+        dma->status |= Z80DMA_STATUS_EOB;
+        if (dma->interrupt_enable && dma->interrupt_on_eob)
+            dma->int_state |= Z80DMA_INT_NEEDED;
+        if (dma->auto_restart) {
+            _z80dma_load(dma);
+            dma->enabled = true;
+            dma->status |= Z80DMA_STATUS_BUSY;
+        } else {
+            _z80dma_disable(dma);
+            pins &= ~Z80DMA_BUSREQ;
+            return pins;
+        }
+    }
+
+    if (dma->mode == Z80DMA_MODE_BYTE) {
+        dma->state = Z80DMA_STATE_IDLE;
+        dma->byte_gap_ticks = 4;
+        pins &= ~Z80DMA_BUSREQ;
+    } else if (dma->mode == Z80DMA_MODE_BURST && !ready) {
+        dma->state = Z80DMA_STATE_IDLE;
+        pins &= ~Z80DMA_BUSREQ;
+    } else if (dma->mode == Z80DMA_MODE_CONTINUOUS && !ready) {
+        dma->state = Z80DMA_STATE_WAIT_READY;
+        pins |= Z80DMA_BUSREQ;
+    } else {
+        dma->state = Z80DMA_STATE_READ;
+        pins |= Z80DMA_BUSREQ;
+    }
+    return pins;
+}
+
+static uint64_t _z80dma_transfer_byte(z80dma_t *dma, uint64_t pins, bool ready)
 {
     z80dma_port_t *src = dma->direction_ab ? &dma->port_a : &dma->port_b;
     z80dma_port_t *dst = dma->direction_ab ? &dma->port_b : &dma->port_a;
 
-    // Read phase: first drive a complete source bus cycle.  Data is sampled
-    // on the following tick, after the motherboard and selected chip have had
-    // a chance to respond to the address and RD strobe.
     if (dma->state == Z80DMA_STATE_READ) {
         Z80DMA_SET_ADDR(pins, src->address);
-        if (src->is_memory) {
-            pins |= Z80DMA_MREQ | Z80DMA_RD;
-        } else {
-            pins |= Z80DMA_IORQ | Z80DMA_RD;
-        }
-
+        pins |= (src->is_memory ? Z80DMA_MREQ : Z80DMA_IORQ) | Z80DMA_RD;
         dma->state = Z80DMA_STATE_READ_LATCH;
-        return pins;
-    }
-
-    if (dma->state == Z80DMA_STATE_READ_LATCH) {
+    } else if (dma->state == Z80DMA_STATE_READ_LATCH) {
         dma->data_latch = Z80DMA_GET_DATA(pins);
-        pins &= ~(Z80DMA_MREQ | Z80DMA_IORQ | Z80DMA_RD);
-
-        // Update source address
-        if (src->increment) {
-            src->address++;
-        } else if (src->decrement) {
-            src->address--;
-        }
-
+        ++dma->byte_counter;
+        _z80dma_advance_address(src);
         dma->state = Z80DMA_STATE_WRITE;
-        return pins;
-    }
-
-    // Write phase
-    if (dma->state == Z80DMA_STATE_WRITE) {
-        pins &= ~(Z80DMA_MREQ | Z80DMA_IORQ | Z80DMA_RD);
-
+    } else if (dma->state == Z80DMA_STATE_WRITE) {
         Z80DMA_SET_ADDR(pins, dst->address);
         Z80DMA_SET_DATA(pins, dma->data_latch);
-
-        if (dst->is_memory) {
-            pins |= Z80DMA_MREQ | Z80DMA_WR;
-        } else {
-            pins |= Z80DMA_IORQ | Z80DMA_WR;
-        }
-
-        // Update destination address
-        if (dst->increment) {
-            dst->address++;
-        } else if (dst->decrement) {
-            dst->address--;
-        }
-
-        // Decrement counter
-        src->block_length--;
-
-        // Check for end of block
-        if (src->block_length == 0) {
-            dma->status |= Z80DMA_STATUS_EOB;
-
-            if (dma->auto_restart) {
-                // Reload counters
-                dma->port_a.address = dma->port_a.start_address;
-                dma->port_b.address = dma->port_b.start_address;
-                dma->port_a.block_length = dma->port_a.start_length;
-                dma->port_b.block_length = dma->port_b.start_length;
-            } else {
-                dma->enabled = false;
-                dma->status &= ~Z80DMA_STATUS_BUSY;
-                pins &= ~Z80DMA_BUSREQ;
-            }
-
-            // Trigger interrupt if enabled
-            if (dma->interrupt_enable) {
-                dma->int_state |= Z80DMA_INT_NEEDED;
-            }
-        }
-
-        dma->state = Z80DMA_STATE_IDLE;
-        return pins;
+        pins |= (dst->is_memory ? Z80DMA_MREQ : Z80DMA_IORQ) | Z80DMA_WR;
+        _z80dma_advance_address(dst);
+        pins = _z80dma_finish_byte(dma, pins, ready);
     }
-
     return pins;
 }
 
 /* Handle interrupt daisy chain */
 static uint64_t _z80dma_int(z80dma_t *dma, uint64_t pins)
 {
-    // RETI handling
     if ((pins & Z80DMA_RETI) && (dma->int_state & Z80DMA_INT_SERVICED)) {
         dma->int_state &= ~Z80DMA_INT_SERVICED;
+        if (dma->enable_after_reti) {
+            dma->interrupt_enable = true;
+            dma->enable_after_reti = false;
+        }
         pins &= ~Z80DMA_RETI;
     }
 
@@ -958,53 +783,63 @@ uint64_t z80dma_tick(z80dma_t *dma, uint64_t pins)
         return pins;
     }
 
-    // If not enabled, nothing to do
     if (!dma->enabled) {
+        pins &= ~Z80DMA_BUSREQ;
         pins = z80dma_daisychain(dma, pins);
         dma->pins = pins;
         return pins;
     }
 
-    // When idle, don't hold the system bus hostage between transfers. The
-    // Partner loader programs the DMA in continuous mode, but the FDC source
-    // only becomes ready intermittently, so BUSREQ must be released while we
-    // wait for the next byte/sector handshake.
+    _z80dma_ensure_remaining(dma);
+    const bool ready = _z80dma_ready(dma, pins);
+    dma->ready = ready;
+
+    /* Byte mode must allow the CPU at least one complete machine cycle after
+       every transfer. Four clocks are the shortest Z80 machine cycle. */
+    if (dma->byte_gap_ticks != 0) {
+        --dma->byte_gap_ticks;
+        pins &= ~Z80DMA_BUSREQ;
+        pins = z80dma_daisychain(dma, pins);
+        dma->pins = pins;
+        return pins;
+    }
+
     if (dma->state == Z80DMA_STATE_IDLE) {
         pins &= ~Z80DMA_BUSREQ;
-        if ((pins & Z80DMA_RDY) && (dma->port_a.block_length > 0 || dma->port_b.block_length > 0)) {
-            // Need to transfer, request bus
+        if (ready && dma->bytes_remaining != 0) {
             pins |= Z80DMA_BUSREQ;
             dma->state = Z80DMA_STATE_WAIT_BUS;
+            dma->operation_occurred = true;
         }
     }
 
-    // Wait for bus grant
     if (dma->state == Z80DMA_STATE_WAIT_BUS) {
-        if (!(pins & Z80DMA_RDY)) {
+        pins |= Z80DMA_BUSREQ;
+        if (!ready) {
             dma->state = Z80DMA_STATE_IDLE;
             pins &= ~Z80DMA_BUSREQ;
             dma->pins = pins;
             return pins;
         }
-        if ((pins & Z80DMA_BUSACK) && (pins & Z80DMA_RDY)) {
-            // Bus granted, start transfer
+        if (pins & Z80DMA_BUSACK) {
             dma->state = Z80DMA_STATE_READ;
             dma->pins = pins;
             return pins;
         }
     }
 
-    // Perform transfer if bus is granted
-    if ((pins & Z80DMA_BUSACK) &&
-        (((dma->state == Z80DMA_STATE_READ) && (pins & Z80DMA_RDY)) ||
-         (dma->state == Z80DMA_STATE_READ_LATCH) ||
-         (dma->state == Z80DMA_STATE_WRITE))) {
-        pins = _z80dma_transfer_byte(dma, pins);
+    if (dma->state == Z80DMA_STATE_WAIT_READY) {
+        pins |= Z80DMA_BUSREQ;
+        if ((pins & Z80DMA_BUSACK) && ready)
+            dma->state = Z80DMA_STATE_READ;
+    }
 
-        // In byte mode, release bus after each byte
-        if (dma->mode == Z80DMA_MODE_BYTE && dma->state == Z80DMA_STATE_IDLE) {
-            pins &= ~Z80DMA_BUSREQ;
-        }
+    if ((pins & Z80DMA_BUSACK) &&
+        (((dma->state == Z80DMA_STATE_READ) && ready) ||
+         dma->state == Z80DMA_STATE_READ_LATCH ||
+         dma->state == Z80DMA_STATE_WRITE)) {
+        pins |= Z80DMA_BUSREQ;
+        pins = _z80dma_transfer_byte(dma, pins, ready);
     }
 
     // Handle interrupts

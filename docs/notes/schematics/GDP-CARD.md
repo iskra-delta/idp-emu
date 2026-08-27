@@ -60,6 +60,17 @@ RAM, and board glue. Compare it with:
 - EF9367 `VB` is derived from the 525-line, 1.5 MHz raster timing. `MW`, light
   pen, `BLANK`, interrupt status, format, bank, XOR, and scroll signals now
   retain their distinct board-level roles.
+- The direct graphics-memory read path is one bit wide. IC68/IC70 reduce the
+  selected `GDO0..GDO15` memory output to `DOUT1`/`DOUT2`, IC24 produces
+  `DOUT`, IC22 produces `LOAD` from the EF9367 `MW` cycle, and IC1 (74LS74)
+  latches that value. IC15 (74LS367) returns the latch on CPU D7 during a
+  port `36h` read; the other enabled input returns AVDC `RESTRICT` on D4.
+  There is no byte- or word-wide GDP-memory connection to the CPU bus.
+- The D7 pixel sense is active-low. The original Partner `CGRAF.COM` sequence
+  issues EF command `0fh`, polls READY through status port `2fh`, reads port
+  `36h`, then executes `CPL` and `AND 80h`. The emulator implements this
+  exact board protocol and retains the sampled bit until the next completed
+  direct-access cycle.
 - A line-style mask begins at the command origin. Consequently a negative-
   direction vector is spatially observed from its endpoint in the opposite
   order: `11001100` can appear as `00110011` when read left-to-right. The

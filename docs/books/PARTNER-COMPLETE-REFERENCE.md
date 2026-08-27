@@ -163,9 +163,11 @@ Important emulator behavior in GDP mode:
     its `ASTB` and `BSTB` handshake inputs
   - bit7: `SCRLM` (scroll mode line)
 - Port `0x36` is used as a board-level restriction/scroll latch path:
+  - read bit 7: active-low GDP pixel latched after EF9367 command `0x0F`
   - read bit 4: `RESTRICT`, the AVDC DADD13/last-line signal captured at
     falling `BLANK`; this is not HSYNC
   - write: scroll latch
+  - the pixel read follows `WBNK`; there is no byte-wide graphics-memory read
 - GDP PIO Port B bits 5 and 6 drive the SCB2675B `C1:C0` divider
   (`00`=10, `01`=7, `10`=8, `11`=9 dots per character), while bit 7 selects
   the 18 MHz or 24 MHz AVDC dot-clock path.

@@ -33,6 +33,7 @@ malformed command escapes stop startup with an error.
 | `--covox-port PORT` | `1`, `2` | disabled | Attach the host-audio Covox DAC to main PIO A (`1`) or B (`2`). This is the PIO at `D0h`–`D3h`, not the GDP-board PIO at `30h`–`33h`. |
 | `--sio-tcp PORT DATA CONTROL` | PAKET port `2`–`4` and two TCP ports | disabled | Attach the selected free SIO channel to an external TCP data/control bridge. |
 | `--sio-squid PORT` | PAKET port `2`–`4` | Partner CRT and G: port `2` | Move the internal Squid/Retro Vault service to the selected free SIO channel. |
+| `--squid-payload BYTES` | `16`–`112` | `112` | Set the internal Squid endpoint's maximum negotiated DATA payload. The peer may select a smaller value. |
 | `--dap PORT` | `1`–`65535` | disabled | Start the udap Debug Adapter Protocol server on `127.0.0.1:PORT`. |
 | `--commands TEXT` | escaped or literal text | no startup input | Type text through the emulated keyboard after startup. This option may be repeated. |
 | `--command TEXT` | escaped or literal text | — | Alias for `--commands`. |
@@ -52,15 +53,20 @@ Squid/Retro Vault device by default on every platform. `PAKET.COM` is present
 on the packaged Partner P and Partner G system hard disks. The device
 terminates the reliable Squid serial framing inside the
 emulator and performs Retro Vault HTTPS requests on a background thread. Run
-`PAKET` at the CP/M `A>` prompt to list the catalog.
-During a download, its progress counter refreshes after every 128-byte CP/M
-record and once more for a final partial record.
+`PAKET` at the CP/M `A>` prompt to list the catalog. Output is plain text
+without terminal-control effects; catalog and search results use aligned
+ID/name columns. During a download, `Stanje` is redrawn with the number of
+bytes remaining and finishes at `preostalo: 0 bajtov`.
 
 Open **Devices** to move Internal Squid to PAKET port 3 (SIO2A) or port 4
 (SIO2B), or use `--sio-squid PORT` at startup. Selecting it on a new port
 automatically detaches it from the previous one. Set `RETRO_VAULT_API_URL`
 before starting the emulator to use a compatible endpoint other than the
 default `https://retro-vault.org`.
+
+The internal endpoint offers 112-byte Squid DATA frames by default. Use
+`--squid-payload BYTES` to lower the offer; the negotiated value is the lower
+of the emulator and PAKET settings. `PAKET -m 16` retains legacy frame sizing.
 
 `TCP Bridge` is still a separate device choice for external serial tools. It
 is not required by PAKET when Internal Squid is attached.
@@ -207,7 +213,7 @@ and all emulator diagnostics use stderr.
 | `--fd0` … `--fd3` | disk-image path | no disk | Attach a floppy to the selected drive. |
 | `--hdd FILE` | hard-disk image path | no disk | Attach a Xebec/SASI image. |
 | `--nvram FILE` | file path | ephemeral | Persist the MM58167 shadow bytes. With no path, no NVRAM file is written. |
-| `--terminal` | `vt52`, `vt100`, `ansi` | `vt52` | Select the invisible terminal parser. |
+| `--terminal` | `vt52`, `vt100`, `ansi` | VT52 for CRT; VT100 for GDP | Select the invisible terminal parser and matching GDP BIOS profile. |
 | `--list-tools` | none | — | Print tool definitions as JSON and exit. |
 | `--verbose` | none | disabled | Log JSON-RPC traffic to stderr. |
 | `--version` | none | — | Print the server version and exit. |

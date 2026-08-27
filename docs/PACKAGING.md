@@ -64,9 +64,11 @@ and retrieves live package information.
 
 When replacing `PAKET.COM` on either hard disk, use
 `tools/update_partner_hdd_file.py` instead of removing and re-adding it with
-`cpmdisk`. Partner hard disks use `EXM=1`, so the existing two-entry extent
-layout must be preserved. Release verification rejects overlapping `EX=0`
-and `EX=1` entries before a broken image can be packaged.
+an older `cpmdisk`. Partner hard disks use `EXM=1`, so one directory entry can
+describe two 16 KiB logical extents. The updater preserves that packed layout
+and its allocation; a corrected `cpmdisk` is required when a larger payload
+needs new blocks. Release verification rejects overlapping `EX=0` and `EX=1`
+entries before a broken image can be packaged.
 
 The Ubuntu package installs `partnerp` and `partnerg` commands in `/usr/bin`
 and matching desktop entries. The macOS package installs the same command
@@ -80,28 +82,30 @@ and byte-for-byte CMOS seed before producing an installer. Upgrades remove the
 former `partner` command and legacy Partner/Classic/Graphical shortcuts.
 
 Every native build compiles the platform-neutral Retro Vault request and JSON
-core from a pinned `retro-plastics/squid-server` revision directly into the
-emulator. The emulator supplies its own per-SIO Squid wire endpoint and uses
-libcurl for HTTPS. No `squid-server` executable, plugin, `socat` bridge,
+core from a pinned `retro-plastics/squid-server` revision and the exact
+portable wire-protocol engine from a pinned `retro-plastics/libsquid` revision
+directly into the emulator. The wrapper only connects emulated SIO bytes to
+the library and preserves channel-3 packet boundaries. HTTPS uses libcurl.
+No `squid-server` executable, plugin, `socat` bridge,
 system service, configuration file, or public listening socket is packaged.
 The same implementation is therefore present in Ubuntu, macOS, and Windows
 installers. Dynamic libcurl dependencies, when needed, use the normal
 relocatable `shared/` directory; the Windows release links them statically.
 `PAKET.COM` is embedded in both packaged CP/M system hard disks, and both
 Partner model profiles attach Internal Squid to PAKET port 2 by default. The
-same client binary detects the display board at runtime and uses the standard
-CP/M console with ANSI terminal controls on both models.
+same client binary detects the display board at runtime and uses only plain
+text through the standard CP/M console on both models.
 
 To stage a clean release tree explicitly:
 
 ```bash
-cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-ctest --test-dir build --output-on-failure
-cmake --install build --prefix "$PWD/bin"
+cmake -S . -B tests/dump/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build tests/dump/build
+ctest --test-dir tests/dump/build --output-on-failure
+cmake --install tests/dump/build --prefix "$PWD/bin"
 python3 scripts/package/verify_bundle.py \
   --root bin --platform linux \
-  --version "$(tr -d '\r\n' < build/idp-version.txt)"
+  --version "$(tr -d '\r\n' < tests/dump/build/idp-version.txt)"
 ```
 
 ## Tagged release pipeline

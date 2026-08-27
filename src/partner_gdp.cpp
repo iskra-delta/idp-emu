@@ -253,6 +253,7 @@ void partner_gdp::reset()
     keyboard_.reset();
     avdc_pins_ = scn2674_sample_pins(&avdc_, avdc_bus_idle());
     avdc_restrict_ = false;
+    gdp_pixel_latch_ = true;
     uint64_t pio_idle = Z80PIO_ASTB | Z80PIO_BSTB;
     Z80PIO_SET_PA(pio_idle, 0);
     gdp_video_pio_pins_ = z80pio_tick(&gdp_video_pio_, pio_idle);
@@ -304,7 +305,16 @@ void partner_gdp::tick()
     }
 
     const uint8_t pa = Z80PIO_GET_PA(gdp_video_pio_pins_);
+    const bool previous_mw = (ef9367_pins_ & EF9367_MW) != 0u;
     ef9367_pins_ = ef9367_tick(&ef9367_, ef_board_pins_from_pio(pa));
+    const bool current_mw = (ef9367_pins_ & EF9367_MW) != 0u;
+    if (!previous_mw && current_mw) {
+        /* GDP sheet 7: IC22 derives LOAD from the EF9367 memory-request
+           cycle, IC1 latches DOUT, and IC15 returns its Q output on CPU D7.
+           The board sense is active-low, as confirmed by CGRAF.COM's
+           IN (36h), CPL, AND 80h sequence. */
+        gdp_pixel_latch_ = !ef9367_read_current_pixel(&ef9367_);
+    }
 
     const uint8_t text_ctl = Z80PIO_GET_PB(gdp_video_pio_pins_);
     scn2674_set_clock(&avdc_, 4000000u, avdc_dot_clock_hz(text_ctl),
@@ -1255,7 +1265,8 @@ uint8_t partner_gdp::io_read(uint16_t port)
     }
 
     if (port == 0x36) {
-        return avdc_restrict_ ? 0x10u : 0x00u;
+        return (uint8_t)((avdc_restrict_ ? 0x10u : 0x00u) |
+                         (gdp_pixel_latch_ ? 0x80u : 0x00u));
     }
 
     if (port >= AVDC_BASE_PORT && port <= AVDC_LAST_PORT)
@@ -1279,7 +1290,16 @@ void partner_gdp::io_write(uint16_t port, uint8_t data)
     if (port == EF9367_CMD_PORT)
     {
         io_cnt_.ef_wr++;
+        const uint16_t y_before_command = ef9367_.y;
         ef_bus_write(&ef9367_, (uint8_t)port, data, ef9367_pins_);
+        /* The Partner WF/G monitor ROM uses command 05h as X-home while
+           retaining the Y=100 baseline that it programs at 01C6h.  Applying
+           the bare EF9367 X+Y reset semantics here discards that baseline and
+           puts the oversized power-on title on the bottom edge.  Keep the
+           chip model's datasheet behaviour for direct users, but reproduce
+           the Partner ROM convention while its overlay is active. */
+        if (data == 0x05u && is_rom_enabled())
+            ef9367_.y = y_before_command;
         if (gdp_trace_enabled()) {
             std::fprintf(stderr,
                 "[gdp-ef] pc=%04x cmd=%02x x=%u y=%u dx=%u dy=%u chsz=%02x cr1=%02x cr2=%02x scroll=%02x\n",

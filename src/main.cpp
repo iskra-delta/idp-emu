@@ -7,6 +7,7 @@
 #include "gui/display.hpp"
 #include "startup_input.hpp"
 #include "runtime_paths.hpp"
+#include "squid_link_server.hpp"
 #include <chrono>
 #include <iostream>
 #include <string>
@@ -126,6 +127,7 @@ void print_usage(const char *prog)
     std::cerr << "                         Attach PAKET port 2, 3, or 4 to a TCP bridge\n";
     std::cerr << "  --sio-squid PORT       Attach internal Squid/Retro Vault to port 2, 3, or 4\n";
     std::cerr << "                         (Partner CRT and G default: port 2)\n";
+    std::cerr << "  --squid-payload BYTES  Internal Squid DATA payload: 16..112 (default: 112)\n";
     std::cerr << "  --dap PORT             Start the udap DAP server on 127.0.0.1:PORT\n";
     std::cerr << "  --commands TEXT        Type TEXT after the GUI opens; may be repeated\n";
     std::cerr << "  --command TEXT         Alias for --commands\n";
@@ -151,6 +153,7 @@ int main(int argc, char **argv)
     int sio_tcp_data_port = 0;
     int sio_tcp_control_port = 0;
     int sio_squid_port = 0;
+    uint32_t squid_payload_bytes = squid_link_server::default_payload_bytes;
     bool fd0_explicit = false;
     bool fd1_explicit = false;
     bool packaged_system_fd0 = false;
@@ -326,6 +329,17 @@ int main(int argc, char **argv)
             }
             sio_squid_port = port[0] - '0';
         }
+        else if (strcmp(argv[i], "--squid-payload") == 0)
+        {
+            if ((i + 1) >= argc ||
+                !parse_milliseconds(argv[++i], squid_payload_bytes) ||
+                squid_payload_bytes < squid_link_server::minimum_payload_bytes ||
+                squid_payload_bytes > squid_link_server::maximum_payload_bytes)
+            {
+                std::cerr << "Error: --squid-payload must be from 16 to 112\n";
+                return 1;
+            }
+        }
         else if (strcmp(argv[i], "--commands") == 0 ||
                  strcmp(argv[i], "--command") == 0 ||
                  strcmp(argv[i], "--type") == 0)
@@ -389,6 +403,12 @@ int main(int argc, char **argv)
 
     try
     {
+        if (!squid_link_server::set_default_payload_bytes(
+                static_cast<std::uint8_t>(squid_payload_bytes)))
+        {
+            std::cerr << "Error: invalid internal Squid payload size\n";
+            return 1;
+        }
         auto resolve_existing_path = [](const std::string &input) {
             return runtime_paths::find_resource(input);
         };

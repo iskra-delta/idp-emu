@@ -218,13 +218,18 @@ void internal_squid_server::reset_link()
     link_.reset();
 }
 
-void internal_squid_server::receive_serial_byte(std::uint8_t byte)
+bool internal_squid_server::can_receive_serial_byte() const
 {
-    link_.receive_serial_byte(byte);
+    return link_.can_receive_serial_byte();
+}
+
+bool internal_squid_server::receive_serial_byte(std::uint8_t byte)
+{
+    return link_.receive_serial_byte(byte);
 }
 
 void internal_squid_server::service(
-    std::deque<std::uint8_t> &serial_receive_queue)
+    std::deque<std::uint8_t> &serial_receive_queue, bool guest_ready)
 {
     link_.service();
 
@@ -239,9 +244,12 @@ void internal_squid_server::service(
                                     response.payload.size());
 
     link_.service();
-    std::uint8_t byte = 0;
-    while (link_.take_serial_byte(byte))
-        serial_receive_queue.push_back(byte);
+    if (guest_ready)
+    {
+        std::uint8_t byte = 0;
+        while (link_.take_serial_byte(byte))
+            serial_receive_queue.push_back(byte);
+    }
 }
 
 bool internal_squid_server::link_up() const

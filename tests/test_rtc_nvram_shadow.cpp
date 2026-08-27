@@ -98,8 +98,17 @@ int main()
         emu.arm_tenth_second_interrupt();
         emu.jump_before_tenth_second();
         emu.tick();
+        if ((emu.get_pins() & Z80_NMI) != 0)
+            return fail("open JJ12 unexpectedly routed RTC interrupt to NMI");
+        if ((emu.io_read(0xB0) & 0x02u) == 0u)
+            return fail("RTC interrupt status did not latch with JJ12 open");
+
+        emu.set_rtc_nmi_enabled(true);
+        emu.arm_tenth_second_interrupt();
+        emu.jump_before_tenth_second();
+        emu.tick();
         if ((emu.get_pins() & Z80_NMI) == 0)
-            return fail("RTC periodic interrupt did not reach CPU NMI through JJ12");
+            return fail("RTC interrupt did not reach CPU NMI through closed JJ12");
         if ((emu.io_read(0xB0) & 0x02u) == 0u)
             return fail("RTC interrupt status did not report the tenth-second source");
         emu.tick();

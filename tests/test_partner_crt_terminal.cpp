@@ -61,7 +61,16 @@ void enable_rx(partner_crt_test &emu, uint16_t ctrl_port)
 void enable_tx(partner_crt_test &emu, uint16_t ctrl_port)
 {
     emu.io_write(ctrl_port, 5);
-    emu.io_write(ctrl_port, 0x08); // WR5: transmitter enable
+    emu.io_write(ctrl_port, 0x0A); // WR5: transmitter enable + RTS
+}
+
+uint8_t crc8(uint8_t value)
+{
+    uint8_t crc = value;
+    for (unsigned int bit = 0; bit < 8; ++bit)
+        crc = static_cast<uint8_t>(
+            (crc & 0x80U) != 0 ? (crc << 1U) ^ 0x07U : crc << 1U);
+    return crc;
 }
 
 } // namespace
@@ -163,9 +172,9 @@ int main()
         emu.reset();
         enable_tx(emu, INTERNAL_CTRL_PORT + 2);
 
-        std::array<uint8_t, 20> hello{};
-        hello.front() = 0x7E;
-        hello.back() = 0xD3;
+        const std::array<uint8_t, 3> hello = {
+            0xE0U, crc8(0xE0U), 0xD3U
+        };
         for (uint8_t byte : hello)
             send_tx_byte(emu, INTERNAL_DATA_PORT + 2, byte);
 
