@@ -27,6 +27,7 @@ public:
     bool keyboard_input_ready() const;
     size_t pending_key_count() const;
     std::string dump_terminal_text() const;
+    std::string dump_avdc_text() const;
     std::string dump_raw_serial_text() const;
     const scn2674_t& get_avdc() const { return avdc_; }
     const ef9367_t& get_ef9367() const { return ef9367_; }

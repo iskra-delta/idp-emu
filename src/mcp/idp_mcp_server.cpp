@@ -399,7 +399,7 @@ json idp_mcp_server::list_tools() const
             {"description", "On GDP, include the surrounding AVDC text-raster area; false returns only the centered EF9367 raster."}}},
             {"scale", {{"type", "integer"}, {"minimum", 1}, {"maximum", 4}}}})));
     tools.push_back(tool("screen_text",
-        "Read terminal characters or render the chip framebuffer as ASCII art; serial and printer transcripts accompany chars mode.",
+        "Read visible CRT/AVDC characters or render the chip framebuffer as ASCII art; serial and printer transcripts accompany chars mode.",
         object_schema({
             {"mode", {{"type", "string"}, {"enum", {"chars", "ascii"}}}},
             {"font_address", word},
@@ -445,6 +445,7 @@ json idp_mcp_server::machine_state() const
 {
     const auto &dma = machine_.get_dma();
     const auto &fdc = machine_.get_fdc();
+    const auto &hdc = machine_.get_hdc();
     return {
         {"model", model_}, {"clock_hz", clock_hz}, {"cpu_hz", clock_hz},
         {"cycle_unit", "one 4 MHz master/CPU clock (Z80 T-state)"},
@@ -457,10 +458,24 @@ json idp_mcp_server::machine_state() const
         {"ram_bank", machine_.get_ram_bank()},
         {"bus_pins", machine_.get_pins()}, {"cpu", register_state()},
         {"dma", {{"enabled", dma.enabled}, {"state", (int)dma.state},
-                  {"bus_request", (machine_.get_pins() & Z80DMA_BUSREQ) != 0}}},
+                  {"bus_request", (machine_.get_pins() & Z80DMA_BUSREQ) != 0},
+                  {"direction_ab", dma.direction_ab},
+                  {"bytes_remaining", dma.bytes_remaining},
+                  {"interrupt_enable", dma.interrupt_enable},
+                  {"interrupt_on_eob", dma.interrupt_on_eob},
+                  {"interrupt_state", dma.int_state},
+                  {"interrupt_vector", dma.int_vector}}},
         {"fdc", {{"phase", (int)fdc.phase}, {"irq", fdc.irq_request},
                   {"motor", machine_.get_fdc_motor()},
                   {"vector", machine_.get_fdc_int_vector()}}},
+        {"hdc", {{"phase", (int)hdc.phase}, {"data_index", hdc.data_idx},
+                  {"data_length", hdc.data_len}, {"lba", hdc.xfer_lba},
+                  {"blocks", hdc.xfer_count},
+                  {"data_reads", machine_.get_sasi_data_reads()},
+                  {"data_writes", machine_.get_sasi_data_writes()}}},
+        {"im2", {{"ack_count", machine_.dbg_im2_ack_count},
+                  {"recent_vectors", machine_.dbg_im2_ack_vectors},
+                  {"recent_pcs", machine_.dbg_im2_ack_pcs}}},
         {"breakpoints", breakpoints_.size()},
         {"video_recording", video_file_.is_open()}};
 }
@@ -1036,17 +1051,29 @@ json idp_mcp_server::invoke_tool(const std::string &name, const json &arguments)
                 throw std::invalid_argument("'mode' must be chars or ascii");
             std::string screen;
             std::string serial;
+            partner_gdp *gdp_screen = nullptr;
             if (auto *crt = dynamic_cast<partner_crt *>(&machine_)) {
                 screen = crt->dump_terminal_text();
                 serial = crt->dump_raw_serial_text();
             } else if (auto *gdp = dynamic_cast<partner_gdp *>(&machine_)) {
-                screen = gdp->dump_terminal_text();
+                gdp_screen = gdp;
+                screen = gdp->dump_avdc_text();
+                if (screen.empty()) screen = gdp->dump_terminal_text();
                 serial = gdp->dump_raw_serial_text();
             }
             if (trim) screen = trim_terminal_text(screen);
             json result = {{"mode", "chars"}, {"screen", screen}, {"text", screen},
                 {"raw_serial", serial}, {"printer", machine_.get_virtual_printer_text()},
                 {"font_usable", true}};
+            if (gdp_screen) {
+                const auto &avdc = gdp_screen->get_avdc();
+                bool dot_stretch = false;
+                for (uint8_t value : avdc.attr_vram)
+                    dot_stretch = dot_stretch || (value & 0x08u) != 0u;
+                result["columns"] = avdc.chars_per_row;
+                result["rows"] = avdc.rows_per_screen;
+                result["dot_stretch"] = dot_stretch;
+            }
             return tool_result(screen.empty() ? "screen is currently blank" : screen,
                                std::move(result));
         }

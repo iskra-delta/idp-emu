@@ -76,6 +76,15 @@ int test_pin_level_interrupt_ack()
     CHECK((dma.int_state & Z80DMA_INT_REQUESTED) != 0);
 
     pins = z80dma_daisychain(
+        &dma, Z80DMA_IEIO | Z80DMA_M1 | Z80DMA_IORQ | Z80DMA_RD);
+    CHECK((dma.int_state & Z80DMA_INT_REQUESTED) != 0);
+    CHECK((dma.int_state & Z80DMA_INT_SERVICED) == 0);
+    pins = z80dma_daisychain(
+        &dma, Z80DMA_IEIO | Z80DMA_M1 | Z80DMA_IORQ | Z80DMA_WR);
+    CHECK((dma.int_state & Z80DMA_INT_REQUESTED) != 0);
+    CHECK((dma.int_state & Z80DMA_INT_SERVICED) == 0);
+
+    pins = z80dma_daisychain(
         &dma, Z80DMA_IEIO | Z80DMA_M1 | Z80DMA_IORQ);
     CHECK(Z80DMA_GET_DATA(pins) == 0x9A);
     CHECK((dma.int_state & Z80DMA_INT_SERVICED) != 0);

@@ -198,6 +198,15 @@ def main():
         status = structured(replies, 3)
         if status["clock_hz"] != 4_000_000 or status["cycles"] != 0:
             raise AssertionError(f"bad timing metadata: {status}")
+        if not {"direction_ab", "bytes_remaining", "interrupt_state",
+                "interrupt_vector"}.issubset(status["dma"]):
+            raise AssertionError(f"incomplete DMA status: {status['dma']}")
+        if not {"phase", "data_index", "data_length", "lba",
+                "blocks"}.issubset(status["hdc"]):
+            raise AssertionError(f"incomplete HDC status: {status['hdc']}")
+        if (len(status["im2"]["recent_vectors"]) != 8 or
+                len(status["im2"]["recent_pcs"]) != 8):
+            raise AssertionError(f"incomplete IM2 trace: {status['im2']}")
         if structured(replies, 7)["data"] != [0x00, 0x3A, 0x00, 0x90, 0x76]:
             raise AssertionError("hex write/read or numeric address strings failed")
         registers = structured(replies, 8)
@@ -298,6 +307,7 @@ def main():
             call(15, "set_port", {"port": 0x30, "value": 0x00}),
             call(16, "screen", {"include_border": False}),
             call(17, "screen", {"include_border": True}),
+            call(18, "screen_text", {"mode": "chars", "trim": True}),
         ]
         gdp_completed = subprocess.run(
             [executable, "--model", "gdp"],
@@ -314,11 +324,18 @@ def main():
                 f"{gdp_completed.stderr}")
         gdp_replies_list = [
             json.loads(line) for line in gdp_completed.stdout.splitlines() if line]
-        if [reply.get("id") for reply in gdp_replies_list] != list(range(1, 18)):
+        if [reply.get("id") for reply in gdp_replies_list] != list(range(1, 19)):
             raise AssertionError(
                 f"GDP notification replied or stdout was polluted: "
                 f"{gdp_completed.stdout!r}")
         gdp_replies = {reply["id"]: reply for reply in gdp_replies_list}
+
+        gdp_text = structured(gdp_replies, 18)
+        if (gdp_text["mode"] != "chars" or
+                not isinstance(gdp_text["columns"], int) or
+                not isinstance(gdp_text["rows"], int) or
+                not isinstance(gdp_text["dot_stretch"], bool)):
+            raise AssertionError(f"bad GDP AVDC text metadata: {gdp_text}")
 
         expected_geometry = {
             9: (1056, 624, True),

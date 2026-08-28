@@ -570,7 +570,11 @@ int main(int argc, char **argv)
         if (rom_explicit && is_partos_rom_path(rom_file)) {
             if (!fd0_explicit) {
                 active_configuration.floppies[0].image = DEFAULT_PARTOS_FD0;
-                active_configuration.floppies[0].type = floppy_media_type::dos_720;
+                // PartOS formats this 720 KiB image as 18 x 256-byte sectors,
+                // not the DOS 9 x 512-byte geometry that has the same total
+                // byte size.  The media selector is written into PartOS CMOS
+                // and therefore must describe the physical sector geometry.
+                active_configuration.floppies[0].type = floppy_media_type::partner;
             }
             if (!hdd_explicit) {
                 active_configuration.hard_disk.image = DEFAULT_PARTOS_HDD;

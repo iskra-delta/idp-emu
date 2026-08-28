@@ -735,8 +735,13 @@ static uint64_t _z80dma_int(z80dma_t *dma, uint64_t pins)
             dma->int_state = (dma->int_state & ~Z80DMA_INT_NEEDED) | Z80DMA_INT_REQUESTED;
         }
 
+        /* A Z80 interrupt acknowledge asserts M1+IORQ without RD or WR.
+           Requiring the complete bus signature matters when the DMA itself is
+           bus master: a stale CPU M1 combined with the DMA's I/O read/write
+           cycle must not consume the pending EOB interrupt. */
         if ((dma->int_state & Z80DMA_INT_REQUESTED) &&
-            ((pins & (Z80DMA_IORQ | Z80DMA_M1)) == (Z80DMA_IORQ | Z80DMA_M1))) {
+            ((pins & (Z80DMA_IORQ | Z80DMA_M1 | Z80DMA_RD | Z80DMA_WR)) ==
+             (Z80DMA_IORQ | Z80DMA_M1))) {
             Z80DMA_SET_DATA(pins, dma->int_vector);
             dma->int_state = (dma->int_state & ~Z80DMA_INT_REQUESTED) | Z80DMA_INT_SERVICED;
             pins &= ~Z80DMA_INT;

@@ -1200,6 +1200,56 @@ std::string partner_gdp::dump_terminal_text() const
     return terminal_ ? terminal_->dump_text() : std::string{};
 }
 
+std::string partner_gdp::dump_avdc_text() const
+{
+    const int rows = std::clamp((int)avdc_.rows_per_screen, 1, 128);
+    const int columns = std::clamp((int)avdc_.chars_per_row, 1, 256);
+    const uint16_t first = (uint16_t)(avdc_.display_buffer_first_addr & 0x3FFFu);
+    const uint16_t last = (uint16_t)(avdc_.display_buffer_last_addr & 0x3FFFu);
+    const auto wrap = [&](uint16_t base, uint32_t delta) {
+        uint32_t address = base & 0x3FFFu;
+        if (first > last)
+            return (uint16_t)((address + delta) & 0x3FFFu);
+        const uint32_t until_wrap = address <= last
+            ? (uint32_t)last - address + 1u
+            : 0x4000u - address + (uint32_t)last + 1u;
+        if (delta < until_wrap)
+            return (uint16_t)((address + delta) & 0x3FFFu);
+        const uint32_t length = (uint32_t)last - first + 1u;
+        return (uint16_t)(first + ((delta - until_wrap) % length));
+    };
+
+    std::string text;
+    for (int row = 0; row < rows; ++row) {
+        uint16_t line;
+        if (avdc_.use_row_table) {
+            const uint16_t pointer = (uint16_t)(
+                (avdc_.start2_addr_start + (uint16_t)(row * 2)) & 0x3FFFu);
+            line = (uint16_t)(avdc_.vram[pointer] |
+                ((uint16_t)avdc_.vram[(pointer + 1u) & 0x3FFFu] << 8));
+            line &= 0x3FFFu;
+        } else {
+            line = wrap((uint16_t)(avdc_.start1_addr & 0x3FFFu),
+                        (uint32_t)row * (uint32_t)columns);
+        }
+
+        std::string output;
+        output.reserve((size_t)columns);
+        for (int column = 0; column < columns; ++column) {
+            const uint8_t ch = avdc_.vram[wrap(line, (uint32_t)column)];
+            output.push_back(ch >= 0x20u && ch < 0x7Fu ? (char)ch : ' ');
+        }
+        while (!output.empty() && output.back() == ' ')
+            output.pop_back();
+        text += output;
+        if (row + 1 < rows)
+            text.push_back('\n');
+    }
+    while (!text.empty() && text.back() == '\n')
+        text.pop_back();
+    return text;
+}
+
 std::string partner_gdp::dump_raw_serial_text() const
 {
     return raw_serial_;

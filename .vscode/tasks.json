@@ -59,7 +59,8 @@
       "command": "make",
       "args": [
         "-C",
-        "${workspaceFolder}/partos"
+        "${workspaceFolder}/../partos",
+        "rom"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
@@ -76,10 +77,11 @@
     {
       "label": "Build PartOS Disks",
       "type": "shell",
-      "command": "python3",
+      "command": "make",
       "args": [
-        "${workspaceFolder}/tools/mkdosdisk.py",
-        "${workspaceFolder}/disks"
+        "-C",
+        "${workspaceFolder}/../partos",
+        "disks"
       ],
       "options": {
         "cwd": "${workspaceFolder}"
