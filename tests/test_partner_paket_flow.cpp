@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cerrno>
 #include <cstdint>
 #include <cstdio>
@@ -21,8 +22,10 @@
 
 namespace {
 
-constexpr std::uint64_t boot_limit = 300000000ULL;
-constexpr std::size_t fixture_size = 4096U;
+constexpr std::uint64_t boot_limit = 400000000ULL;
+// Match the current INVADERS.COM payload.  A short fixture cannot expose
+// transport failures that occur only after many Squid response pages.
+constexpr std::size_t fixture_size = 25396U;
 
 const char catalog[] = R"json([
   {
@@ -31,15 +34,15 @@ const char catalog[] = R"json([
     "modelId":"p","modelName":"Partner P","releaseYear":2026,
     "version":"2.0","rating":"Great","description":"Wire v2 P fixture",
     "downloads":[{"id":"complete","label":"Program file","format":"COM",
-      "files":[{"fileName":"FIXTUREP.COM","sizeBytes":4096}]}]
+      "files":[{"fileName":"FIXTUREP.COM","sizeBytes":25396}]}]
   },
   {
-    "id":"fixture-g","name":"Fixture Partner G","vendor":"Regression",
+    "id":"invaders","name":"Napad iz Vesolja","vendor":"Regression",
     "platformId":"idp","platformName":"Iskra Delta Partner",
     "modelId":"gdp","modelName":"Partner G","releaseYear":2026,
     "version":"2.0","rating":"Great","description":"Wire v2 G fixture",
     "downloads":[{"id":"complete","label":"Program file","format":"COM",
-      "files":[{"fileName":"FIXTUREG.COM","sizeBytes":4096}]}]
+      "files":[{"fileName":"INVADERS.COM","sizeBytes":25396}]}]
   }
 ])json";
 
@@ -149,13 +152,18 @@ private:
             first_space + 1, second_space - first_space - 1);
         if (path == "/api/v1/catalog/packages")
         {
+            // Real Retro Vault responses arrive asynchronously.  Keep the
+            // virtual serial link alive while the host request is in flight;
+            // an immediate localhost reply does not exercise that state.
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
             ++catalog_requests_;
             reply(fd, "application/json", catalog, sizeof(catalog) - 1);
             return;
         }
         if (path == "/api/v1/catalog/packages/idp/p/fixture-p/downloads/complete" ||
-            path == "/api/v1/catalog/packages/idp/gdp/fixture-g/downloads/complete")
+            path == "/api/v1/catalog/packages/idp/gdp/invaders/downloads/complete")
         {
+            std::this_thread::sleep_for(std::chrono::milliseconds(250));
             std::array<std::uint8_t, fixture_size> bytes{};
             for (std::size_t index = 0; index < sizeof(bytes); ++index)
                 bytes[index] = fixture_byte(index);
@@ -719,10 +727,10 @@ int main()
         machine.set_rtc_nmi_enabled(true);
         g_ok = run_flow(
             machine, (root / "roms/partner_gdp.rom").string(),
-            g_disk, "fixture-g");
+            g_disk, "invaders");
     }
     if (run_g)
-        g_ok = g_ok && downloaded_file_matches(g_disk, "FIXTUREG.COM");
+        g_ok = g_ok && downloaded_file_matches(g_disk, "INVADERS.COM");
     if (run_p) {
         fs::remove(p_nvram, error);
         if (p_override == nullptr)

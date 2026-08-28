@@ -19,14 +19,17 @@ static void consume_terminal_tx(z80sio_t &chip,
         terminal->put_char(ch);
 }
 
-static void feed_pending_rx(z80sio_t &chip, int channel,
+static bool feed_pending_rx(z80sio_t &chip, int channel,
                             std::deque<uint8_t> &fifo, uint64_t tick)
 {
     if (fifo.empty() || !z80sio_rx_enabled(&chip, channel))
-        return;
+        return false;
     if (z80sio_line_receive(&chip, channel, fifo.front(), tick,
-                            4000000, 153600))
+                            4000000, 153600)) {
         fifo.pop_front();
+        return true;
+    }
+    return false;
 }
 
 static void queue_key_to_channel(std::deque<uint8_t> &fifo, uint8_t ch)
@@ -84,7 +87,8 @@ void partner_crt::tick()
     // The CRT model exposes only the fixed internal keyboard/terminal channel
     // on the built-in screen. Other serial ports are attachable peripherals and
     // should not bleed into the on-screen terminal.
-    feed_pending_rx(sio, Z80SIO_CHANNEL_A, key_fifo_, get_tick_count());
+    if (feed_pending_rx(sio, Z80SIO_CHANNEL_A, key_fifo_, get_tick_count()))
+        request_sio_service();
     consume_terminal_tx(sio, Z80SIO_CHANNEL_A, raw_serial_, terminal_.get());
     if (!cpm_console_started_ && ends_with(raw_serial_, "CP/M V3.0 Loader"))
         cpm_console_started_ = true;

@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <cstring>
 
 #define CHIPS_IMPL
 #include "scn2674.h"
@@ -546,6 +547,101 @@ static void test_external_character_rom_survives_reset()
     CHECK(avdc.glyph_rom_loaded && avdc.glyph_rom[0][0] == 0xA5u);
 }
 
+static void reference_advance_master_tick(scn2674_t &avdc)
+{
+    if (avdc.master_clock_hz == 0u || avdc.dot_clock_hz == 0u ||
+        avdc.dots_per_character == 0u)
+        return;
+    const uint64_t accum =
+        (uint64_t)avdc.dot_clock_accum + avdc.dot_clock_hz;
+    uint32_t dot_edges = (uint32_t)(accum / avdc.master_clock_hz);
+    avdc.dot_clock_accum = (uint32_t)(accum % avdc.master_clock_hz);
+    while (dot_edges-- > 0u) {
+        avdc.cclk_dot_phase++;
+        if (avdc.cclk_dot_phase >= avdc.dots_per_character) {
+            avdc.cclk_dot_phase = 0u;
+            _scn2674_advance_cclk(&avdc);
+        }
+    }
+}
+
+static void test_master_clock_fast_path_matches_dot_edge_reference()
+{
+    static constexpr struct {
+        uint32_t dot_hz;
+        uint8_t dots_per_character;
+    } modes[] = {
+        { 18000000u, 9u },
+        { 18000000u, 10u },
+        { 24000000u, 8u },
+    };
+    const uint8_t ir[] = {
+        0xD0, 0x2F, 0x8D, 0x05, 0x99, 0x4F, 0x0A, 0xEA,
+        0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    for (const auto &mode : modes) {
+        scn2674_t actual{};
+        scn2674_t reference{};
+        scn2674_init(&actual);
+        scn2674_init(&reference);
+        load_ir(actual, ir, (int)sizeof(ir));
+        load_ir(reference, ir, (int)sizeof(ir));
+        scn2674_set_clock(&actual, 4000000u, mode.dot_hz,
+                          mode.dots_per_character);
+        scn2674_set_clock(&reference, 4000000u, mode.dot_hz,
+                          mode.dots_per_character);
+        scn2674_write(&actual, 0x35, 0x29);    // display enable at next field
+        scn2674_write(&reference, 0x35, 0x29);
+        for (uint32_t tick = 0; tick < 250000u; ++tick) {
+            if (tick == 4096u) {
+                scn2674_write(&actual, 0x35, 0xAA); // delayed cell write
+                scn2674_write(&reference, 0x35, 0xAA);
+            }
+            const uint64_t actual_pins = scn2674_tick(&actual, idle_pins());
+            reference_advance_master_tick(reference);
+            const uint64_t reference_pins =
+                scn2674_sample_pins(&reference, idle_pins());
+            CHECK(actual_pins == reference_pins);
+            if ((tick & 0x0FFFu) == 0u)
+                CHECK(std::memcmp(&actual, &reference, sizeof(actual)) == 0);
+        }
+        CHECK(std::memcmp(&actual, &reference, sizeof(actual)) == 0);
+    }
+}
+
+static void test_idle_tick_matches_generic_tick()
+{
+    scn2674_t generic{};
+    scn2674_t idle{};
+    const uint8_t ir[] = {
+        0xD0, 0x2F, 0x8D, 0x05, 0x99, 0x4F, 0x0A, 0xEA,
+        0x00, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00
+    };
+    scn2674_init(&generic);
+    scn2674_init(&idle);
+    load_ir(generic, ir, (int)sizeof(ir));
+    load_ir(idle, ir, (int)sizeof(ir));
+    scn2674_set_clock(&generic, 4000000u, 24000000u, 8u);
+    scn2674_set_clock(&idle, 4000000u, 24000000u, 8u);
+    scn2674_write(&generic, 0x35, 0x29);
+    scn2674_write(&idle, 0x35, 0x29);
+    uint64_t idle_previous = scn2674_sample_pins(&idle, idle_pins());
+    for (uint32_t tick = 0; tick < 250000u; ++tick) {
+        if (tick == 8192u || tick == 131071u) {
+            const uint8_t command = tick == 8192u ? 0xAAu : 0x49u;
+            scn2674_write(&generic, 0x35, command);
+            scn2674_write(&idle, 0x35, command);
+            idle_previous = scn2674_sample_pins(&idle, idle_pins());
+        }
+        const uint64_t generic_pins = scn2674_tick(&generic, idle_pins());
+        const uint64_t idle_result =
+            scn2674_tick_idle(&idle, idle_pins(), idle_previous);
+        CHECK(generic_pins == idle_result);
+        CHECK(std::memcmp(&generic, &idle, sizeof(generic)) == 0);
+        idle_previous = idle_result;
+    }
+}
+
 }
 
 int main()
@@ -566,6 +662,8 @@ int main()
     test_interlaced_fields_and_line_addressing();
     test_memory_interface_pins();
     test_external_character_rom_survives_reset();
+    test_master_clock_fast_path_matches_dot_edge_reference();
+    test_idle_tick_matches_generic_tick();
     if (fails == 0) std::puts("OK");
     return fails ? 1 : 0;
 }

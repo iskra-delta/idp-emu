@@ -56,6 +56,8 @@ option(IDP_STATIC_RUNTIME
     "Link the compiler runtime statically where the platform supports it" ON)
 option(IDP_BUILD_PROBES
     "Build developer-only floppy and GDP diagnostic probes" OFF)
+option(IDP_RELEASE_IPO
+    "Enable interprocedural optimization in Release builds" ON)
 set(IDP_RETROVAULT_REF "main" CACHE STRING
     "squid-server revision providing the Retro Vault request implementation")
 mark_as_advanced(IDP_RETROVAULT_REF)
@@ -65,6 +67,20 @@ mark_as_advanced(IDP_LIBSQUID_REF)
 set(IDP_LIBSQUID_SOURCE_DIR "" CACHE PATH
     "Explicitly use a local libsquid checkout instead of the fetched revision")
 mark_as_advanced(IDP_LIBSQUID_SOURCE_DIR)
+
+# The emulator advances many small chip models for every 4 MHz guest clock.
+# Release IPO lets the compiler inline and simplify those calls across source
+# files, which is particularly important for the GDP video controllers.
+if(IDP_RELEASE_IPO)
+    include(CheckIPOSupported)
+    check_ipo_supported(RESULT IDP_IPO_SUPPORTED OUTPUT IDP_IPO_ERROR)
+    if(IDP_IPO_SUPPORTED)
+        set(CMAKE_INTERPROCEDURAL_OPTIMIZATION_RELEASE ON)
+    else()
+        message(WARNING
+            "Release interprocedural optimization is unavailable: ${IDP_IPO_ERROR}")
+    endif()
+endif()
 
 if(IDP_STATIC_RUNTIME AND MSVC)
     set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")

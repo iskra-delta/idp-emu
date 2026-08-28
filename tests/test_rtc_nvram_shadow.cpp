@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <cstdio>
@@ -50,11 +51,66 @@ static int fail(const char *msg)
     return 1;
 }
 
+static bool same_visible_rtc_state(const mm58167a_t &a,
+                                   const mm58167a_t &b)
+{
+    return std::equal(std::begin(a.regs), std::end(a.regs), std::begin(b.regs)) &&
+        a.addr_latch == b.addr_latch &&
+        a.last_sync_time == b.last_sync_time &&
+        a.last_sync_millisecond == b.last_sync_millisecond &&
+        a.interrupt_status == b.interrupt_status &&
+        a.interrupt_control == b.interrupt_control &&
+        a.rollover_status == b.rollover_status &&
+        a.standby_interrupt_enable == b.standby_interrupt_enable;
+}
+
+static bool rtc_idle_tick_lockstep()
+{
+    mm58167a_t generic{};
+    mm58167a_t scheduled{};
+    uint64_t generic_tick = 0;
+    uint64_t scheduled_tick = 0;
+    mm58167a_init(&generic);
+    mm58167a_init(&scheduled);
+    generic.det_base = scheduled.det_base = 1700000000;
+    generic.det_hz = scheduled.det_hz = 4000000u;
+    generic.det_ticks = &generic_tick;
+    scheduled.det_ticks = &scheduled_tick;
+    generic.last_sync_time = scheduled.last_sync_time = 0;
+    generic.last_sync_millisecond = scheduled.last_sync_millisecond = UINT16_MAX;
+    mm58167a_sync_time(&generic);
+    mm58167a_sync_time(&scheduled);
+    for (uint8_t i = 0; i < 8; ++i)
+        generic.regs[0x08u + i] = scheduled.regs[0x08u + i] = 0xCCu;
+    generic.interrupt_control = scheduled.interrupt_control = 0x02u;
+
+    const uint64_t idle = MM58167A_CS | MM58167A_AS | MM58167A_DS |
+                          MM58167A_RW | MM58167A_RESET;
+    uint64_t generic_pins = idle;
+    uint64_t scheduled_pins = idle;
+    for (uint64_t tick = 1; tick <= 410000u; ++tick) {
+        generic_tick = scheduled_tick = tick;
+        generic_pins = mm58167a_tick(&generic, generic_pins);
+        scheduled_pins = mm58167a_tick_idle(
+            &scheduled, scheduled_pins, (tick % 4000u) == 0u);
+        if ((tick % 997u) == 0u || (tick % 4000u) == 0u) {
+            if (generic_pins != scheduled_pins ||
+                !same_visible_rtc_state(generic, scheduled))
+                return false;
+        }
+    }
+    return generic_pins == scheduled_pins &&
+        same_visible_rtc_state(generic, scheduled);
+}
+
 } // namespace
 
 int main()
 {
     namespace fs = std::filesystem;
+
+    if (!rtc_idle_tick_lockstep())
+        return fail("scheduled RTC idle tick diverged from per-tick sync");
 
     const fs::path tmp_dir = fs::path(IDP_SOURCE_ROOT) / "tests/dump/rtc-nvram-shadow";
     const fs::path nvram_path = tmp_dir / "shadow.bin";

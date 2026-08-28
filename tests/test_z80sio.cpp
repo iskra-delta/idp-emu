@@ -1,5 +1,7 @@
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
+#include <initializer_list>
 
 #define CHIPS_IMPL
 #include "z80sio.h"
@@ -658,6 +660,66 @@ static int test_interrupt_request_is_deferred_during_m1()
     return fails;
 }
 
+static int test_idle_tick_matches_generic_tick()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+    z80sio_t generic{};
+    z80sio_t idle{};
+    z80sio_init(&generic);
+    z80sio_init(&idle);
+    for (z80sio_t *chip : { &generic, &idle }) {
+        write_wr(chip, Z80SIO_CHANNEL_B, 2, 0xC0);
+        write_wr(chip, Z80SIO_CHANNEL_B, 1, 0x17);
+        write_wr(chip, Z80SIO_CHANNEL_A, 1, 0x13);
+        write_wr(chip, Z80SIO_CHANNEL_A, 3, 0xC1);
+        write_wr(chip, Z80SIO_CHANNEL_A, 5, 0xEA);
+        write_wr(chip, Z80SIO_CHANNEL_B, 3, 0xC1);
+        write_wr(chip, Z80SIO_CHANNEL_B, 5, 0x68);
+    }
+
+    for (uint32_t tick = 0; tick < 200000u; ++tick) {
+        if ((tick % 7919u) == 17u) {
+            z80sio_rx_data(&generic, Z80SIO_CHANNEL_A, (uint8_t)tick);
+            z80sio_rx_data(&idle, Z80SIO_CHANNEL_A, (uint8_t)tick);
+        }
+        if ((tick % 12347u) == 31u) {
+            write_data(&generic, Z80SIO_CHANNEL_B, (uint8_t)(tick >> 2));
+            write_data(&idle, Z80SIO_CHANNEL_B, (uint8_t)(tick >> 2));
+            (void)z80sio_tx_data(&generic, Z80SIO_CHANNEL_B);
+            (void)z80sio_tx_data(&idle, Z80SIO_CHANNEL_B);
+        }
+        if ((tick % 12347u) == 1031u) {
+            z80sio_tx_complete(&generic, Z80SIO_CHANNEL_B);
+            z80sio_tx_complete(&idle, Z80SIO_CHANNEL_B);
+        }
+
+        uint64_t pins = Z80SIO_IEIO;
+        if ((tick / 997u) & 1u) pins |= Z80SIO_DCDA | Z80SIO_CTSA;
+        if ((tick / 1597u) & 1u) pins |= Z80SIO_DCDB | Z80SIO_CTSB;
+        if ((tick % 43u) < 2u) pins |= Z80SIO_M1;
+        if ((tick % 4093u) == 0u) pins |= Z80SIO_RETI;
+        if ((tick % 8191u) == 0u) pins |= Z80SIO_IORQ | Z80SIO_M1;
+
+        const uint64_t generic_pins = z80sio_tick(&generic, pins);
+        const uint64_t idle_pins = z80sio_tick_idle(&idle, pins);
+        CHECK(generic_pins == idle_pins);
+        z80sio_t generic_semantic = generic;
+        z80sio_t idle_semantic = idle;
+        generic_semantic.idle_input_pins = idle_semantic.idle_input_pins = 0;
+        generic_semantic.idle_output_pins = idle_semantic.idle_output_pins = 0;
+        generic_semantic.idle_channel_state[0] =
+            idle_semantic.idle_channel_state[0] = 0;
+        generic_semantic.idle_channel_state[1] =
+            idle_semantic.idle_channel_state[1] = 0;
+        generic_semantic.idle_cache_valid = idle_semantic.idle_cache_valid = false;
+        CHECK(std::memcmp(&generic_semantic, &idle_semantic,
+                          sizeof(generic_semantic)) == 0);
+    }
+#undef CHECK
+    return fails;
+}
+
 } // namespace
 
 int main()
@@ -681,6 +743,7 @@ int main()
     fails += test_auto_enables_and_wait_ready();
     fails += test_interrupt_priority_vectors_and_rr2();
     fails += test_interrupt_request_is_deferred_during_m1();
+    fails += test_idle_tick_matches_generic_tick();
 
     if (fails == 0) {
         std::printf("test_z80sio: all tests passed\n");

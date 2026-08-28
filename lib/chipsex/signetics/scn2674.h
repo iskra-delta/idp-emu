@@ -179,6 +179,8 @@ typedef struct {
 void scn2674_init(scn2674_t *avdc);
 void scn2674_reset(scn2674_t *avdc);
 uint64_t scn2674_tick(scn2674_t *avdc, uint64_t pins);
+uint64_t scn2674_tick_idle(scn2674_t *avdc, uint64_t pins,
+                           uint64_t previous_pins);
 uint64_t scn2674_sample_pins(scn2674_t *avdc, uint64_t pins);
 void scn2674_set_clock(scn2674_t *avdc, uint32_t master_hz,
                        uint32_t dot_hz, uint8_t dots_per_character);
@@ -882,21 +884,27 @@ static inline void _scn2674_advance_cclk(scn2674_t *avdc) {
     _scn2674_begin_scanline(avdc);
 }
 
-static inline void _scn2674_advance_master_tick(scn2674_t *avdc) {
+static inline bool _scn2674_advance_master_tick(scn2674_t *avdc) {
     uint64_t accum;
     uint32_t dot_edges;
+    uint32_t cclk_edges;
+    uint32_t phase;
     if (avdc->master_clock_hz == 0u || avdc->dot_clock_hz == 0u ||
-        avdc->dots_per_character == 0u) return;
+        avdc->dots_per_character == 0u) return false;
     accum = (uint64_t)avdc->dot_clock_accum + avdc->dot_clock_hz;
     dot_edges = (uint32_t)(accum / avdc->master_clock_hz);
     avdc->dot_clock_accum = (uint32_t)(accum % avdc->master_clock_hz);
-    while (dot_edges-- > 0u) {
-        avdc->cclk_dot_phase++;
-        if (avdc->cclk_dot_phase >= avdc->dots_per_character) {
-            avdc->cclk_dot_phase = 0u;
-            _scn2674_advance_cclk(avdc);
-        }
-    }
+    /* Dot edges have no observable intermediate state: only a completed
+       character clock advances the raster. Fold all edges from this master
+       tick into one quotient/remainder operation instead of looping over the
+       4..6 dot edges generated on every Partner GDP CPU clock. */
+    phase = (uint32_t)avdc->cclk_dot_phase + dot_edges;
+    cclk_edges = phase / avdc->dots_per_character;
+    avdc->cclk_dot_phase = (uint8_t)(phase % avdc->dots_per_character);
+    const bool advanced = cclk_edges != 0u;
+    while (cclk_edges-- > 0u)
+        _scn2674_advance_cclk(avdc);
+    return advanced;
 }
 
 uint16_t scn2674_display_address(const scn2674_t *avdc, uint32_t offset) {
@@ -1011,6 +1019,26 @@ uint64_t scn2674_tick(scn2674_t *avdc, uint64_t pins) {
     }
     _scn2674_advance_master_tick(avdc);
     return scn2674_sample_pins(avdc, pins);
+}
+
+uint64_t scn2674_tick_idle(scn2674_t *avdc, uint64_t pins,
+                           uint64_t previous_pins) {
+    static const uint64_t outputs = SCN2674_IRQ | SCN2674_VBLANK |
+        SCN2674_HSYNC | SCN2674_BLANK | SCN2674_VSYNC | SCN2674_CURSOR |
+        SCN2674_LINE_ZERO | SCN2674_ODD | SCN2674_LAST_LINE;
+    if ((pins & SCN2674_RESET) == 0u || (pins & SCN2674_CS) == 0u ||
+        (pins & (SCN2674_CHAR_LOAD | SCN2674_ATTR_LOAD |
+                 SCN2674_CHAR_OE | SCN2674_ATTR_OE)) != 0u)
+        return scn2674_tick(avdc, pins);
+
+    /* Output and status pins change only on a completed character clock.
+       The 18/24 MHz dot clock often leaves the previous CCLK state intact on
+       a 4 MHz motherboard tick, so reuse its already-sampled output pins. */
+    const bool irq_changed = ((avdc->irq_status & 0x1Fu) != 0u) !=
+                             ((previous_pins & SCN2674_IRQ) != 0u);
+    if (_scn2674_advance_master_tick(avdc) || irq_changed)
+        return scn2674_sample_pins(avdc, pins);
+    return (pins & ~outputs) | (previous_pins & outputs);
 }
 
 uint8_t scn2674_read(scn2674_t *avdc, uint8_t port) {

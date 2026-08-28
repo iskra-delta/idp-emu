@@ -185,6 +185,10 @@ extern "C"
     void mm58167a_init(mm58167a_t *chip);
     void mm58167a_reset(mm58167a_t *chip);
     uint64_t mm58167a_tick(mm58167a_t *chip, uint64_t pins);
+    /* Advance an unselected RTC clock; sync_time says whether the visible
+       millisecond registers need refreshing on this host tick. */
+    uint64_t mm58167a_tick_idle(mm58167a_t *chip, uint64_t pins,
+                               bool sync_time);
     void mm58167a_sync_time(mm58167a_t *chip);
 
 #ifdef __cplusplus
@@ -385,6 +389,19 @@ static void _mm58167a_write_register(mm58167a_t *chip, uint8_t reg, uint8_t data
     }
 }
 
+static uint64_t _mm58167a_output_pins(const mm58167a_t *chip, uint64_t pins)
+{
+    if (chip->interrupt_status)
+        pins |= MM58167A_INT;
+    else
+        pins &= ~MM58167A_INT;
+    if (chip->last_sync_millisecond < 500u)
+        pins |= MM58167A_1HZ;
+    else
+        pins &= ~MM58167A_1HZ;
+    return pins;
+}
+
 uint64_t mm58167a_tick(mm58167a_t *chip, uint64_t pins)
 {
     if ((pins & MM58167A_RESET) == 0)
@@ -420,14 +437,13 @@ uint64_t mm58167a_tick(mm58167a_t *chip, uint64_t pins)
         }
     }
 
-    if (chip->interrupt_status)
-        pins |= MM58167A_INT;
-    else
-        pins &= ~MM58167A_INT;
-    if (chip->last_sync_millisecond < 500u)
-        pins |= MM58167A_1HZ;
-    else
-        pins &= ~MM58167A_1HZ;
-    return pins;
+    return _mm58167a_output_pins(chip, pins);
+}
+
+uint64_t mm58167a_tick_idle(mm58167a_t *chip, uint64_t pins, bool sync_time)
+{
+    if (sync_time)
+        mm58167a_sync_time(chip);
+    return _mm58167a_output_pins(chip, pins);
 }
 #endif // CHIPS_IMPL

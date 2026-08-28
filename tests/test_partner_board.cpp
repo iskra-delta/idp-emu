@@ -148,6 +148,42 @@ int main()
         emu.tick();
     CHECK((emu.io_read(0x98) & 0x01u) == 0u);
 
+    // Characterize a complete motherboard tick stream, including CPU bus
+    // service and every peripheral in the daisy chain.  This exact signature
+    // guards optimizations which let the compiler inline chip emulation across
+    // translation-unit boundaries: the generated host code may change, but
+    // the guest-visible state after the same 4 MHz clocks must not.
+    emu.reset();
+    emu.clear_debug_memory();
+    emu.write_debug_memory(0x8000, {
+        0x3C,             // INC A
+        0x32, 0x00, 0x90, // LD (9000h),A
+        0xC3, 0x00, 0x80  // JP 8000h
+    });
+    auto state = emu.capture_debug_cpu_state();
+    state.af = 0x0000;
+    state.bc = 0x1234;
+    state.de = 0x5678;
+    state.hl = 0x9ABC;
+    state.sp = 0xF000;
+    state.im = 1;
+    emu.apply_debug_cpu_state(state);
+    emu.debug_set_pc(0x8000);
+    for (int clock = 0; clock < 120000; ++clock)
+        emu.tick();
+    state = emu.capture_debug_cpu_state();
+    CHECK(emu.get_tick_count() == 120000u);
+    CHECK(state.pc == 0x8004u);
+    CHECK(state.af == 0x5D08u);
+    CHECK(state.bc == 0x1234u);
+    CHECK(state.de == 0x5678u);
+    CHECK(state.hl == 0x9ABCu);
+    CHECK(state.sp == 0xF000u);
+    CHECK(state.r == 0x16u);
+    CHECK(emu.peek_mem(0x9000) == 0x5Cu);
+    CHECK(!emu.get_dma().enabled);
+    CHECK(!emu.get_fdc().irq_request);
+
     fs::remove(nvram, ec);
 #undef CHECK
     if (failures == 0) {

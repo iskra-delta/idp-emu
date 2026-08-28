@@ -126,6 +126,9 @@ public:
             pins &= ~Z80_NMI;
     }
     bool get_rtc_nmi_enabled() const { return rtc_nmi_enabled_; }
+    // Headless/turbo runtimes can advance the RTC from guest clocks while
+    // retaining a caller-selected wall-clock epoch.
+    void set_emulated_rtc_base(time_t base);
     // Seed MM58167 NVRAM ports (0xA8..0xAF) before page0_install copies them.
     void seed_cmos_nvram(const uint8_t *data, size_t len);
     uint8_t get_fdc_motor() const { return fdc_motor; }
@@ -247,6 +250,7 @@ protected:
     idpartner_sasi_t sasi_{};
     mm58167a_t rtc{};
     bool rtc_nmi_enabled_ = false;
+    uint16_t rtc_host_sync_divider_ = 0;
     uint8_t fdc_int_vector = 0;  // Port 0xE8
     uint8_t fdc_motor = 0;       // Port 0x98
     uint8_t fdc_int_state = 0;
@@ -323,6 +327,7 @@ protected:
     uint8_t peek_ram(uint16_t addr) const;
     uint8_t read_boot_rom(uint16_t addr) const;
     void set_sio_port_lock(sio_port_id port, bool locked, const std::string &reason);
+    void request_sio_service() { sio_service_requested_ = true; }
 
 private:
     struct tcp_bridge_runtime {
@@ -398,6 +403,10 @@ private:
     std::array<sio_device_runtime, 4> sio_device_runtime_{};
     std::array<bool, 4> sio_port_locked_{};
     std::array<std::string, 4> sio_port_lock_reason_{};
+    std::array<uint8_t, 4> sio_modem_input_cache_{}; // bit 0 CTS, bit 1 DCD
+    uint8_t sio_modem_dirty_mask_ = 0x0Fu;
+    bool sio_service_requested_ = true;
+    uint64_t sio_next_service_tick_ = 0;
     std::unique_ptr<internal_squid_server> internal_squid_;
     std::array<pio_device_config, 2> pio_device_cfg_{};
     std::array<pio_device_runtime, 2> pio_device_runtime_{};

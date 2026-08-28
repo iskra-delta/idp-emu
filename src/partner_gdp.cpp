@@ -3,6 +3,7 @@
 #include "ef9367_font.hpp"
 #include "scn2674_font.hpp"
 #include <algorithm>
+#include <bit>
 #include <chrono>
 #include <cctype>
 #include <cmath>
@@ -241,12 +242,17 @@ void partner_gdp::reset()
     key_fifo_.clear();
     keyboard_.reset();
     avdc_pins_ = scn2674_sample_pins(&avdc_, avdc_bus_idle());
+    avdc_clock_ctl_ = 0xFFu;
     avdc_restrict_ = false;
     gdp_pixel_latch_ = true;
     uint64_t pio_idle = Z80PIO_ASTB | Z80PIO_BSTB;
     Z80PIO_SET_PA(pio_idle, 0);
     gdp_video_pio_pins_ = z80pio_tick(&gdp_video_pio_, pio_idle);
+    gdp_video_pio_signal_pins_ = pio_idle;
+    gdp_video_pio_needs_idle_tick_ = false;
     ef9367_pins_ = ef_bus_idle();
+    ef9367_idle_pins_ = ef_bus_idle();
+    ef9367_board_pa_ = 0xFFu;
     avdc_irq_edge_ = false;
     if (terminal_)
         terminal_->reset();
@@ -256,29 +262,12 @@ void partner_gdp::tick()
 {
     partner::tick();
 
-    // Keep all serial TX channels drained so ROM/CP/M polling on TX-ready can
-    // progress even when the GDP runtime moves console traffic to a different
-    // SIO than the early bootstrap path.
-    auto drain_tx = [&](sio_port_id port, z80sio_t& chip, int channel,
-                        bool keyboard_path) {
-        if (!is_sio_port_locked(port) &&
-            get_sio_device_config(port).kind != sio_device_kind::none)
-            return;
-        uint8_t data = 0;
-        if (!z80sio_line_take_tx(&chip, channel, &data))
-            return;
-        if (keyboard_path) {
-            keyboard_.host_write(data);
-        }
-    };
-    // On Partner GDP, SIO traffic is keyboard/peripheral side traffic, not
-    // video output. Drain transmit paths so firmware polling progresses, but
-    // do not mirror any SIO TX bytes into the on-screen terminal/raw display
-    // traces.
-    drain_tx(sio_port_id::sio1_a, sio, Z80SIO_CHANNEL_A, true);
-    drain_tx(sio_port_id::sio1_b, sio, Z80SIO_CHANNEL_B, false);
-    drain_tx(sio_port_id::sio2_a, sio2, Z80SIO_CHANNEL_A, false);
-    drain_tx(sio_port_id::sio2_b, sio2, Z80SIO_CHANNEL_B, false);
+    // The motherboard virtual-device pass already consumes attached channels
+    // and discards completed output from every unlocked disconnected channel.
+    // Only the fixed GDP keyboard cable is intentionally left for this board.
+    uint8_t keyboard_command = 0;
+    if (z80sio_line_take_tx(&sio, Z80SIO_CHANNEL_A, &keyboard_command))
+        keyboard_.host_write(keyboard_command);
 
     // Feed queued keyboard input strictly through SIO RX path. Keyboard bytes
     // are hardware-serial input and must be consumed by firmware ISR/driver.
@@ -290,12 +279,18 @@ void partner_gdp::tick()
         if (z80sio_line_receive(&sio, Z80SIO_CHANNEL_A, key_fifo_.front(),
                                 get_tick_count(), 4000000, 153600)) {
             key_fifo_.pop_front();
+            request_sio_service();
         }
     }
 
     const uint8_t pa = Z80PIO_GET_PA(gdp_video_pio_pins_);
     const bool previous_mw = (ef9367_pins_ & EF9367_MW) != 0u;
-    ef9367_pins_ = ef9367_tick(&ef9367_, ef_board_pins_from_pio(pa));
+    if (pa != ef9367_board_pa_) {
+        ef9367_idle_pins_ = ef_board_pins_from_pio(pa);
+        ef9367_set_board_inputs(&ef9367_, ef9367_idle_pins_);
+        ef9367_board_pa_ = pa;
+    }
+    ef9367_pins_ = ef9367_tick_idle(&ef9367_, ef9367_idle_pins_);
     const bool current_mw = (ef9367_pins_ & EF9367_MW) != 0u;
     if (!previous_mw && current_mw) {
         /* GDP sheet 7: IC22 derives LOAD from the EF9367 memory-request
@@ -306,12 +301,16 @@ void partner_gdp::tick()
     }
 
     const uint8_t text_ctl = Z80PIO_GET_PB(gdp_video_pio_pins_);
-    scn2674_set_clock(&avdc_, 4000000u, avdc_dot_clock_hz(text_ctl),
-                      avdc_dots_per_character(text_ctl));
+    const uint8_t clock_ctl = (uint8_t)(text_ctl & 0xE0u);
+    if (clock_ctl != avdc_clock_ctl_) {
+        scn2674_set_clock(&avdc_, 4000000u, avdc_dot_clock_hz(text_ctl),
+                          avdc_dots_per_character(text_ctl));
+        avdc_clock_ctl_ = clock_ctl;
+    }
     const bool previous_avdc_irq = (avdc_pins_ & SCN2674_IRQ) != 0;
     const bool previous_blank = (avdc_pins_ & SCN2674_BLANK) != 0;
     const bool previous_last_line = (avdc_pins_ & SCN2674_LAST_LINE) != 0;
-    avdc_pins_ = scn2674_tick(&avdc_, avdc_bus_idle());
+    avdc_pins_ = scn2674_tick_idle(&avdc_, avdc_bus_idle(), avdc_pins_);
     const bool current_avdc_irq = (avdc_pins_ & SCN2674_IRQ) != 0;
     const bool current_blank = (avdc_pins_ & SCN2674_BLANK) != 0;
     /* GDP sheet 11/14: IC26 (74S374) samples multiplexed DADD13/LL on
@@ -324,7 +323,17 @@ void partner_gdp::tick()
     const bool gdp_irq_active = (ef9367_pins_ & EF9367_IRQ) == 0;
     const bool avdc_irq_active = (avdc_pins_ & SCN2674_IRQ) != 0;
     uint64_t pio_idle = gdp_pio_signal_pins(gdp_irq_active, avdc_irq_active);
-    gdp_video_pio_pins_ = z80pio_tick(&gdp_video_pio_, pio_idle);
+    if (gdp_video_pio_needs_idle_tick_ ||
+        pio_idle != gdp_video_pio_signal_pins_) {
+        gdp_video_pio_pins_ = z80pio_tick(&gdp_video_pio_, pio_idle);
+        gdp_video_pio_signal_pins_ = pio_idle;
+        gdp_video_pio_needs_idle_tick_ = false;
+    } else {
+        /* The daisy-chain pass uses the chip's public pin snapshot for the
+           shared CPU bus. Restore the stable board-side pins just as the
+           former unconditional idle tick did. */
+        gdp_video_pio_.pins = gdp_video_pio_pins_;
+    }
 }
 
 uint64_t partner_gdp::clock_expansion_daisy_chain(uint64_t bus_pins)
@@ -387,37 +396,35 @@ void partner_gdp::render_to(display &disp)
         dy = (fy * display::FB_H) / FULL_H;
     };
 
-    const uint8_t *ef_page = ef9367_.fb[ef9367_.read_bank & 1u];
-    const int scroll = ef9367_.scroll_offset;
-    for (int y = 0; y < 512; y++) {
-        int phys_src_y = y - scroll;
-        int src_y = 0;
-        bool src_visible = true;
-        if (ef9367_.mode_512_lines) {
-            phys_src_y &= 511;
-            src_y = phys_src_y;
-        } else {
-            if (phys_src_y < 0 || phys_src_y >= 512) {
-                src_visible = false;
+    if ((ef9367_.cr1 & 0x04u) == 0u) {
+        const uint8_t *ef_page = ef9367_.fb[ef9367_.read_bank & 1u];
+        const int scroll = ef9367_.scroll_offset;
+        for (int y = 0; y < 512; y++) {
+            int phys_src_y = y - scroll;
+            int src_y = 0;
+            if (ef9367_.mode_512_lines) {
+                phys_src_y &= 511;
+                src_y = phys_src_y;
             } else {
+                if (phys_src_y < 0 || phys_src_y >= 512)
+                    continue;
                 src_y = phys_src_y >> 1;
             }
-        }
-        if (!src_visible) {
-            continue;
-        }
-        for (int x = 0; x < 1024; x++) {
-            const uint32_t p = (uint32_t)src_y * 1024u + (uint32_t)x;
-            const uint8_t b = ef_page[p >> 3];
-            if ((ef9367_.cr1 & 0x04u) == 0u &&
-                (b & (uint8_t)(1u << (p & 7u)))) {
-                const int fx = GFX_OFF_X + x;
-                const int fy = GFX_OFF_Y + y;
-                int dx = 0;
-                int dy = 0;
-                map_full_to_disp(fx, fy, dx, dy);
-                disp.add_pixel(dx, dy, 144);
-                ef_on_pixels++;
+            const uint8_t *src = ef_page + (size_t)src_y * (1024u / 8u);
+            for (int byte_x = 0; byte_x < 1024 / 8; ++byte_x) {
+                uint8_t bits = src[byte_x];
+                while (bits != 0u) {
+                    const int bit = std::countr_zero((unsigned)bits);
+                    const int x = byte_x * 8 + bit;
+                    const int fx = GFX_OFF_X + x;
+                    const int fy = GFX_OFF_Y + y;
+                    int dx = 0;
+                    int dy = 0;
+                    map_full_to_disp(fx, fy, dx, dy);
+                    disp.add_pixel(dx, dy, 144);
+                    ef_on_pixels++;
+                    bits &= (uint8_t)(bits - 1u);
+                }
             }
         }
     }
@@ -434,10 +441,12 @@ void partner_gdp::render_to(display &disp)
     const int avdc_cols = std::min(256, std::max(1, (int)avdc_.chars_per_row));
     const int avdc_stride = std::max(1, (int)avdc_.chars_per_row);
 
+    const bool trace_render = render_trace_enabled();
     int avdc_nonspace = 0;
-    for (uint8_t ch : avdc_.vram) {
-        if (ch > 0x20) {
-            avdc_nonspace++;
+    if (trace_render) {
+        for (uint8_t ch : avdc_.vram) {
+            if (ch > 0x20)
+                avdc_nonspace++;
         }
     }
     int avdc_visible_nonspace = 0;
@@ -1075,7 +1084,7 @@ void partner_gdp::render_to(display &disp)
     const bool use_serial_fallback =
         serial_boot_text_available && (avdc_visible_nonspace < avdc_cols);
 
-    if (render_trace_enabled()) {
+    if (trace_render) {
         std::fprintf(stderr,
             "[render-avdc] rowtbl_cfg=%d rowtbl_use=%d rowtbl_base=%04x rowtbl_be=%d rowtbl_le=%d rowtbl_be_score=%d rowtbl_stride=%d rowtbl_valid=%d rowtbl_hits=%d linear_base=%04x rows=%d cols=%d stride=%d rowtbl_vis=%d rowtbl_rows=%d linear_vis=%d linear_rows=%d chosen_vis=%d any=%d serial_fb=%d\n",
             avdc_.use_row_table ? 1 : 0, render_row_table ? 1 : 0, rowtbl_base, rowtbl_big_endian ? 1 : 0,
@@ -1354,16 +1363,20 @@ uint8_t partner_gdp::io_read(uint16_t port)
 
     if (port == 0x30) {
         io_cnt_.pio_rd++;
-        return gdp_pio_read(&gdp_video_pio_, 0,
-                            gdp_irq_active, avdc_irq_active,
-                            gdp_video_pio_pins_);
+        const uint8_t data = gdp_pio_read(&gdp_video_pio_, 0,
+                                          gdp_irq_active, avdc_irq_active,
+                                          gdp_video_pio_pins_);
+        gdp_video_pio_needs_idle_tick_ = true;
+        return data;
     }
 
     if (port >= 0x31 && port <= 0x33) {
         io_cnt_.pio_rd++;
-        return gdp_pio_read(&gdp_video_pio_, (uint8_t)(port - 0x30),
-                            gdp_irq_active, avdc_irq_active,
-                            gdp_video_pio_pins_);
+        const uint8_t data = gdp_pio_read(
+            &gdp_video_pio_, (uint8_t)(port - 0x30),
+            gdp_irq_active, avdc_irq_active, gdp_video_pio_pins_);
+        gdp_video_pio_needs_idle_tick_ = true;
+        return data;
     }
 
     if (port == 0x36) {
@@ -1475,6 +1488,7 @@ void partner_gdp::io_write(uint16_t port, uint8_t data)
         gdp_pio_write(&gdp_video_pio_, (uint8_t)(port - 0x30), data,
                       gdp_irq_active, avdc_irq_active,
                       gdp_video_pio_pins_);
+        gdp_video_pio_needs_idle_tick_ = true;
         const uint64_t board_pins =
             ef_board_pins_from_pio(Z80PIO_GET_PA(gdp_video_pio_pins_));
         ef9367_set_board_inputs(&ef9367_, board_pins);

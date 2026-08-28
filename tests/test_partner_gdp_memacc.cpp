@@ -2,6 +2,7 @@
 #include "gui/display.hpp"
 
 #include <cstdint>
+#include <cstring>
 #include <cstdio>
 #include <memory>
 
@@ -24,6 +25,11 @@ public:
     {
         return const_cast<scn2674_t &>(get_avdc());
     }
+
+    ef9367_t &mutable_ef9367()
+    {
+        return const_cast<ef9367_t &>(get_ef9367());
+    }
 };
 
 static size_t frame_pixels(const display &frame)
@@ -35,6 +41,36 @@ static size_t frame_pixels(const display &frame)
             pixels++;
     }
     return pixels;
+}
+
+static bool test_sparse_ef_render_signature()
+{
+    partner_gdp_test_shim emu;
+    emu.reset();
+    ef9367_t &ef = emu.mutable_ef9367();
+    ef.cr1 = 0u;
+    ef.read_bank = 0u;
+    ef.mode_512_lines = true;
+    ef.scroll_offset = 13;
+    std::memset(ef.fb[0], 0, sizeof(ef.fb[0]));
+    for (size_t index = 0; index < sizeof(ef.fb[0]); index += 97u)
+        ef.fb[0][index] = (uint8_t)(0x81u ^ (uint8_t)(index * 37u));
+
+    display frame;
+    emu.render_to(frame);
+    uint64_t signature = 1469598103934665603ULL;
+    for (size_t index = 0;
+         index < (size_t)display::FB_W * (size_t)display::FB_H; ++index) {
+        signature ^= frame.data()[index];
+        signature *= 1099511628211ULL;
+    }
+    constexpr uint64_t expected = 13898912939090836371ULL;
+    if (signature != expected) {
+        std::printf("test_partner_gdp_memacc: FAIL sparse EF render signature=%llu\n",
+                    (unsigned long long)signature);
+        return false;
+    }
+    return true;
 }
 
 static void configure_test_text_raster(partner_gdp_test_shim &emu)
@@ -384,6 +420,56 @@ static bool test_gdp_pixel_read_latch()
     return true;
 }
 
+static bool test_gdp_pio_idle_stability()
+{
+    partner_gdp_test_shim emu;
+    emu.reset();
+    emu.write_port(0x31, 0x07);
+    emu.write_port(0x31, 0x0F);
+    emu.write_port(0x30, 0x18);
+    emu.write_port(0x33, 0x07);
+    emu.write_port(0x33, 0x0F);
+    emu.write_port(0x32, 0x44);
+    emu.tick();
+    const z80pio_t settled = emu.get_gdp_pio();
+    if ((settled.pins & (Z80PIO_CE | Z80PIO_IORQ)) != 0u ||
+        emu.get_gdp_pio_port_a() != 0x18u ||
+        emu.get_gdp_pio_port_b() != 0x44u) {
+        std::puts("test_partner_gdp_memacc: FAIL GDP PIO did not settle after I/O");
+        return false;
+    }
+    for (int tick = 0; tick < 512; ++tick)
+        emu.tick();
+    if (std::memcmp(&settled, &emu.get_gdp_pio(), sizeof(settled)) != 0) {
+        std::puts("test_partner_gdp_memacc: FAIL stable GDP PIO changed during idle clocks");
+        return false;
+    }
+    return true;
+}
+
+static bool test_disconnected_sio_is_drained_by_motherboard()
+{
+    partner_gdp_test_shim emu;
+    emu.reset();
+    emu.write_port(0xE1, 0x18); // SIO2 channel A reset
+    for (int tick = 0; tick < 4; ++tick)
+        emu.tick();
+    emu.write_port(0xE1, 0x04);
+    emu.write_port(0xE1, 0x44); // x16, one stop bit
+    emu.write_port(0xE1, 0x05);
+    emu.write_port(0xE1, 0x68); // TX enabled, 8 bits
+    emu.write_port(0xE0, 0xA5);
+    for (int tick = 0; tick < 5000; ++tick)
+        emu.tick();
+    const z80sio_channel_t &channel =
+        emu.get_sio2().chn[Z80SIO_CHANNEL_A];
+    if (!channel.tx_shift_empty || channel.line_tx_event_pending) {
+        std::puts("test_partner_gdp_memacc: FAIL disconnected SIO TX was not drained");
+        return false;
+    }
+    return true;
+}
+
 static bool avdc_wait_access_like_hardware(partner_gdp_test_shim &emu)
 {
     size_t guard = 200000u;
@@ -581,6 +667,12 @@ static bool test_ultimate_avdc_access_and_ready(bool columns132)
 
 int main()
 {
+    if (!test_sparse_ef_render_signature())
+        return 1;
+    if (!test_gdp_pio_idle_stability())
+        return 1;
+    if (!test_disconnected_sio_is_drained_by_motherboard())
+        return 1;
     if (!test_gdp_pixel_read_latch())
         return 1;
     if (!test_user_defined_characters_and_dot_stretch())

@@ -266,6 +266,11 @@ def main():
             if screenshot.read(8) != b"\x89PNG\r\n\x1a\n":
                 raise AssertionError("screenshot did not write a PNG")
         video = structured(replies, 28)
+        unwatched_run = structured(replies, 27)["run"]
+        if (unwatched_run["reason"], unwatched_run["cycles"]) != (
+                "completed", 66_667):
+            raise AssertionError(
+                f"breakpoint-free frame run changed behavior: {unwatched_run}")
         if video["frames"] != 1 or video["bytes"] <= 1_000_000:
             raise AssertionError(f"video did not capture one full frame: {video}")
         with open(video_path, "rb") as recording:

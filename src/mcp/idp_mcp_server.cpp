@@ -544,9 +544,13 @@ json idp_mcp_server::run_machine(uint64_t tick_limit,
     std::optional<uint32_t> hit;
     std::optional<uint32_t> pending_bus_hit;
     bool previous_boundary = machine_.is_opdone();
+    const bool check_breakpoints = !breakpoints_.empty();
+    const bool capture_video = video_file_.is_open();
 
     while (ticks < tick_limit) {
-        const bool boundary = machine_.is_opdone();
+        /* Nothing mutates the CPU between the preceding end-of-tick sample
+           and this loop head, so do not decode the same boundary twice. */
+        const bool boundary = previous_boundary;
         if (pending_bus_hit && boundary) {
             hit = pending_bus_hit;
             reason = "breakpoint";
@@ -561,7 +565,7 @@ json idp_mcp_server::run_machine(uint64_t tick_limit,
             reason = "instruction_limit";
             break;
         }
-        if (boundary || ticks == 0) {
+        if (check_breakpoints && (boundary || ticks == 0)) {
             hit = execute_breakpoint(machine_.get_current_pc());
             if (hit) {
                 reason = "breakpoint";
@@ -570,8 +574,9 @@ json idp_mcp_server::run_machine(uint64_t tick_limit,
         }
         machine_.tick();
         ++ticks;
-        capture_video_if_due();
-        if (!pending_bus_hit)
+        if (capture_video)
+            capture_video_if_due();
+        if (check_breakpoints && !pending_bus_hit)
             pending_bus_hit = bus_breakpoint(machine_.get_last_cpu_bus_pins());
         const bool now_boundary = machine_.is_opdone();
         if (now_boundary && !previous_boundary) ++instructions;

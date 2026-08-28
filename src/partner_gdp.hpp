@@ -87,8 +87,13 @@ private:
     std::deque<uint8_t> key_fifo_{};
     partner_gdp_keyboard keyboard_{};
     uint64_t gdp_video_pio_pins_ = 0;
+    uint64_t gdp_video_pio_signal_pins_ = 0;
+    bool gdp_video_pio_needs_idle_tick_ = false;
     uint64_t ef9367_pins_ = 0;
+    uint64_t ef9367_idle_pins_ = 0;
+    uint8_t ef9367_board_pa_ = 0xFFu;
     uint64_t avdc_pins_ = 0;
+    uint8_t avdc_clock_ctl_ = 0xFFu;
     bool avdc_restrict_ = false; // DADD13/LL latched at falling BLANK
     bool gdp_pixel_latch_ = true; // active-low pixel sense returned on 36h D7
 

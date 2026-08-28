@@ -723,6 +723,47 @@ static int test_partner_control_and_vblank_pins()
     return fails;
 }
 
+static int test_idle_tick_matches_generic_tick()
+{
+    int fails = 0;
+#define CHECK(c) do { if (!(c)) { std::printf("FAIL %s:%d: %s\n", __FILE__, __LINE__, #c); ++fails; } } while (0)
+    ef9367_t generic{};
+    ef9367_t idle{};
+    ef9367_init(&generic);
+    ef9367_init(&idle);
+    const uint64_t inputs = idle_pins() | EF9367_RBNK | EF9367_WBNK;
+    ef9367_set_board_inputs(&generic, inputs);
+    ef9367_set_board_inputs(&idle, inputs);
+
+    generic.cr1 = idle.cr1 = 0x60u; // VBLANK and READY interrupts
+    generic.scan_ctr = idle.scan_ctr = 36u * 96u + 23u;
+    generic.vblank = idle.vblank = false;
+    generic.previous_vblank = idle.previous_vblank = false;
+    ef9367_command(&generic, 0x0Fu); // exercise the deferred memory cycle
+    ef9367_command(&idle, 0x0Fu);
+
+    uint64_t generic_pins = inputs;
+    uint64_t idle_tick_pins = inputs;
+    for (int tick = 0; tick < 200000; ++tick) {
+        if (tick == 1000 || tick == 90000) {
+            ef9367_write(&generic, 0x21u, 0x60u);
+            ef9367_write(&idle, 0x21u, 0x60u);
+            ef9367_command(&generic, 0x00u);
+            ef9367_command(&idle, 0x00u);
+        }
+        generic_pins = ef9367_tick(&generic, generic_pins);
+        idle_tick_pins = ef9367_tick_idle(&idle, idle_tick_pins);
+        if ((tick & 0xFF) == 0) {
+            CHECK(generic_pins == idle_tick_pins);
+            CHECK(std::memcmp(&generic, &idle, sizeof(generic)) == 0);
+        }
+    }
+    CHECK(generic_pins == idle_tick_pins);
+    CHECK(std::memcmp(&generic, &idle, sizeof(generic)) == 0);
+#undef CHECK
+    return fails;
+}
+
 } // namespace
 
 int main()
@@ -742,6 +783,7 @@ int main()
     fails += test_character_orientations();
     fails += test_status_interrupt_lightpen_and_memory_request();
     fails += test_partner_control_and_vblank_pins();
+    fails += test_idle_tick_matches_generic_tick();
 
     if (fails == 0) {
         std::printf("test_ef9367: all tests passed\n");

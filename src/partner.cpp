@@ -329,6 +329,17 @@ partner::~partner()
         cleanup_tcp_bridge(runtime.tcp);
 }
 
+void partner::set_emulated_rtc_base(time_t base)
+{
+    rtc.det_base = base;
+    rtc.det_hz = PARTNER_CPU_CLOCK_HZ;
+    rtc.det_ticks = &tick_count;
+    rtc.last_sync_time = 0;
+    rtc.last_sync_millisecond = UINT16_MAX;
+    rtc_host_sync_divider_ = 0;
+    mm58167a_sync_time(&rtc);
+}
+
 std::pair<z80sio_t *, int> partner::resolve_sio_channel(sio_port_id port)
 {
     switch (port)
@@ -358,6 +369,8 @@ void partner::set_sio_port_lock(sio_port_id port, bool locked, const std::string
     const int idx = sio_port_index(port);
     sio_port_locked_[idx] = locked;
     sio_port_lock_reason_[idx] = reason;
+    sio_modem_dirty_mask_ |= (uint8_t)(1u << idx);
+    request_sio_service();
 }
 
 partner::sio_device_config partner::get_sio_device_config(sio_port_id port) const
@@ -388,6 +401,7 @@ bool partner::set_sio_device_config(sio_port_id port, const sio_device_config &c
                 sio_device_cfg_[other].kind != sio_device_kind::internal_squid)
                 continue;
             sio_device_cfg_[other].kind = sio_device_kind::none;
+            sio_modem_dirty_mask_ |= (uint8_t)(1u << other);
             reset_sio_device_runtime(static_cast<sio_port_id>(other));
         }
     }
@@ -402,6 +416,8 @@ bool partner::set_sio_device_config(sio_port_id port, const sio_device_config &c
         old_cfg.tcp_cts_follows_data_client != cfg.tcp_cts_follows_data_client;
     if (changed)
         reset_sio_device_runtime(port);
+    sio_modem_dirty_mask_ |= (uint8_t)(1u << idx);
+    request_sio_service();
     return true;
 }
 
@@ -558,7 +574,10 @@ void partner::cleanup_tcp_bridge(tcp_bridge_runtime &tcp)
 
 void partner::reset_sio_device_runtime(sio_port_id port)
 {
-    auto &rt = sio_device_runtime_[sio_port_index(port)];
+    const int index = sio_port_index(port);
+    auto &rt = sio_device_runtime_[index];
+    sio_modem_dirty_mask_ |= (uint8_t)(1u << index);
+    request_sio_service();
     rt.rx_fifo.clear();
     rt.last_mouse_buttons = 0;
     rt.mouse_buttons_initialized = false;
@@ -583,6 +602,8 @@ void partner::reset_internal_squid_session(sio_port_id port)
     // channel. Treat that as reconnecting the internal virtual cable: retry
     // bytes from the preceding invocation must not enter the new handshake.
     auto &runtime = sio_device_runtime_[index];
+    sio_modem_dirty_mask_ |= (uint8_t)(1u << index);
+    request_sio_service();
     runtime.rx_fifo.clear();
     runtime.next_internal_squid_poll_tick = 0;
     if (internal_squid_ != nullptr)
@@ -849,6 +870,7 @@ void partner::queue_mouse_packet(sio_port_id port, int dx, int dy, uint8_t butto
         if (rt.rx_fifo.size() >= MAX_SIO_RX_FIFO_BYTES)
             rt.rx_fifo.pop_front();
         rt.rx_fifo.push_back(b);
+        request_sio_service();
     };
 
     const auto kind = sio_device_cfg_[idx].kind;
@@ -907,6 +929,7 @@ void partner::queue_logitech_c7_identification(sio_port_id port)
         if (rt.rx_fifo.size() >= MAX_SIO_RX_FIFO_BYTES)
             rt.rx_fifo.pop_front();
         rt.rx_fifo.push_back(b);
+        request_sio_service();
     };
 
     for (const char *p = k_logitech_id; *p; ++p)
@@ -922,6 +945,7 @@ void partner::queue_logitech_c7_poll_report(sio_port_id port)
         if (rt.rx_fifo.size() >= MAX_SIO_RX_FIFO_BYTES)
             rt.rx_fifo.pop_front();
         rt.rx_fifo.push_back(b);
+        request_sio_service();
     };
     const auto with_even_parity = [](uint8_t data7) -> uint8_t {
         uint8_t b = data7 & 0x7F;
@@ -1213,8 +1237,17 @@ void partner::apply_sio_modem_inputs(uint64_t &bus_pins, sio_port_id port_a, sio
 {
     auto eval_modem = [&](sio_port_id port) {
         const int idx = sio_port_index(port);
+        const uint8_t dirty_bit = (uint8_t)(1u << idx);
+        if ((sio_modem_dirty_mask_ & dirty_bit) == 0u) {
+            const uint8_t cached = sio_modem_input_cache_[idx];
+            return std::pair<bool, bool>{
+                (cached & 0x01u) != 0u, (cached & 0x02u) != 0u
+            };
+        }
         if (sio_port_locked_[idx]) {
             // Internal hard-wired channels are always present/ready.
+            sio_modem_input_cache_[idx] = 0x03u;
+            sio_modem_dirty_mask_ &= (uint8_t)~dirty_bit;
             return std::pair<bool, bool>{true, true};
         }
         bool cts = false;
@@ -1251,6 +1284,9 @@ void partner::apply_sio_modem_inputs(uint64_t &bus_pins, sio_port_id port_a, sio
             dcd = true;
             break;
         }
+        sio_modem_input_cache_[idx] =
+            (uint8_t)((cts ? 0x01u : 0u) | (dcd ? 0x02u : 0u));
+        sio_modem_dirty_mask_ &= (uint8_t)~dirty_bit;
         return std::pair<bool, bool>{cts, dcd};
     };
 
@@ -1275,14 +1311,36 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
     auto &rt = sio_device_runtime_[idx];
     z80sio_channel_t &ch = chip->chn[channel];
 
-    if (cfg.kind == sio_device_kind::tcp_bridge)
+    const bool line_event = ch.line_tx_event_pending ||
+                            ch.line_rx_event_pending;
+    const bool can_start_rx = !rt.rx_fifo.empty() &&
+                              !ch.line_rx_active &&
+                              z80sio_rx_enabled(chip, channel);
+    const bool internal_poll_due =
+        cfg.kind == sio_device_kind::internal_squid &&
+        internal_squid_ != nullptr &&
+        tick_count >= rt.next_internal_squid_poll_tick;
+    /* Mouse and internal-cable adapters have nothing to do between complete
+       serial characters (apart from the Squid server's scheduled poll).
+       Avoid four million empty deque/event probes per guest second. TCP is
+       excluded because accepting a new host connection is asynchronous. */
+    if (cfg.kind != sio_device_kind::tcp_bridge && !line_event &&
+        !can_start_rx && !internal_poll_due)
+        return;
+
+    if (cfg.kind == sio_device_kind::tcp_bridge) {
+        const bool poll_due = tick_count >= rt.tcp.next_poll_tick;
         poll_tcp_bridge(port, ch);
+        if (poll_due)
+            sio_modem_dirty_mask_ |= (uint8_t)(1u << idx);
+    }
     else if (cfg.kind == sio_device_kind::internal_squid &&
              internal_squid_ != nullptr &&
              tick_count >= rt.next_internal_squid_poll_tick)
     {
         internal_squid_->service(rt.rx_fifo, ch.rts);
         rt.next_internal_squid_poll_tick = tick_count + 2048;
+        sio_modem_dirty_mask_ |= (uint8_t)(1u << idx);
     }
 
     uint8_t rx = 0;
@@ -1347,6 +1405,7 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
             (void)internal_squid_->receive_serial_byte(tx);
             internal_squid_->service(rt.rx_fifo, ch.rts);
             rt.next_internal_squid_poll_tick = tick_count + 2048;
+            sio_modem_dirty_mask_ |= (uint8_t)(1u << idx);
         }
         else if (cfg.kind == sio_device_kind::mouse_logitech)
         {
@@ -1382,6 +1441,11 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
 
 void partner::service_virtual_devices()
 {
+    if (!sio_service_requested_ && tick_count < sio_next_service_tick_)
+        return;
+    sio_service_requested_ = false;
+    sio_next_service_tick_ = UINT64_MAX;
+
     struct line {
         sio_port_id port;
         z80sio_t *chip;
@@ -1394,8 +1458,11 @@ void partner::service_virtual_devices()
         {sio_port_id::sio2_b, &sio2, Z80SIO_CHANNEL_B},
     };
     for (const line &entry : lines) {
-        z80sio_line_tick(entry.chip, entry.channel, tick_count,
-                         PARTNER_CPU_CLOCK_HZ, PARTNER_SIO_CLOCK_HZ);
+        if (z80sio_line_tx_busy(entry.chip, entry.channel) ||
+            z80sio_line_rx_busy(entry.chip, entry.channel)) {
+            z80sio_line_tick(entry.chip, entry.channel, tick_count,
+                             PARTNER_CPU_CLOCK_HZ, PARTNER_SIO_CLOCK_HZ);
+        }
         const int idx = sio_port_index(entry.port);
         if (sio_device_cfg_[idx].kind != sio_device_kind::none) {
             service_sio_device(entry.port, entry.chip, entry.channel);
@@ -1403,6 +1470,32 @@ void partner::service_virtual_devices()
             uint8_t discarded = 0;
             (void)z80sio_line_take_tx(entry.chip, entry.channel, &discarded);
         }
+    }
+
+    /* Schedule the next character completion or host-adapter poll. New guest
+       SIO writes and injected input set sio_service_requested_ explicitly, so
+       quiescent channels cost one comparison per motherboard clock. */
+    for (const line &entry : lines) {
+        const z80sio_channel_t &channel = entry.chip->chn[entry.channel];
+        if (channel.line_tx_active)
+            sio_next_service_tick_ = std::min(
+                sio_next_service_tick_, channel.line_tx_complete_tick);
+        if (channel.line_rx_active)
+            sio_next_service_tick_ = std::min(
+                sio_next_service_tick_, channel.line_rx_complete_tick);
+        if (channel.line_tx_event_pending || channel.line_rx_event_pending)
+            sio_service_requested_ = true;
+
+        const int idx = sio_port_index(entry.port);
+        const auto kind = sio_device_cfg_[idx].kind;
+        if (kind == sio_device_kind::internal_squid && internal_squid_ != nullptr)
+            sio_next_service_tick_ = std::min(
+                sio_next_service_tick_,
+                sio_device_runtime_[idx].next_internal_squid_poll_tick);
+        else if (kind == sio_device_kind::tcp_bridge)
+            sio_next_service_tick_ = std::min(
+                sio_next_service_tick_,
+                sio_device_runtime_[idx].tcp.next_poll_tick);
     }
 }
 
@@ -1752,6 +1845,8 @@ void partner::reset()
     io_read_latched_addr_ = 0;
     io_read_latched_data_ = 0xFF;
     tick_count = 0;
+    rtc_host_sync_divider_ = 0;
+    mm58167a_sync_time(&rtc);
     dbg_im2_ack_vectors.fill(0);
     dbg_im2_ack_pcs.fill(0);
     dbg_im2_ack_count = 0;
@@ -1771,6 +1866,9 @@ void partner::reset()
 
     for (sio_port_id port : { sio_port_id::sio1_a, sio_port_id::sio1_b, sio_port_id::sio2_a, sio_port_id::sio2_b })
         reset_sio_device_runtime(port);
+    sio_modem_dirty_mask_ = 0x0Fu;
+    sio_service_requested_ = true;
+    sio_next_service_tick_ = 0;
     for (auto &rt : pio_device_runtime_) {
         rt.last_output = 0;
         rt.covox_level = 0.0f;
@@ -1810,7 +1908,20 @@ void partner::tick()
     // Partner configurations leave it open; their CP/M 0066h vector is not an
     // RTC handler. CHIPS pin masks represent assertion rather than electrical
     // polarity, so reflect a fitted link as Z80_NMI.
-    const uint64_t rtc_pins = mm58167a_tick(&rtc, mm58167a_bus_idle());
+    bool rtc_sync_due = false;
+    if (rtc.det_ticks != nullptr) {
+        const uint64_t ticks_per_millisecond =
+            std::max<uint64_t>(1u, rtc.det_hz / 1000u);
+        rtc_sync_due = (tick_count % ticks_per_millisecond) == 0u;
+    } else {
+        ++rtc_host_sync_divider_;
+        if (rtc_host_sync_divider_ >= 1024u) {
+            rtc_host_sync_divider_ = 0;
+            rtc_sync_due = true;
+        }
+    }
+    const uint64_t rtc_pins = mm58167a_tick_idle(
+        &rtc, mm58167a_bus_idle(), rtc_sync_due);
     if (rtc_nmi_enabled_ && (rtc_pins & MM58167A_INT))
         pins |= Z80_NMI;
     else
@@ -2024,12 +2135,12 @@ void partner::tick()
     // io_write(). Keep CE low here: a second level-sensitive decode would
     // consume RX data twice and turn a selected RR1/RR2 read into RR0.
     apply_sio_modem_inputs(pins, sio_port_id::sio1_a, sio_port_id::sio1_b);
-    pins = z80sio_tick(&sio, pins);
+    pins = z80sio_tick_idle(&sio, pins);
     pins &= ~(Z80SIO_CE | Z80SIO_CS_A | Z80SIO_CS_B);
 
     // Fourth priority: second SIO chip (ports 0xE0-0xE7).
     apply_sio_modem_inputs(pins, sio_port_id::sio2_a, sio_port_id::sio2_b);
-    pins = z80sio_tick(&sio2, pins);
+    pins = z80sio_tick_idle(&sio2, pins);
     pins &= ~(Z80SIO_CE | Z80SIO_CS_A | Z80SIO_CS_B);
 
     // Fifth priority: PIO (ports 0xD0-0xD7). As with the CTC and SIO, its
@@ -2687,6 +2798,7 @@ void partner::io_write(uint16_t port, uint8_t data)
                 cpu.pc,
                 (unsigned int)((uint8_t)port), (unsigned int)data);
         z80sio_cpu_write(&sio, (uint8_t)port, data);
+        request_sio_service();
         if (channel_reset)
             reset_internal_squid_session(channel == Z80SIO_CHANNEL_B
                 ? sio_port_id::sio1_b : sio_port_id::sio1_a);
@@ -2699,6 +2811,7 @@ void partner::io_write(uint16_t port, uint8_t data)
         const bool channel_reset = (port & 0x01) != 0 &&
             sio2.chn[channel].reg_index == 0 && (data & 0x38u) == 0x18u;
         z80sio_cpu_write(&sio2, (uint8_t)port, data);
+        request_sio_service();
         if (channel_reset)
             reset_internal_squid_session(channel == Z80SIO_CHANNEL_B
                 ? sio_port_id::sio2_b : sio_port_id::sio2_a);

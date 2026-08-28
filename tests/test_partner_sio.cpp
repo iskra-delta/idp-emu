@@ -109,6 +109,80 @@ int main()
     CHECK((read_value & 0x10u) != 0u);
     CHECK((read_value & 0x40u) == 0u); // RR0 TX-underrun bit must not leak in
 
+    // Disconnected, quiescent serial lines have no clocked state of their own.
+    // This guards a scheduler fast path which may omit empty line-adapter
+    // calls, while the timed transmit/receive checks below ensure active lines
+    // still complete on the exact original guest clock.
+    partner_sio_test idle_emu;
+    struct line_state {
+        bool tx_active;
+        uint8_t tx_data;
+        uint64_t tx_complete_tick;
+        bool tx_event_pending;
+        uint8_t tx_event_data;
+        bool rx_active;
+        uint8_t rx_data;
+        uint64_t rx_complete_tick;
+        bool rx_event_pending;
+        uint8_t rx_event_data;
+        bool rx_event_accepted;
+    };
+    const auto capture_line = [](const z80sio_t &chip, int channel) {
+        const z80sio_channel_t &line = chip.chn[channel];
+        return line_state{
+            line.line_tx_active, line.line_tx_data,
+            line.line_tx_complete_tick, line.line_tx_event_pending,
+            line.line_tx_event_data, line.line_rx_active, line.line_rx_data,
+            line.line_rx_complete_tick, line.line_rx_event_pending,
+            line.line_rx_event_data, line.line_rx_event_accepted
+        };
+    };
+    const std::array<line_state, 4> idle_before = {
+        capture_line(idle_emu.get_sio(), Z80SIO_CHANNEL_A),
+        capture_line(idle_emu.get_sio(), Z80SIO_CHANNEL_B),
+        capture_line(idle_emu.get_sio2(), Z80SIO_CHANNEL_A),
+        capture_line(idle_emu.get_sio2(), Z80SIO_CHANNEL_B)
+    };
+    for (int i = 0; i < 8192; ++i)
+        idle_emu.tick();
+    const std::array<line_state, 4> idle_after = {
+        capture_line(idle_emu.get_sio(), Z80SIO_CHANNEL_A),
+        capture_line(idle_emu.get_sio(), Z80SIO_CHANNEL_B),
+        capture_line(idle_emu.get_sio2(), Z80SIO_CHANNEL_A),
+        capture_line(idle_emu.get_sio2(), Z80SIO_CHANNEL_B)
+    };
+    for (size_t i = 0; i < idle_before.size(); ++i) {
+        CHECK(idle_after[i].tx_active == idle_before[i].tx_active);
+        CHECK(idle_after[i].tx_data == idle_before[i].tx_data);
+        CHECK(idle_after[i].tx_complete_tick == idle_before[i].tx_complete_tick);
+        CHECK(idle_after[i].tx_event_pending == idle_before[i].tx_event_pending);
+        CHECK(idle_after[i].tx_event_data == idle_before[i].tx_event_data);
+        CHECK(idle_after[i].rx_active == idle_before[i].rx_active);
+        CHECK(idle_after[i].rx_data == idle_before[i].rx_data);
+        CHECK(idle_after[i].rx_complete_tick == idle_before[i].rx_complete_tick);
+        CHECK(idle_after[i].rx_event_pending == idle_before[i].rx_event_pending);
+        CHECK(idle_after[i].rx_event_data == idle_before[i].rx_event_data);
+        CHECK(idle_after[i].rx_event_accepted == idle_before[i].rx_event_accepted);
+    }
+
+    // Changing a virtual cable must update the SIO's physical CTS/DCD inputs
+    // on the very next motherboard clock, including disconnecting it again.
+    partner_sio_test modem_emu;
+    partner::sio_device_config modem_mouse;
+    modem_mouse.kind = partner::sio_device_kind::mouse_microsoft;
+    CHECK(modem_emu.set_sio_device_config(
+        partner::sio_port_id::sio1_b, modem_mouse));
+    modem_emu.tick();
+    CHECK(modem_emu.get_sio().chn[Z80SIO_CHANNEL_B].cts);
+    CHECK(modem_emu.get_sio().chn[Z80SIO_CHANNEL_B].dcd);
+    partner::sio_device_config disconnected;
+    disconnected.kind = partner::sio_device_kind::none;
+    CHECK(modem_emu.set_sio_device_config(
+        partner::sio_port_id::sio1_b, disconnected));
+    modem_emu.tick();
+    CHECK(!modem_emu.get_sio().chn[Z80SIO_CHANNEL_B].cts);
+    CHECK(!modem_emu.get_sio().chn[Z80SIO_CHANNEL_B].dcd);
+
     // External serial characters take real wire time. At 9600 8N1 the fixed
     // 153600-Hz SIO clock and x16 mode produce 4167 Partner CPU ticks/byte.
     partner_sio_test timed_emu;

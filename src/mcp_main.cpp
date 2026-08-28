@@ -4,6 +4,8 @@
 #include "runtime_paths.hpp"
 
 #include <cstring>
+#include <cstdlib>
+#include <ctime>
 #include <iostream>
 #include <memory>
 #include <stdexcept>
@@ -113,6 +115,13 @@ int main(int argc, char **argv)
         else
             machine = std::make_unique<partner_crt>(profile_for(settings.terminal),
                                                      settings.nvram);
+
+        /* MCP runs are intentionally unthrottled. Drive the RTC from guest
+           clocks so faster host execution cannot shorten hardware waits or
+           race operating-system timeouts. An explicit fixed epoch remains
+           authoritative for reproducible tests. */
+        if (std::getenv("IDP_FIXED_RTC") == nullptr)
+            machine->set_emulated_rtc_base(std::time(nullptr));
 
         if (!settings.no_rom) {
             const std::string rom = runtime_paths::find_resource(

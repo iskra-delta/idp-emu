@@ -126,6 +126,9 @@ typedef struct {
 void ef9367_init(ef9367_t *gdp);
 void ef9367_reset(ef9367_t *gdp);
 uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins);
+/* Advance one master clock when RESET/CS/RD/WR/LPCK are inactive and the
+   board inputs have already been applied with ef9367_set_board_inputs(). */
+uint64_t ef9367_tick_idle(ef9367_t *gdp, uint64_t pins);
 void ef9367_set_board_inputs(ef9367_t *gdp, uint64_t pins);
 uint8_t ef9367_read(ef9367_t *gdp, uint8_t port);
 void ef9367_write(ef9367_t *gdp, uint8_t port, uint8_t data);
@@ -663,15 +666,7 @@ static inline bool _ef9367_memory_cycle_free(const ef9367_t *gdp) {
     return !refresh && !display;
 }
 
-uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
-    CHIPS_ASSERT(gdp);
-
-    if ((pins & EF9367_RESET) == 0) {
-        ef9367_reset(gdp);
-        pins |= EF9367_IRQ | EF9367_MW | EF9367_BLANK | EF9367_VBLANK;
-        return pins;
-    }
-
+static inline void _ef9367_advance_master_tick(ef9367_t *gdp, bool lpck) {
     /* Advance exactly one 4 MHz Partner master tick. EF CK is QD from the
        board's 24 MHz video-clock counter, so it advances three times per
        eight Partner ticks. The 525-line field contains 25,200 EF CK cycles. */
@@ -698,7 +693,6 @@ uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
     if (vblank_rising && (gdp->cr1 & 0x20u))
         gdp->irq_latches |= 0x20u;
 
-    const bool lpck = (pins & EF9367_LPCK) != 0;
     const bool lpck_rising = lpck && !gdp->previous_lpck;
     gdp->previous_lpck = lpck;
     if (gdp->lightpen_active && (lpck_rising || vblank_rising)) {
@@ -735,21 +729,10 @@ uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
     if (!was_ready && is_ready && (gdp->cr1 & 0x40u))
         gdp->irq_latches |= 0x40u;
     gdp->status = _ef9367_status(gdp);
+}
 
-    ef9367_set_board_inputs(gdp, pins);
-
-    /* active-low CS/RD/WR */
-    if ((pins & EF9367_CS) == 0) {
-        const uint8_t idx = EF9367_GET_ADDR(pins);
-        if ((pins & EF9367_RD) == 0) {
-            EF9367_SET_DATA(pins, _ef9367_read_idx(gdp, idx));
-        } else if ((pins & EF9367_WR) == 0) {
-            _ef9367_write_idx(gdp, idx, EF9367_GET_DATA(pins));
-        }
-    }
-
-    gdp->ready = !gdp->mw_request && !gdp->mw_active;
-    gdp->status = _ef9367_status(gdp);
+static inline uint64_t _ef9367_output_pins(const ef9367_t *gdp,
+                                            uint64_t pins) {
     if (gdp->vblank) {
         pins |= EF9367_VBLANK;
     } else {
@@ -769,6 +752,42 @@ uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
     else
         pins &= ~EF9367_BLANK;
     return pins;
+}
+
+uint64_t ef9367_tick(ef9367_t *gdp, uint64_t pins) {
+    CHIPS_ASSERT(gdp);
+
+    if ((pins & EF9367_RESET) == 0) {
+        ef9367_reset(gdp);
+        pins |= EF9367_IRQ | EF9367_MW | EF9367_BLANK | EF9367_VBLANK;
+        return pins;
+    }
+
+    _ef9367_advance_master_tick(gdp, (pins & EF9367_LPCK) != 0);
+    ef9367_set_board_inputs(gdp, pins);
+
+    /* active-low CS/RD/WR */
+    if ((pins & EF9367_CS) == 0) {
+        const uint8_t idx = EF9367_GET_ADDR(pins);
+        if ((pins & EF9367_RD) == 0) {
+            EF9367_SET_DATA(pins, _ef9367_read_idx(gdp, idx));
+        } else if ((pins & EF9367_WR) == 0) {
+            _ef9367_write_idx(gdp, idx, EF9367_GET_DATA(pins));
+        }
+    }
+
+    gdp->ready = !gdp->mw_request && !gdp->mw_active;
+    gdp->status = _ef9367_status(gdp);
+    return _ef9367_output_pins(gdp, pins);
+}
+
+uint64_t ef9367_tick_idle(ef9367_t *gdp, uint64_t pins) {
+    CHIPS_ASSERT(gdp);
+    CHIPS_ASSERT((pins & (EF9367_RESET | EF9367_CS | EF9367_RD | EF9367_WR)) ==
+                 (EF9367_RESET | EF9367_CS | EF9367_RD | EF9367_WR));
+    CHIPS_ASSERT((pins & EF9367_LPCK) == 0u);
+    _ef9367_advance_master_tick(gdp, false);
+    return _ef9367_output_pins(gdp, pins);
 }
 
 uint8_t ef9367_read(ef9367_t *gdp, uint8_t port) {

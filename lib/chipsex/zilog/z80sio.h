@@ -248,6 +248,10 @@ extern "C"
     {
         z80sio_channel_t chn[Z80SIO_NUM_CHANNELS];
         uint64_t pins;
+        uint64_t idle_input_pins;
+        uint64_t idle_output_pins;
+        uint32_t idle_channel_state[Z80SIO_NUM_CHANNELS];
+        bool idle_cache_valid;
     } z80sio_t;
 
 /* Interrupt states */
@@ -258,6 +262,8 @@ extern "C"
     void z80sio_init(z80sio_t *sio);
     void z80sio_reset(z80sio_t *sio);
     uint64_t z80sio_tick(z80sio_t *sio, uint64_t pins);
+    /* CE-low motherboard clock with no reset or CPU register access. */
+    uint64_t z80sio_tick_idle(z80sio_t *sio, uint64_t pins);
 
     // Clock only the interrupt daisy-chain pins (no bus or modem access).
     uint64_t z80sio_daisychain(z80sio_t *sio, uint64_t pins);
@@ -312,6 +318,7 @@ void z80sio_init(z80sio_t *sio)
 
 void z80sio_reset(z80sio_t *sio)
 {
+    sio->idle_cache_valid = false;
     for (int i = 0; i < Z80SIO_NUM_CHANNELS; i++)
     {
         z80sio_channel_t *ch = &sio->chn[i];
@@ -1053,6 +1060,7 @@ static inline uint64_t _z80sio_wait_ready(z80sio_t *sio, uint64_t pins)
 /* Main tick function */
 uint64_t z80sio_tick(z80sio_t *sio, uint64_t pins)
 {
+    sio->idle_cache_valid = false;
     // Handle reset
     if (pins & Z80SIO_RESET)
     {
@@ -1127,6 +1135,86 @@ uint64_t z80sio_tick(z80sio_t *sio, uint64_t pins)
     pins = z80sio_daisychain(sio, pins);
 
     sio->pins = pins;
+    return pins;
+}
+
+uint64_t z80sio_tick_idle(z80sio_t *sio, uint64_t pins)
+{
+    /* Keep this helper safe for accidental selected/reset use; its intended
+       motherboard path has CE and RESET clear. */
+    if ((pins & Z80SIO_RESET) != 0u ||
+        (pins & (Z80SIO_CE | Z80SIO_IORQ | Z80SIO_M1)) ==
+            (Z80SIO_CE | Z80SIO_IORQ))
+        return z80sio_tick(sio, pins);
+
+    static const uint64_t input_mask = Z80SIO_M1 | Z80SIO_DCDA |
+        Z80SIO_CTSA | Z80SIO_DCDB | Z80SIO_CTSB;
+    static const uint64_t output_mask = Z80SIO_RTSA | Z80SIO_DTRA |
+        Z80SIO_RTSB | Z80SIO_DTRB | Z80SIO_WRDYA | Z80SIO_WRDYB;
+    uint32_t channel_state[Z80SIO_NUM_CHANNELS];
+    for (int i = 0; i < Z80SIO_NUM_CHANNELS; ++i) {
+        const z80sio_channel_t *ch = &sio->chn[i];
+        channel_state[i] = (uint32_t)ch->wr[1] |
+            ((uint32_t)ch->rx_ready << 8) |
+            ((uint32_t)ch->tx_ready << 9) |
+            ((uint32_t)ch->rts << 10) |
+            ((uint32_t)ch->dtr << 11) |
+            ((uint32_t)ch->reset_cooldown << 12) |
+            ((uint32_t)ch->int_deferred << 20);
+    }
+    const uint64_t input_pins = pins & input_mask;
+    if (sio->idle_cache_valid && sio->idle_input_pins == input_pins &&
+        sio->idle_channel_state[0] == channel_state[0] &&
+        sio->idle_channel_state[1] == channel_state[1]) {
+        pins = (pins & ~output_mask) | (sio->idle_output_pins & output_mask);
+        if (sio->chn[0].int_state == 0u && sio->chn[1].int_state == 0u) {
+            sio->pins = pins;
+            return pins;
+        }
+        return z80sio_daisychain(sio, pins);
+    }
+
+    const bool m1_now = (pins & Z80SIO_M1) != 0;
+    for (int i = 0; i < Z80SIO_NUM_CHANNELS; ++i) {
+        z80sio_channel_t *ch = &sio->chn[i];
+        if (!m1_now && ch->m1_active && ch->int_deferred) {
+            for (int source = 0; source < Z80SIO_NUM_INT_SOURCES; ++source) {
+                if (ch->int_deferred & (uint8_t)(1u << source))
+                    ch->int_source_state[source] |= Z80SIO_INT_NEEDED;
+            }
+            ch->int_deferred = 0;
+            _z80sio_sync_int_state(ch);
+        }
+        ch->m1_active = m1_now;
+    }
+
+    pins = _z80sio_modem_control(sio, pins);
+    for (int i = 0; i < Z80SIO_NUM_CHANNELS; ++i) {
+        if (sio->chn[i].reset_cooldown != 0)
+            --sio->chn[i].reset_cooldown;
+    }
+    /* With CE low no WAIT-mode transfer can be selected. READY-mode outputs
+       are already completely derived by this pre-transfer helper; the generic
+       post-I/O recomputation would be redundant. */
+    pins = _z80sio_wait_ready(sio, pins);
+    pins = z80sio_daisychain(sio, pins);
+    sio->idle_input_pins = input_pins;
+    sio->idle_output_pins = pins & output_mask;
+    for (int i = 0; i < Z80SIO_NUM_CHANNELS; ++i) {
+        const z80sio_channel_t *ch = &sio->chn[i];
+        sio->idle_channel_state[i] = (uint32_t)ch->wr[1] |
+            ((uint32_t)ch->rx_ready << 8) |
+            ((uint32_t)ch->tx_ready << 9) |
+            ((uint32_t)ch->rts << 10) |
+            ((uint32_t)ch->dtr << 11) |
+            ((uint32_t)ch->reset_cooldown << 12) |
+            ((uint32_t)ch->int_deferred << 20);
+    }
+    /* Reset cooldown is itself clocked state. Never cache across one of its
+       remaining clocks even though the just-recorded value is momentarily
+       stable at function exit. */
+    sio->idle_cache_valid = sio->chn[0].reset_cooldown == 0u &&
+                            sio->chn[1].reset_cooldown == 0u;
     return pins;
 }
 
