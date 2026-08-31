@@ -275,6 +275,15 @@ std::size_t machine_occurrences(const partner_crt &, std::string_view output,
     return occurrences(output, pattern);
 }
 
+constexpr std::size_t select_gdp_occurrence_count(
+    std::size_t output_count, std::size_t vram_count)
+{
+    return output_count != 0U ? output_count : vram_count;
+}
+
+static_assert(select_gdp_occurrence_count(1U, 2U) == 1U);
+static_assert(select_gdp_occurrence_count(0U, 2U) == 2U);
+
 std::size_t machine_occurrences(const partner_gdp &machine,
                                 std::string_view output,
                                 std::string_view pattern)
@@ -292,10 +301,10 @@ std::size_t machine_occurrences(const partner_gdp &machine,
         if (offset == pattern.size())
             ++vram_count;
     }
-    // Debug text and AVDC VRAM are two observations of the same GDP output.
-    // Adding their counts reports a single banner as a duplicate whenever it
-    // is still visible in VRAM at the sampling instant.
-    return std::max(output_count, vram_count);
+    // The raw GDP stream is the complete output history. VRAM is only a
+    // fallback for text the debug parser did not observe; it also retains
+    // stale/off-screen copies which must not turn one transfer into two.
+    return select_gdp_occurrence_count(output_count, vram_count);
 }
 
 void print_prompt_diagnostic(const partner_crt &machine,
