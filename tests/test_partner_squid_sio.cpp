@@ -279,7 +279,8 @@ std::size_t machine_occurrences(const partner_gdp &machine,
                                 std::string_view output,
                                 std::string_view pattern)
 {
-    std::size_t count = occurrences(output, pattern);
+    const std::size_t output_count = occurrences(output, pattern);
+    std::size_t vram_count = 0;
     const auto &vram = machine.get_avdc().vram;
     for (std::size_t start = 0; start < sizeof(vram); ++start)
     {
@@ -289,9 +290,12 @@ std::size_t machine_occurrences(const partner_gdp &machine,
                    static_cast<std::uint8_t>(pattern[offset]))
             ++offset;
         if (offset == pattern.size())
-            ++count;
+            ++vram_count;
     }
-    return count;
+    // Debug text and AVDC VRAM are two observations of the same GDP output.
+    // Adding their counts reports a single banner as a duplicate whenever it
+    // is still visible in VRAM at the sampling instant.
+    return std::max(output_count, vram_count);
 }
 
 void print_prompt_diagnostic(const partner_crt &machine,
