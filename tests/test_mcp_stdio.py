@@ -153,6 +153,15 @@ def main():
             call(27, "run", {"frames": 1}),
             call(28, "video_stop"),
             request(29, "ping"),
+            call(30, "mouse", {
+                "protocol": "mousesystems", "port": 2,
+                "dx": 5, "dy": -3, "frames": 1}),
+            call(31, "mouse", {
+                "protocol": "microsoft", "port": 2,
+                "dx": 2, "dy": 1, "repeat": 2, "frames": 1}),
+            call(32, "mouse", {
+                "protocol": "logitech", "port": 2,
+                "dx": -4, "dy": 6, "frames": 1}),
         ]
         completed = subprocess.run(
             [executable, "--model", "crt"],
@@ -168,7 +177,7 @@ def main():
                 f"server exited {completed.returncode}: {completed.stderr}")
         replies_list = [json.loads(line) for line in completed.stdout.splitlines()
                         if line]
-        expected_ids = list(range(1, 30))
+        expected_ids = list(range(1, 33))
         if [reply.get("id") for reply in replies_list] != expected_ids:
             raise AssertionError(
                 f"notification replied or stdout was polluted: {completed.stdout!r}")
@@ -187,7 +196,7 @@ def main():
         }
         partner_specific = {
             "measure_cycles", "read_io", "write_io", "keyboard",
-            "mount_media",
+            "mouse", "mount_media",
         }
         missing = (spectrum_compatible | partner_specific) - names
         if missing:
@@ -273,6 +282,18 @@ def main():
                 f"breakpoint-free frame run changed behavior: {unwatched_run}")
         if video["frames"] != 1 or video["bytes"] <= 1_000_000:
             raise AssertionError(f"video did not capture one full frame: {video}")
+        mouse = structured(replies, 30)
+        if (mouse["protocol"], mouse["port"], mouse["dx"], mouse["dy"]) != (
+                "mousesystems", 2, 5, -3):
+            raise AssertionError(f"serial mouse injection failed: {mouse}")
+        microsoft = structured(replies, 31)
+        if (microsoft["protocol"], microsoft["repeat"],
+                microsoft["injected"]) != ("microsoft", 2, 2):
+            raise AssertionError(
+                f"sustained Microsoft mouse injection failed: {microsoft}")
+        logitech = structured(replies, 32)
+        if logitech["protocol"] != "logitech" or logitech["injected"] != 1:
+            raise AssertionError(f"Logitech mouse injection failed: {logitech}")
         with open(video_path, "rb") as recording:
             header = recording.readline()
             frame_header = recording.readline()

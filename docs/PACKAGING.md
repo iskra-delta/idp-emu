@@ -57,10 +57,10 @@ verification rejects any floppy, empty, application, or other disk image and
 checks that the same current `PAKET.COM` is present on both system hard disks.
 Both hard disks contain exactly the standard CP/M Plus maintenance
 set—including `PIP`, `RENAME`, `ERASE`, `DIR`, `TYPE`, `SHOW`, and `SETDEF`—
-plus PAKET, with no applications or user data. The integration suite
-cold-boots the CRT HDD, starts `PAKET`
-through the emulated CRT keyboard and display, opens the internal Squid link,
-and retrieves live package information.
+plus PAKET, with no applications or user data. The Squid-over-SIO integration
+suite cold-boots each Partner model, opens the internal Squid serial link, and
+retrieves live catalog and download data. `PAKET.COM` is the guest client used
+to drive that protocol test; it is not the integration or server itself.
 
 When replacing `PAKET.COM` on either hard disk, use
 `tools/update_partner_hdd_file.py` instead of removing and re-adding it with

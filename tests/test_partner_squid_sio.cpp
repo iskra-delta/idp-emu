@@ -20,6 +20,9 @@
 #include <thread>
 #include <unistd.h>
 
+/* End-to-end Squid protocol integration over the Partner SIO. PAKET.COM is
+   the guest test client; it is not the transport or server under test. */
+
 namespace {
 
 constexpr std::uint64_t boot_limit = 400000000ULL;
@@ -419,8 +422,8 @@ bool downloaded_file_matches(const std::string &disk,
 }
 
 template<class Machine>
-bool run_flow(Machine &machine, const std::string &rom,
-              const std::string &disk, std::string_view package)
+bool run_squid_sio_flow(Machine &machine, const std::string &rom,
+                        const std::string &disk, std::string_view package)
 {
     machine.load_rom(rom);
     machine.load_hdd(disk);
@@ -453,7 +456,7 @@ bool run_flow(Machine &machine, const std::string &rom,
         {
             ++nmi_entries;
             std::printf(
-                "test_partner_paket_flow: %.*s NMI entry %zu at %llu "
+                "test_partner_squid_sio: %.*s NMI entry %zu at %llu "
                 "rtc=%02x/%02x rollover=%02x\n",
                 static_cast<int>(package.size()), package.data(), nmi_entries,
                 static_cast<unsigned long long>(machine.get_tick_count()),
@@ -466,7 +469,7 @@ bool run_flow(Machine &machine, const std::string &rom,
             break;
         if ((machine.get_tick_count() % 50000000U) == 0U)
         {
-            std::printf("test_partner_paket_flow: %.*s ticks=%llu pc=%04x\n",
+            std::printf("test_partner_squid_sio: %.*s ticks=%llu pc=%04x\n",
                         static_cast<int>(package.size()), package.data(),
                         static_cast<unsigned long long>(machine.get_tick_count()),
                         static_cast<unsigned int>(machine.get_current_pc()));
@@ -494,7 +497,7 @@ bool run_flow(Machine &machine, const std::string &rom,
             initial_im2 = machine.read_debug_memory(
                 static_cast<std::uint32_t>(initial_i) << 8U, 256U);
             initial_ack_count = machine.dbg_im2_ack_count;
-            std::printf("test_partner_paket_flow: %.*s booted\n",
+            std::printf("test_partner_squid_sio: %.*s booted\n",
                         static_cast<int>(package.size()), package.data());
             std::fflush(stdout);
             prompt_reported = true;
@@ -508,7 +511,7 @@ bool run_flow(Machine &machine, const std::string &rom,
         if (machine_occurrences(machine, output, "PRENOS PAKETA") > 1U)
         {
             std::printf(
-                "test_partner_paket_flow: %.*s duplicate transfer at %llu "
+                "test_partner_squid_sio: %.*s duplicate transfer at %llu "
                 "pc=%04x nmis=%zu\n",
                 static_cast<int>(package.size()), package.data(),
                 static_cast<unsigned long long>(machine.get_tick_count()),
@@ -518,7 +521,7 @@ bool run_flow(Machine &machine, const std::string &rom,
         if (transfer_started &&
             (machine.get_tick_count() % 50000000U) == 0U)
         {
-            std::printf("test_partner_paket_flow: %.*s input",
+            std::printf("test_partner_squid_sio: %.*s input",
                         static_cast<int>(package.size()), package.data());
             print_prompt_diagnostic(machine, output);
             std::printf(" download=%zu/%zu started=%d\n",
@@ -536,7 +539,7 @@ bool run_flow(Machine &machine, const std::string &rom,
             const double seconds = static_cast<double>(
                 transfer_success_tick - transfer_start_tick) / 4000000.0;
             std::printf(
-                "test_partner_paket_flow: %.*s transfer %.3f s, "
+                "test_partner_squid_sio: %.*s transfer %.3f s, "
                 "serial tx=%llu rx=%llu, payload %.1f B/s\n",
                 static_cast<int>(package.size()), package.data(), seconds,
                 static_cast<unsigned long long>(serial.tx_bytes),
@@ -570,11 +573,11 @@ bool run_flow(Machine &machine, const std::string &rom,
                              "Napaka: serijska povezava ni uspela"))
             break;
     }
-    std::printf("test_partner_paket_flow: %.*s output=%s\n",
+    std::printf("test_partner_squid_sio: %.*s output=%s\n",
                 static_cast<int>(package.size()), package.data(),
                 machine.dump_raw_serial_text().c_str());
     std::printf(
-        "test_partner_paket_flow: %.*s download=%zu/%zu started=%d "
+        "test_partner_squid_sio: %.*s download=%zu/%zu started=%d "
         "ready=%d pending=%zu\n",
         static_cast<int>(package.size()), package.data(), download_position,
         download.size(), transfer_started ? 1 : 0,
@@ -586,7 +589,7 @@ bool run_flow(Machine &machine, const std::string &rom,
     const auto &keyboard_channel = machine.get_sio().chn[Z80SIO_CHANNEL_A];
     const auto cpu = machine.capture_debug_cpu_state();
     std::printf(
-        "test_partner_paket_flow: serial tx=%llu rx=%llu pending=%zu "
+        "test_partner_squid_sio: serial tx=%llu rx=%llu pending=%zu "
         "rts=%d cts=%d connected=%d overrun=%d wr1=%02x wr3=%02x "
         "wr5=%02x detail=%s\n",
         static_cast<unsigned long long>(serial.tx_bytes),
@@ -596,7 +599,7 @@ bool run_flow(Machine &machine, const std::string &rom,
         channel.wr[1], channel.wr[3], channel.wr[5],
         serial.detail.c_str());
     std::printf(
-        "test_partner_paket_flow: keyboard wr1=%02x wr3=%02x ready=%d "
+        "test_partner_squid_sio: keyboard wr1=%02x wr3=%02x ready=%d "
         "fifo=%u vector=%02x irq=%02x/%02x/%02x deferred=%02x m1=%d "
         "cpu-i=%02x im=%u iff=%d halt=%d pc=%04x\n",
         keyboard_channel.wr[1], keyboard_channel.wr[3],
@@ -611,7 +614,7 @@ bool run_flow(Machine &machine, const std::string &rom,
         static_cast<std::uint32_t>(cpu.i) << 8U, 256U);
     if (initial_i == cpu.i && initial_im2.size() == final_im2.size())
     {
-        std::printf("test_partner_paket_flow: changed IM2 bytes");
+        std::printf("test_partner_squid_sio: changed IM2 bytes");
         for (std::size_t index = 0; index < final_im2.size(); ++index)
             if (initial_im2[index] != final_im2[index])
                 std::printf(" %02zx:%02x>%02x", index,
@@ -619,11 +622,11 @@ bool run_flow(Machine &machine, const std::string &rom,
         std::printf("\n");
     }
     const auto common = machine.read_debug_memory(0xc180U, 32U);
-    std::printf("test_partner_paket_flow: common c180");
+    std::printf("test_partner_squid_sio: common c180");
     for (const std::uint8_t byte : common)
         std::printf(" %02x", byte);
     std::printf("\n");
-    std::printf("test_partner_paket_flow: IM2 acks %u>%u post=%u last",
+    std::printf("test_partner_squid_sio: IM2 acks %u>%u post=%u last",
                 initial_ack_count, machine.dbg_im2_ack_count,
                 post_transfer_ack_count);
     const std::uint32_t first_ack = machine.dbg_im2_ack_count > 8U
@@ -647,44 +650,44 @@ int main()
     retro_vault_fixture fixture;
     if (!fixture.ready())
     {
-        std::puts("test_partner_paket_flow: FAIL fixture server");
+        std::puts("test_partner_squid_sio: FAIL fixture server");
         return 1;
     }
     const std::string url = "http://127.0.0.1:" +
         std::to_string(fixture.port());
     if (::setenv("RETRO_VAULT_API_URL", url.c_str(), 1) != 0)
     {
-        std::puts("test_partner_paket_flow: FAIL environment");
+        std::puts("test_partner_squid_sio: FAIL environment");
         return 1;
     }
     // Make the minute edge deterministic and close optional JJ12 so this test
     // continues to prove that PAKET masks RTC NMI during its transfer.
     if (::setenv("IDP_FIXED_RTC", "1700000030", 1) != 0)
     {
-        std::puts("test_partner_paket_flow: FAIL fixed RTC environment");
+        std::puts("test_partner_squid_sio: FAIL fixed RTC environment");
         return 1;
     }
 
     const fs::path root = IDP_SOURCE_ROOT;
-    const char *model = std::getenv("IDP_TEST_PAKET_MODEL");
+    const char *model = std::getenv("IDP_TEST_SQUID_SIO_MODEL");
     const bool run_p = model == nullptr || std::strcmp(model, "g") != 0;
     const bool run_g = model == nullptr || std::strcmp(model, "p") != 0;
-    const char *p_override = std::getenv("IDP_TEST_PAKET_P_HDD");
-    const char *g_override = std::getenv("IDP_TEST_PAKET_G_HDD");
+    const char *p_override = std::getenv("IDP_TEST_SQUID_SIO_P_HDD");
+    const char *g_override = std::getenv("IDP_TEST_SQUID_SIO_G_HDD");
     const std::string suffix = std::to_string(::getpid());
     const fs::path p_work = root /
-        ("tests/dump/paket-flow-p-" + suffix + ".img");
+        ("tests/dump/squid-sio-p-" + suffix + ".img");
     const fs::path g_work = root /
-        ("tests/dump/paket-flow-g-" + suffix + ".img");
+        ("tests/dump/squid-sio-g-" + suffix + ".img");
     const std::string p_disk = p_override != nullptr ? p_override :
         p_work.string();
     const std::string g_disk = g_override != nullptr ? g_override :
         g_work.string();
 
     const fs::path p_nvram = root /
-        ("tests/dump/paket-flow-p-" + suffix + ".nvram");
+        ("tests/dump/squid-sio-p-" + suffix + ".nvram");
     const fs::path g_nvram = root /
-        ("tests/dump/paket-flow-g-" + suffix + ".nvram");
+        ("tests/dump/squid-sio-g-" + suffix + ".nvram");
     std::error_code error;
     if (run_p) {
         if (p_override == nullptr) {
@@ -716,7 +719,7 @@ int main()
     if (run_p) {
         partner_crt machine(terminal_profile::vt52, p_nvram.string());
         machine.set_rtc_nmi_enabled(true);
-        p_ok = run_flow(
+        p_ok = run_squid_sio_flow(
             machine, (root / "roms/partner_crt.rom").string(),
             p_disk, "fixture-p");
     }
@@ -725,7 +728,7 @@ int main()
     if (run_g) {
         partner_gdp machine(g_nvram.string());
         machine.set_rtc_nmi_enabled(true);
-        g_ok = run_flow(
+        g_ok = run_squid_sio_flow(
             machine, (root / "roms/partner_gdp.rom").string(),
             g_disk, "invaders");
     }
@@ -749,12 +752,12 @@ int main()
     if ((run_p && !p_ok) || (run_g && !g_ok) || !http_ok)
     {
         std::printf(
-            "test_partner_paket_flow: FAIL p=%d g=%d catalog=%u download=%u\n",
+            "test_partner_squid_sio: FAIL p=%d g=%d catalog=%u download=%u\n",
             p_ok ? 1 : 0, g_ok ? 1 : 0, fixture.catalog_requests(),
             fixture.download_requests());
         return 1;
     }
-    std::printf("test_partner_paket_flow: PASS long downloads on %s\n",
+    std::printf("test_partner_squid_sio: PASS long downloads on %s\n",
                 run_p ? (run_g ? "P and G" : "P") : "G");
     return 0;
 }

@@ -1561,17 +1561,68 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
     auto *gdp_keyboard = dynamic_cast<partner_gdp *>(&emu);
     const bool gdp_keyboard_model = gdp_keyboard != nullptr;
     const bool has_serial_mouse = emu.has_serial_mouse_attached();
-    const auto point_in_display = [&](int window_x, int window_y) -> bool {
+    bool mouse_driver_ready = false;
+    uint64_t mouse_session_generation = 0;
+    const std::array<partner::sio_port_id, 3> external_sio_ports = {
+        partner::sio_port_id::sio1_b,
+        partner::sio_port_id::sio2_a,
+        partner::sio_port_id::sio2_b,
+    };
+    for (const auto port : external_sio_ports)
+    {
+        const auto kind = emu.get_sio_device_config(port).kind;
+        if (kind != partner::sio_device_kind::mouse_microsoft &&
+            kind != partner::sio_device_kind::mouse_mousesystems &&
+            kind != partner::sio_device_kind::mouse_logitech)
+            continue;
+        const auto status = emu.get_sio_port_status(port);
+        mouse_driver_ready = mouse_driver_ready ||
+            (status.dtr && status.rts);
+        mouse_session_generation ^= status.session_generation +
+            (uint64_t)static_cast<uint8_t>(port) *
+                0x9E3779B97F4A7C15ull;
+    }
+    const int raster_width = std::max(1, display_.content_width());
+    const int raster_height = std::max(1, display_.content_height());
+    // The GDP monitor includes the text overscan surrounding its centered
+    // 1024x512 EF9367 graphics plane. Alto calibrates its serial mouse to
+    // that graphics plane, not to the complete 1056x624 monitor raster.
+    const int mouse_width = gdp_keyboard_model
+        ? std::min(1024, raster_width) : raster_width;
+    const int mouse_height = gdp_keyboard_model
+        ? std::min(512, raster_height) : raster_height;
+    const int mouse_offset_x = (raster_width - mouse_width) / 2;
+    const int mouse_offset_y = (raster_height - mouse_height) / 2;
+    const auto map_display_mouse = [&](int window_x, int window_y,
+                                       int &guest_x, int &guest_y) -> bool {
         int win_x = 0;
         int win_y = 0;
         if (window_)
             SDL_GetWindowPosition(window_, &win_x, &win_y);
         const int screen_x = win_x + window_x;
         const int screen_y = win_y + window_y;
-        return (screen_x >= (int)std::floor(display_viewport_.x0)) &&
-               (screen_x <  (int)std::ceil(display_viewport_.x1)) &&
-               (screen_y >= (int)std::floor(display_viewport_.y0)) &&
-               (screen_y <  (int)std::ceil(display_viewport_.y1));
+        const float viewport_width = display_viewport_.x1 - display_viewport_.x0;
+        const float viewport_height = display_viewport_.y1 - display_viewport_.y0;
+        if (viewport_width <= 0.0f || viewport_height <= 0.0f ||
+            screen_x < (int)std::floor(display_viewport_.x0) ||
+            screen_x >= (int)std::ceil(display_viewport_.x1) ||
+            screen_y < (int)std::floor(display_viewport_.y0) ||
+            screen_y >= (int)std::ceil(display_viewport_.y1))
+            return false;
+
+        const int raster_x = std::clamp(
+            (int)std::floor(
+                ((float)screen_x - display_viewport_.x0) *
+                (float)raster_width / viewport_width),
+            0, raster_width - 1);
+        const int raster_y = std::clamp(
+            (int)std::floor(
+                ((float)screen_y - display_viewport_.y0) *
+                (float)raster_height / viewport_height),
+            0, raster_height - 1);
+        guest_x = std::clamp(raster_x - mouse_offset_x, 0, mouse_width - 1);
+        guest_y = std::clamp(raster_y - mouse_offset_y, 0, mouse_height - 1);
+        return true;
     };
     const auto release_mouse_buttons = [&]() {
         if (mouse_left_down_ || mouse_right_down_ || mouse_middle_down_)
@@ -1580,37 +1631,58 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
         mouse_middle_down_ = false;
         mouse_right_down_ = false;
     };
-    const auto deactivate_mouse_relative = [&]() {
-        if (mouse_relative_active_)
-        {
-            SDL_SetRelativeMouseMode(SDL_FALSE);
-            SDL_CaptureMouse(SDL_FALSE);
-            mouse_relative_active_ = false;
-        }
-    };
-    const auto activate_mouse_relative = [&]() {
-        if (!mouse_relative_active_)
-        {
-            if (SDL_SetRelativeMouseMode(SDL_TRUE) == 0)
-            {
-                SDL_CaptureMouse(SDL_TRUE);
-                mouse_relative_active_ = true;
-            }
-        }
-    };
     const auto release_mouse_mode = [&]() {
-        release_mouse_buttons();
-        deactivate_mouse_relative();
+        mouse_left_down_ = false;
+        mouse_middle_down_ = false;
+        mouse_right_down_ = false;
+        emu.deactivate_serial_mouse_input();
         if (mouse_cursor_hidden_)
         {
+            ImGui::GetIO().ConfigFlags &=
+                ~ImGuiConfigFlags_NoMouseCursorChange;
             SDL_ShowCursor(SDL_ENABLE);
             mouse_cursor_hidden_ = false;
         }
     };
+    const auto sync_serial_mouse_position = [&](int window_x,
+                                                 int window_y) -> bool {
+        int target_x = 0;
+        int target_y = 0;
+        if (!map_display_mouse(window_x, window_y, target_x, target_y))
+            return false;
+
+        if (!mouse_guest_position_initialized_)
+        {
+            // Partner graphics applications, including Alto, initialize the
+            // mouse at the calibrated screen center. Start with that same
+            // known position, then align it to the host pointer on entry.
+            mouse_guest_x_ = mouse_width / 2;
+            mouse_guest_y_ = mouse_height / 2;
+            mouse_guest_position_initialized_ = true;
+        }
+
+        const int dx = target_x - mouse_guest_x_;
+        const int dy = target_y - mouse_guest_y_;
+        mouse_guest_x_ = target_x;
+        mouse_guest_y_ = target_y;
+        if (dx != 0 || dy != 0)
+            emu.inject_serial_mouse_motion(
+                dx, dy, mouse_left_down_, mouse_right_down_,
+                mouse_middle_down_);
+        return true;
+    };
+    if (mouse_session_generation != mouse_guest_session_generation_)
+    {
+        release_mouse_mode();
+        mouse_guest_position_initialized_ = false;
+        mouse_guest_session_generation_ = mouse_session_generation;
+    }
     if (!has_serial_mouse && (mouse_left_down_ || mouse_right_down_ || mouse_middle_down_))
         release_mouse_buttons();
-    if (!has_serial_mouse && (mouse_cursor_hidden_ || mouse_relative_active_))
+    if ((!has_serial_mouse || !mouse_driver_ready) && mouse_cursor_hidden_)
         release_mouse_mode();
+    if (!has_serial_mouse || !mouse_driver_ready)
+        mouse_guest_position_initialized_ = false;
 
     SDL_Event event;
     while (SDL_PollEvent(&event))
@@ -1667,43 +1739,39 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
             }
         }
 
-        if (event.type == SDL_MOUSEMOTION && has_serial_mouse)
+        if (event.type == SDL_MOUSEMOTION && mouse_driver_ready)
         {
-            if (mouse_relative_active_)
+            int target_x = 0;
+            int target_y = 0;
+            if (!map_display_mouse(event.motion.x, event.motion.y,
+                                   target_x, target_y))
             {
-                const int dx = event.motion.xrel;
-                const int dy = event.motion.yrel;
-                if ((dx != 0) || (dy != 0))
-                    emu.inject_serial_mouse_motion(dx, dy, mouse_left_down_, mouse_right_down_, mouse_middle_down_);
+                if (mouse_cursor_hidden_ || mouse_left_down_ ||
+                    mouse_right_down_ || mouse_middle_down_)
+                    release_mouse_mode();
                 continue;
             }
 
-            const bool inside = point_in_display(event.motion.x, event.motion.y);
-            if (!inside)
+            if (!mouse_cursor_hidden_)
             {
-                if (mouse_cursor_hidden_)
-                    SDL_ShowCursor(SDL_ENABLE);
-                mouse_cursor_hidden_ = false;
-                continue;
-            }
-
-            if (inside && !mouse_cursor_hidden_)
-            {
+                // The SDL ImGui backend normally owns the system cursor and
+                // would show it again during its next NewFrame(). While the
+                // pointer is over the emulated raster, cursor visibility is
+                // ours instead: keep the host cursor hidden until the next
+                // outside motion, focus loss, or window leave event.
+                ImGui::GetIO().ConfigFlags |=
+                    ImGuiConfigFlags_NoMouseCursorChange;
                 SDL_ShowCursor(SDL_DISABLE);
                 mouse_cursor_hidden_ = true;
             }
 
-            const int dx = event.motion.xrel;
-            const int dy = event.motion.yrel;
-            if ((dx != 0) || (dy != 0))
-            {
-                emu.inject_serial_mouse_motion(dx, dy, mouse_left_down_, mouse_right_down_, mouse_middle_down_);
-            }
+            (void)sync_serial_mouse_position(
+                event.motion.x, event.motion.y);
             continue;
         }
 
         if ((event.type == SDL_MOUSEBUTTONDOWN || event.type == SDL_MOUSEBUTTONUP) &&
-            has_serial_mouse)
+            mouse_driver_ready)
         {
             const bool down = (event.type == SDL_MOUSEBUTTONDOWN);
             if (event.button.windowID != main_window_id)
@@ -1711,18 +1779,30 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
                 continue;
             }
 
-            const bool inside = point_in_display(event.button.x, event.button.y);
-            if (!inside && down)
-                continue;
-
-            if (inside && down)
-                activate_mouse_relative();
-
-            if (inside && !mouse_cursor_hidden_)
+            int target_x = 0;
+            int target_y = 0;
+            if (!map_display_mouse(event.button.x, event.button.y,
+                                   target_x, target_y))
             {
+                if (mouse_cursor_hidden_ || mouse_left_down_ ||
+                    mouse_right_down_ || mouse_middle_down_)
+                    release_mouse_mode();
+                continue;
+            }
+
+            if (!mouse_cursor_hidden_)
+            {
+                ImGui::GetIO().ConfigFlags |=
+                    ImGuiConfigFlags_NoMouseCursorChange;
                 SDL_ShowCursor(SDL_DISABLE);
                 mouse_cursor_hidden_ = true;
             }
+
+            // Move to the exact host click point before changing the serial
+            // button state, so press/release events reach the same location
+            // the user sees on the Partner raster.
+            (void)sync_serial_mouse_position(
+                event.button.x, event.button.y);
 
             switch (event.button.button)
             {
@@ -1769,12 +1849,6 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
                 (gdp_keyboard_model ? gdp_keyboard->pending_key_count() : 0u);
             if (repeat && repeat_backlog >= repeat_backlog_limit)
                 continue;
-
-            if (mouse_relative_active_ && (sym == SDLK_LCTRL || sym == SDLK_RCTRL))
-            {
-                release_mouse_mode();
-                continue;
-            }
 
             if (sym >= SDLK_a && sym <= SDLK_z) {
                 char host[2] = { (char)std::toupper((int)('a' + (sym - SDLK_a))), '\0' };
@@ -1913,13 +1987,6 @@ bool gui::process_events(partner &emu, bool &paused, dbg_action &action)
                 }
             }
         }
-    }
-    if (has_serial_mouse && !mouse_relative_active_ && mouse_cursor_hidden_ && !display_viewport_.hovered)
-    {
-        SDL_ShowCursor(SDL_ENABLE);
-        mouse_cursor_hidden_ = false;
-        if (mouse_left_down_ || mouse_right_down_ || mouse_middle_down_)
-            release_mouse_buttons();
     }
     return true;
 }

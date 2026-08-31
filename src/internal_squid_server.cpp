@@ -265,7 +265,7 @@ bool internal_squid_server::busy() const
 std::string internal_squid_server::status_text() const
 {
     if (!link_.link_up())
-        return "Internal Squid (waiting for PAKET)";
+        return "Internal Squid (waiting for serial client)";
     return "Internal Squid: " + implementation_->status_text();
 }
 

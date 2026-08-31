@@ -229,6 +229,7 @@ void print_usage(const char *prog)
     std::cerr << "  --covox-port PORT      Attach Covox to main PIO: 1=A, 2=B\n";
     std::cerr << "  --sio-tcp PORT DATA CONTROL\n";
     std::cerr << "                         Attach SIO selection 2, 3, or 4 to a TCP bridge\n";
+    std::cerr << "  --sio-mouse PORT TYPE  Attach serial mouse: microsoft|mousesystems|logitech\n";
     std::cerr << "  --sio-squid PORT       Attach internal Squid/Retro Vault to SIO selection 2, 3, or 4\n";
     std::cerr << "                         (2=SIO1B, 3=SIO2A, 4=SIO2B; default: 2)\n";
     std::cerr << "  --squid-payload BYTES  Internal Squid DATA payload: 16..112 (default: 112)\n";
@@ -258,6 +259,9 @@ int main(int argc, char **argv)
     int sio_tcp_port = 0;
     int sio_tcp_data_port = 0;
     int sio_tcp_control_port = 0;
+    int sio_mouse_port = 0;
+    partner::sio_device_kind sio_mouse_kind =
+        partner::sio_device_kind::mouse_microsoft;
     int sio_squid_port = 0;
     uint32_t squid_payload_bytes = squid_link_server::default_payload_bytes;
     bool fd0_explicit = false;
@@ -441,6 +445,36 @@ int main(int argc, char **argv)
             }
             sio_squid_port = port[0] - '0';
         }
+        else if (strcmp(argv[i], "--sio-mouse") == 0)
+        {
+            if ((i + 2) >= argc)
+            {
+                std::cerr << "Error: --sio-mouse requires PORT TYPE\n";
+                return 1;
+            }
+            const char *port = argv[++i];
+            if ((port[1] != '\0') || (port[0] < '2') || (port[0] > '4'))
+            {
+                std::cerr << "Error: --sio-mouse PORT must be 2, 3, or 4\n";
+                return 1;
+            }
+            const char *type = argv[++i];
+            if (strcmp(type, "microsoft") == 0 || strcmp(type, "ms") == 0)
+                sio_mouse_kind = partner::sio_device_kind::mouse_microsoft;
+            else if (strcmp(type, "mousesystems") == 0 ||
+                     strcmp(type, "mouse-systems") == 0)
+                sio_mouse_kind = partner::sio_device_kind::mouse_mousesystems;
+            else if (strcmp(type, "logitech") == 0 ||
+                     strcmp(type, "genius") == 0 || strcmp(type, "c7") == 0)
+                sio_mouse_kind = partner::sio_device_kind::mouse_logitech;
+            else
+            {
+                std::cerr << "Error: --sio-mouse TYPE must be microsoft, "
+                             "mousesystems, or logitech\n";
+                return 1;
+            }
+            sio_mouse_port = port[0] - '0';
+        }
         else if (strcmp(argv[i], "--squid-payload") == 0)
         {
             if ((i + 1) >= argc ||
@@ -622,6 +656,11 @@ int main(int argc, char **argv)
             active_configuration.sio[static_cast<std::size_t>(sio_squid_port - 1)].kind =
                 partner::sio_device_kind::internal_squid;
         }
+        if (sio_mouse_port != 0) {
+            active_configuration.sio[
+                static_cast<std::size_t>(sio_mouse_port - 1)].kind =
+                sio_mouse_kind;
+        }
         if (sio_tcp_port != 0) {
             auto &sio = active_configuration.sio[static_cast<std::size_t>(sio_tcp_port - 1)];
             sio.kind = partner::sio_device_kind::tcp_bridge;
@@ -701,25 +740,16 @@ int main(int argc, char **argv)
                 return gdp->key_input(ch);
             return false;
         };
-        const auto keyboard_input_ready = [&]() {
-            if (const auto *crt = dynamic_cast<const partner_crt *>(emu.get()))
-                return crt->keyboard_input_ready();
-            if (const auto *gdp = dynamic_cast<const partner_gdp *>(emu.get()))
-                return gdp->keyboard_input_ready();
-            return false;
-        };
-        const auto pending_key_count = [&]() -> size_t {
-            if (const auto *crt = dynamic_cast<const partner_crt *>(emu.get()))
-                return crt->pending_key_count();
-            if (const auto *gdp = dynamic_cast<const partner_gdp *>(emu.get()))
-                return gdp->pending_key_count();
-            return 0;
-        };
-        const auto terminal_text = [&]() {
+        const auto visible_text = [&]() {
             if (const auto *crt = dynamic_cast<const partner_crt *>(emu.get()))
                 return crt->dump_terminal_text();
             if (const auto *gdp = dynamic_cast<const partner_gdp *>(emu.get()))
-                return gdp->dump_terminal_text();
+            {
+                std::string text = gdp->dump_avdc_text();
+                if (text.empty())
+                    text = gdp->dump_terminal_text();
+                return text;
+            }
             return std::string{};
         };
         if (!startup_enter_delay_explicit)
@@ -739,26 +769,30 @@ int main(int argc, char **argv)
                 return;
 
             const auto now = startup_input::clock::now();
-            const std::string current_screen = terminal_text();
+            const std::string current_screen = visible_text();
             if (current_screen != scripted_screen_snapshot)
             {
                 scripted_screen_snapshot = current_screen;
                 scripted_screen_changed_at = now;
             }
 
-            // Firmware commonly enables the keyboard SIO briefly and resets it
-            // again while booting. Wait for a quiet screen before the first
-            // scripted byte so that byte cannot disappear in the later reset.
-            if (!keyboard_input_ready() || pending_key_count() != 0u)
+            // Queue input exactly like a physical host key. Requiring WR3 RX
+            // enable or an entirely idle SIO here can deadlock at a ready CP/M
+            // prompt: the Partner G keyboard accepts a queued key first and
+            // then raises its local-key indication. The device FIFO preserves
+            // order while the configured typing interval provides pacing.
+            if (!scripted_first_key_sent &&
+                !startup_input::cpm_prompt_visible(current_screen))
                 return;
             if (!scripted_first_key_sent &&
                 now - scripted_screen_changed_at < STARTUP_INPUT_SETTLE_TIME)
                 return;
 
-            if (const std::optional<uint8_t> key = scripted_input.take_due(now))
+            if (const std::optional<uint8_t> key = scripted_input.peek_due(now))
             {
                 if (!push_key(*key))
                     return;
+                scripted_input.accept_due(now);
                 scripted_first_key_sent = true;
                 if (scripted_input.finished() && !scripted_input_complete_reported)
                 {

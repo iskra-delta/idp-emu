@@ -20,8 +20,11 @@ public:
     static bool decode(std::string_view text,
                        std::vector<uint8_t> &keys,
                        std::string &error);
+    static bool cpm_prompt_visible(std::string_view text);
 
     void start(clock::time_point now);
+    std::optional<uint8_t> peek_due(clock::time_point now) const;
+    void accept_due(clock::time_point now);
     std::optional<uint8_t> take_due(clock::time_point now);
 
     bool empty() const { return keys_.empty(); }

@@ -32,6 +32,7 @@ malformed command escapes stop startup with an error.
 | `--model TYPE` | `crt`, `gdp`, `auto` | `auto` | Select the text or graphics Partner model. Automatic selection uses the ROM filename. |
 | `--covox-port PORT` | `1`, `2` | disabled | Attach the host-audio Covox DAC to main PIO A (`1`) or B (`2`). This is the PIO at `D0h`–`D3h`, not the GDP-board PIO at `30h`–`33h`. |
 | `--sio-tcp PORT DATA CONTROL` | SIO port `2`–`4` and two TCP ports | disabled | Attach the selected free SIO channel to an external TCP data/control bridge. |
+| `--sio-mouse PORT TYPE` | SIO port `2`–`4`; `microsoft`, `mousesystems`, or `logitech` | disabled | Attach a serial mouse for this run. This replaces the saved device on that port, including the default Internal Squid on port 2. |
 | `--sio-squid PORT` | SIO port `2`–`4` | Partner CRT and G: port `2` | Move the internal Squid/Retro Vault service to the selected free SIO channel. |
 | `--squid-payload BYTES` | `16`–`112` | `112` | Set the internal Squid endpoint's maximum negotiated DATA payload. The peer may select a smaller value. |
 | `--dap PORT` | `1`–`65535` | disabled | Start the udap Debug Adapter Protocol server on `127.0.0.1:PORT`. |
@@ -69,11 +70,18 @@ manually entering a path.
 
 Command-line switches override the corresponding JSON fields for that run.
 For example, `--model`, `--rom`, `--fd0`, `--hdd`, the CRT-only `--terminal`,
-`--sio-tcp`, `--sio-squid`, `--covox-port`, and `--squid-payload` take
+`--sio-tcp`, `--sio-mouse`, `--sio-squid`, `--covox-port`, and
+`--squid-payload` take
 precedence. The `partnerp` and `partnerg` launchers therefore still select
 their model and bundled system hard disk even when another model was saved.
 `--system-crt-hdd` and `--system-hdd` are full hard-disk boot profiles and
 also eject both saved floppy images.
+
+In the GUI, a configured serial mouse is active only while the host pointer
+is inside the Partner display image. Entering that image hides the host
+cursor; leaving any edge immediately restores it, releases guest buttons, and
+cancels unsent guest movement. The title bar, menus, and other emulator panels
+never feed the serial mouse.
 
 The generated file is intentionally readable and editable:
 
@@ -225,7 +233,10 @@ key. Put command text in single quotes in a POSIX shell so that sequences such
 as `\n` reach the emulator unchanged.
 
 Repeated `--commands`, `--command`, and `--type` values are concatenated in
-the order supplied. They do not add separators automatically.
+the order supplied. They do not add separators automatically. Startup input
+waits for a CP/M drive prompt (`A>` through `P>`) and a stable screen, then uses
+the same retry-safe keyboard FIFO path as interactive typing. It does not wait
+for the guest SIO receiver-enable bit before presenting the next physical key.
 
 For example, boot a GDP Partner and run `dir` at the CP/M prompt:
 
@@ -343,6 +354,7 @@ The MCP tools are:
 | `read_io` / `write_io` | Backward-compatible aliases of `read_port` / `set_port`. |
 | `press_keys` | Type text or named keys through the physical keyboard SIO while advancing emulated time. |
 | `keyboard` | Queue raw bytes through the keyboard SIO, optionally spacing them by exact ticks. |
+| `mouse` | Attach Microsoft, Mouse Systems, or Logitech emulation to SIO port 2–4, inject relative motion/buttons, and optionally repeat it while advancing guest frames. |
 | `screen` | Return the current CRT/GDP chip raster as an MCP PNG image. |
 | `screen_text` | Read terminal characters and serial/printer transcripts, or return framebuffer ASCII art. |
 | `screenshot` | Save the current chip raster as PNG. |
@@ -371,6 +383,17 @@ For example, load a NOP at `8000h` and measure it:
 ```
 
 The measurement reports four cycles/T-states and ends at `8001h`.
+
+For a sustained Microsoft-mouse test lasting just over one guest minute, use
+one event per frame for 3,661 frames:
+
+```json
+{"name":"mouse","arguments":{"protocol":"microsoft","port":2,"dx":1,"dy":1,"repeat":3661,"frames":1}}
+```
+
+`protocol` also accepts `mousesystems` and `logitech`. A single call is capped
+at 6,000 total guest frames so a failed guest cannot leave an MCP client
+waiting indefinitely.
 
 Example MCP client configuration:
 

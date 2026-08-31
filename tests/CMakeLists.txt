@@ -216,8 +216,8 @@ target_link_libraries(test_partner_gdp_hdd_boot PRIVATE
 add_test(NAME partner_gdp_hdd_boot_integration COMMAND test_partner_gdp_hdd_boot)
 
 if(UNIX)
-    add_executable(test_partner_paket_flow
-        test_partner_paket_flow.cpp
+    add_executable(test_partner_squid_sio
+        test_partner_squid_sio.cpp
         ../src/chips_impl.cpp
         ../src/partner.cpp
         ../src/partner_crt.cpp
@@ -227,22 +227,22 @@ if(UNIX)
         ../src/terminal/vt52_terminal.cpp
         ../src/gui/display.cpp
     )
-    target_include_directories(test_partner_paket_flow PRIVATE
+    target_include_directories(test_partner_squid_sio PRIVATE
         ${CMAKE_SOURCE_DIR}/src)
-    target_compile_definitions(test_partner_paket_flow PRIVATE
+    target_compile_definitions(test_partner_squid_sio PRIVATE
         GL_GLEXT_PROTOTYPES
         IDP_SOURCE_ROOT="${CMAKE_SOURCE_DIR}"
     )
-    target_link_libraries(test_partner_paket_flow PRIVATE
+    target_link_libraries(test_partner_squid_sio PRIVATE
         chipsex SDL2::SDL2 OpenGL::GL idp_internal_squid)
-    add_test(NAME partner_p_paket_flow_integration
-        COMMAND test_partner_paket_flow)
-    set_tests_properties(partner_p_paket_flow_integration PROPERTIES
-        ENVIRONMENT "IDP_TEST_PAKET_MODEL=p")
-    add_test(NAME partner_g_paket_flow_integration
-        COMMAND test_partner_paket_flow)
-    set_tests_properties(partner_g_paket_flow_integration PROPERTIES
-        ENVIRONMENT "IDP_TEST_PAKET_MODEL=g")
+    add_test(NAME partner_p_squid_sio_integration
+        COMMAND test_partner_squid_sio)
+    set_tests_properties(partner_p_squid_sio_integration PROPERTIES
+        ENVIRONMENT "IDP_TEST_SQUID_SIO_MODEL=p")
+    add_test(NAME partner_g_squid_sio_integration
+        COMMAND test_partner_squid_sio)
+    set_tests_properties(partner_g_squid_sio_integration PROPERTIES
+        ENVIRONMENT "IDP_TEST_SQUID_SIO_MODEL=g")
 endif()
 
 add_executable(test_partner_external_im2

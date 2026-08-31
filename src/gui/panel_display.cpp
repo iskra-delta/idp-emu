@@ -112,8 +112,6 @@ void panels::render_display(display &disp, display_viewport_info *out_info)
                  ImVec2(0.0f, 0.0f),
                  ImVec2(disp.uv_max_x(), disp.uv_max_y()));
     const ImVec2 image_end = ImVec2(image_pos.x + img_w, image_pos.y + img_h);
-    const bool image_hovered = ImGui::IsItemHovered(ImGuiHoveredFlags_None);
-
     // Thin border around the monitor viewport, drawn in ImGui space so it
     // remains unaffected by the shader pass. Curved only for the analog CRT
     // modes; flat and LCD get a plain rectangle.
@@ -132,7 +130,6 @@ void panels::render_display(display &disp, display_viewport_info *out_info)
         out_info->y0 = image_pos.y;
         out_info->x1 = image_end.x;
         out_info->y1 = image_end.y;
-        out_info->hovered = image_hovered;
     }
 
     ImGui::End();

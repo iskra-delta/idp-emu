@@ -18,4 +18,4 @@ Windows layout:
 
 Package version: @PROJECT_VERSION@
 
-PAKET support: Internal Squid/Retro Vault device compiled into the emulator
+Squid-over-SIO support: Internal Squid/Retro Vault device compiled into the emulator

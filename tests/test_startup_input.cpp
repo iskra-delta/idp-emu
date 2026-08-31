@@ -52,6 +52,18 @@ void test_invalid_escapes()
            "unknown escape is rejected");
 }
 
+void test_cpm_prompt_detection()
+{
+    expect(startup_input::cpm_prompt_visible("Partner G\n\nA>"),
+           "system-drive CP/M prompt is recognized");
+    expect(startup_input::cpm_prompt_visible("B>dir"),
+           "alternate CP/M drive prompt is recognized");
+    expect(!startup_input::cpm_prompt_visible("Partner G booting..."),
+           "boot text is not mistaken for a command prompt");
+    expect(!startup_input::cpm_prompt_visible("TESTING MEMORY >"),
+           "unqualified greater-than sign is not a command prompt");
+}
+
 void test_timing()
 {
     using namespace std::chrono_literals;
@@ -60,6 +72,10 @@ void test_timing()
     input.start(start);
 
     expect(!input.take_due(start + 99ms), "initial delay is observed");
+    expect(input.peek_due(start + 100ms) == std::optional<uint8_t>{'a'},
+           "due key can be inspected without consuming it");
+    expect(input.peek_due(start + 100ms) == std::optional<uint8_t>{'a'},
+           "inspecting a due key is repeatable until accepted");
     expect(input.take_due(start + 100ms) == std::optional<uint8_t>{'a'},
            "first key is produced after initial delay");
     expect(!input.take_due(start + 139ms), "key interval is observed");
@@ -87,6 +103,7 @@ int main()
 {
     test_command_decoding();
     test_invalid_escapes();
+    test_cpm_prompt_detection();
     test_timing();
     if (failures == 0)
     {

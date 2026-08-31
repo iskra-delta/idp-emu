@@ -116,6 +116,17 @@ bool startup_input::decode(std::string_view text,
     return true;
 }
 
+bool startup_input::cpm_prompt_visible(std::string_view text)
+{
+    for (std::size_t index = 1; index < text.size(); ++index)
+    {
+        const unsigned char drive = static_cast<unsigned char>(text[index - 1]);
+        if (text[index] == '>' && drive >= 'A' && drive <= 'P')
+            return true;
+    }
+    return false;
+}
+
 void startup_input::start(clock::time_point now)
 {
     next_key_ = 0;
@@ -123,13 +134,29 @@ void startup_input::start(clock::time_point now)
     started_ = true;
 }
 
-std::optional<uint8_t> startup_input::take_due(clock::time_point now)
+std::optional<uint8_t> startup_input::peek_due(clock::time_point now) const
 {
     if (!started_ || finished() || now < next_due_)
         return std::nullopt;
 
+    return keys_[next_key_];
+}
+
+void startup_input::accept_due(clock::time_point now)
+{
+    if (!peek_due(now))
+        return;
+
     const uint8_t key = keys_[next_key_++];
     const bool command_boundary = key == 0x0D && !finished();
     next_due_ = now + (command_boundary ? enter_delay_ : key_interval_);
+}
+
+std::optional<uint8_t> startup_input::take_due(clock::time_point now)
+{
+    const std::optional<uint8_t> key = peek_due(now);
+    if (!key)
+        return std::nullopt;
+    accept_due(now);
     return key;
 }

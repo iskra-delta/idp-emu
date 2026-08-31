@@ -124,6 +124,18 @@ uint64_t unsigned_arg(const json &args, const char *name, uint64_t low,
     return number;
 }
 
+int64_t signed_arg(const json &args, const char *name, int64_t low,
+                   int64_t high, int64_t fallback)
+{
+    if (!args.contains(name)) return fallback;
+    if (!args.at(name).is_number_integer())
+        throw std::invalid_argument(std::string("'") + name + "' must be an integer");
+    const int64_t number = args.at(name).get<int64_t>();
+    if (number < low || number > high)
+        throw std::invalid_argument(std::string("'") + name + "' is out of range");
+    return number;
+}
+
 bool bool_arg(const json &args, const char *name, bool fallback)
 {
     if (!args.contains(name)) return fallback;
@@ -393,6 +405,18 @@ json idp_mcp_server::list_tools() const
         "Queue raw text bytes on the Partner keyboard SIO; optional ticks_per_byte advances real chip time.",
         object_schema({{"text", {{"type", "string"}, {"maxLength", 4096}}},
             {"ticks_per_byte", {{"type", "integer"}, {"minimum", 0}, {"maximum", clock_hz}}}}, {"text"})));
+    tools.push_back(tool("mouse",
+        "Attach a Microsoft, Mouse Systems, or Logitech serial mouse; inject relative motion/buttons and run guest frames. repeat sustains the same event for long-running tests.",
+        object_schema({
+            {"protocol", {{"type", "string"}, {"enum", {"microsoft", "mousesystems", "logitech"}}}},
+            {"port", {{"type", "integer"}, {"minimum", 2}, {"maximum", 4}}},
+            {"dx", {{"type", "integer"}, {"minimum", -4096}, {"maximum", 4096}}},
+            {"dy", {{"type", "integer"}, {"minimum", -4096}, {"maximum", 4096}}},
+            {"left", {{"type", "boolean"}}},
+            {"right", {{"type", "boolean"}}},
+            {"middle", {{"type", "boolean"}}},
+            {"repeat", {{"type", "integer"}, {"minimum", 1}, {"maximum", 6000}}},
+            {"frames", {{"type", "integer"}, {"minimum", 0}, {"maximum", 100}}}})));
     tools.push_back(tool("screen",
         "Return the current chip-rendered CRT/GDP raster as a PNG MCP image without opening a window.",
         object_schema({{"include_border", {{"type", "boolean"},
@@ -1010,6 +1034,90 @@ json idp_mcp_server::invoke_tool(const std::string &name, const json &arguments)
                 std::to_string(accepted) + " of " + std::to_string(input.size()) +
                 " keyboard bytes", {{"accepted", accepted}, {"requested", input.size()},
                 {"ticks", elapsed}, {"tstates", elapsed}, {"cycles", elapsed}});
+        }
+        if (name == "mouse") {
+            const std::string protocol = arguments.value("protocol", "microsoft");
+            const int port_number = (int)unsigned_arg(arguments, "port", 2, 4, 2);
+            const int dx = (int)signed_arg(arguments, "dx", -4096, 4096, 0);
+            const int dy = (int)signed_arg(arguments, "dy", -4096, 4096, 0);
+            const bool left = bool_arg(arguments, "left", false);
+            const bool right = bool_arg(arguments, "right", false);
+            const bool middle = bool_arg(arguments, "middle", false);
+            const uint64_t repeat = unsigned_arg(arguments, "repeat", 1, 6000, 1);
+            const uint64_t frames = unsigned_arg(arguments, "frames", 0, 100, 1);
+            if (frames != 0 && repeat > 6000 / frames)
+                throw std::invalid_argument(
+                    "'repeat' times 'frames' must not exceed 6000 guest frames");
+
+            partner::sio_device_kind kind;
+            if (protocol == "microsoft")
+                kind = partner::sio_device_kind::mouse_microsoft;
+            else if (protocol == "mousesystems")
+                kind = partner::sio_device_kind::mouse_mousesystems;
+            else if (protocol == "logitech")
+                kind = partner::sio_device_kind::mouse_logitech;
+            else
+                throw std::invalid_argument(
+                    "'protocol' must be microsoft, mousesystems, or logitech");
+
+            const partner::sio_port_id port = port_number == 2
+                ? partner::sio_port_id::sio1_b
+                : port_number == 3 ? partner::sio_port_id::sio2_a
+                                   : partner::sio_port_id::sio2_b;
+            auto config = machine_.get_sio_device_config(port);
+            config.kind = kind;
+            if (!machine_.set_sio_device_config(port, config))
+                throw std::runtime_error("selected serial port cannot attach a mouse");
+
+            const uint64_t ticks =
+                (frames * clock_hz + nominal_frame_rate - 1) / nominal_frame_rate;
+            const uint64_t start_tick = machine_.get_tick_count();
+            uint64_t instructions = 0;
+            uint64_t injected = 0;
+            std::string reason = "completed";
+            for (; injected < repeat; ++injected) {
+                machine_.inject_serial_mouse_motion(
+                    dx, dy, left, right, middle);
+                if (ticks == 0)
+                    continue;
+                const json slice = run_machine(
+                    ticks, 0, std::nullopt, false);
+                instructions += slice["instructions"].get<uint64_t>();
+                reason = slice["reason"].get<std::string>();
+                if (reason != "completed") {
+                    ++injected;
+                    break;
+                }
+            }
+            const uint64_t elapsed = machine_.get_tick_count() - start_tick;
+            json timing = {
+                {"reason", reason}, {"start_tick", start_tick},
+                {"end_tick", machine_.get_tick_count()},
+                {"pc", machine_.get_current_pc()}, {"ticks", elapsed},
+                {"tstates", elapsed}, {"cycles", elapsed},
+                {"instructions", instructions},
+                {"frames", (double)elapsed * (double)nominal_frame_rate /
+                    (double)clock_hz},
+                {"seconds", (double)elapsed / (double)clock_hz},
+                {"clock_hz", clock_hz}, {"registers", register_state()}};
+
+            const auto status = machine_.get_sio_port_status(port);
+            json result = {
+                {"protocol", protocol}, {"port", port_number},
+                {"dx", dx}, {"dy", dy},
+                {"repeat", repeat}, {"injected", injected},
+                {"left", left}, {"right", right}, {"middle", middle},
+                {"serial", {
+                    {"connected", status.connected},
+                    {"pending_rx_bytes", status.pending_rx_bytes},
+                    {"rx_bytes", status.rx_bytes},
+                    {"tx_bytes", status.tx_bytes},
+                    {"session_generation", status.session_generation},
+                    {"rts", status.rts}, {"dtr", status.dtr}}},
+                {"run", std::move(timing)}};
+            return tool_result("injected " + std::to_string(injected) +
+                " serial mouse event(s) on SIO port " +
+                std::to_string(port_number), std::move(result));
         }
         if (name == "screen_text") {
             const std::string mode = arguments.value("mode", "chars");

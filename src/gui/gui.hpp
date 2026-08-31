@@ -122,7 +122,10 @@ private:
     int active_menu_ = -1;
     bool startup_layout_applied_ = false;
     bool mouse_cursor_hidden_ = false;
-    bool mouse_relative_active_ = false;
+    bool mouse_guest_position_initialized_ = false;
+    uint64_t mouse_guest_session_generation_ = 0;
+    int mouse_guest_x_ = 0;
+    int mouse_guest_y_ = 0;
     bool mouse_left_down_ = false;
     bool mouse_middle_down_ = false;
     bool mouse_right_down_ = false;

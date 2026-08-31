@@ -136,7 +136,7 @@ In VS Code, `F5` defaults to the `Original Partner GDP CP/M` launch configuratio
 ### Type commands after startup
 
 Use `--commands` to type through the emulated keyboard after the GUI opens and
-the guest keyboard and display have settled. Both literal newlines and `\n`
+a stable CP/M drive prompt is visible. Both literal newlines and `\n`
 escapes are converted to the Enter key:
 
 ```bash
@@ -217,7 +217,7 @@ profile attaches a floppy. Windows provides `partnerp.bat` and `partnerg.bat`
 with the same behavior. The installer creates matching Start Menu shortcuts,
 with an optional matching pair on the desktop.
 
-Both Partner profiles attach the built-in Retro Vault Squid service to PAKET
+Both Partner profiles attach the built-in Retro Vault Squid service to SIO
 port 2 (SIO1B) by default on Linux, macOS, and Windows. `PAKET.COM` is included
 on both model-specific system hard disks. At the CP/M
 prompt, running `PAKET` therefore lists the current Partner software catalog

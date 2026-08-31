@@ -439,6 +439,7 @@ partner::sio_port_status partner::get_sio_port_status(sio_port_id port) const
     st.pending_rx_bytes = rt.rx_fifo.size();
     st.tx_bytes = rt.tx_bytes;
     st.rx_bytes = rt.rx_bytes;
+    st.session_generation = rt.session_generation;
 
     bool cts = false;
     bool dcd = false;
@@ -489,7 +490,7 @@ partner::sio_port_status partner::get_sio_port_status(sio_port_id port) const
         connected = internal_squid_ != nullptr && internal_squid_->link_up();
         st.detail = internal_squid_ != nullptr
             ? internal_squid_->status_text()
-            : "Internal Squid (waiting for PAKET)";
+            : "Internal Squid (waiting for serial client)";
         if (internal_squid_ != nullptr)
             st.pending_rx_bytes += internal_squid_->pending_serial_bytes();
         break;
@@ -585,6 +586,7 @@ void partner::reset_sio_device_runtime(sio_port_id port)
     rt.mouse_accum_dy = 0;
     rt.tx_bytes = 0;
     rt.rx_bytes = 0;
+    ++rt.session_generation;
     rt.next_internal_squid_poll_tick = 0;
     cleanup_tcp_bridge(rt.tcp);
     if (sio_device_cfg_[sio_port_index(port)].kind ==
@@ -592,16 +594,36 @@ void partner::reset_sio_device_runtime(sio_port_id port)
         internal_squid_->reset_link();
 }
 
-void partner::reset_internal_squid_session(sio_port_id port)
+void partner::reset_sio_device_session(sio_port_id port)
 {
     const int index = sio_port_index(port);
-    if (sio_device_cfg_[index].kind != sio_device_kind::internal_squid)
+    const auto kind = sio_device_cfg_[index].kind;
+    auto &runtime = sio_device_runtime_[index];
+
+    if (kind == sio_device_kind::mouse_microsoft ||
+        kind == sio_device_kind::mouse_mousesystems ||
+        kind == sio_device_kind::mouse_logitech)
+    {
+        // A guest mouse driver resets its SIO channel before initialization.
+        // Discard motion accumulated during CP/M boot and begin a new host
+        // coordinate session for the driver's freshly centered cursor.
+        runtime.rx_fifo.clear();
+        runtime.last_mouse_buttons = 0;
+        runtime.mouse_buttons_initialized = false;
+        runtime.mouse_accum_dx = 0;
+        runtime.mouse_accum_dy = 0;
+        ++runtime.session_generation;
+        sio_modem_dirty_mask_ |= (uint8_t)(1u << index);
+        request_sio_service();
+        return;
+    }
+
+    if (kind != sio_device_kind::internal_squid)
         return;
 
-    // PAKET begins every invocation by resetting its selected Z80 SIO
+    // A guest Squid client begins a session by resetting its selected Z80 SIO
     // channel. Treat that as reconnecting the internal virtual cable: retry
-    // bytes from the preceding invocation must not enter the new handshake.
-    auto &runtime = sio_device_runtime_[index];
+    // bytes from the preceding session must not enter the new handshake.
     sio_modem_dirty_mask_ |= (uint8_t)(1u << index);
     request_sio_service();
     runtime.rx_fifo.clear();
@@ -919,10 +941,39 @@ void partner::queue_mouse_packet(sio_port_id port, int dx, int dy, uint8_t butto
     }
 }
 
+bool partner::queue_pending_streaming_mouse_packet(sio_port_id port, bool force)
+{
+    const int idx = sio_port_index(port);
+    auto &rt = sio_device_runtime_[idx];
+    const auto kind = sio_device_cfg_[idx].kind;
+    if (kind != sio_device_kind::mouse_microsoft &&
+        kind != sio_device_kind::mouse_mousesystems)
+        return false;
+    if (!force && rt.mouse_accum_dx == 0 && rt.mouse_accum_dy == 0)
+        return false;
+
+    const int step_x = clamp_delta(rt.mouse_accum_dx, (int32_t)-127,
+                                   (int32_t)127);
+    const int step_y = clamp_delta(rt.mouse_accum_dy, (int32_t)-127,
+                                   (int32_t)127);
+    rt.mouse_accum_dx -= step_x;
+    rt.mouse_accum_dy -= step_y;
+    queue_mouse_packet(port, step_x, step_y, rt.last_mouse_buttons);
+    return true;
+}
+
 void partner::queue_logitech_c7_identification(sio_port_id port)
 {
-    static constexpr const char *k_logitech_id =
-        "\r\nLOGIMOUSE C7 Firmware Revision 3.0\r\n";
+    /* The Partner LOGI/Genius driver consumes a fixed 60-byte response to
+       the 'c' command before beginning five-byte polls. Real devices pad the
+       human-readable identification record; reproduce that wire length. */
+    static constexpr std::array<uint8_t, 60> k_logitech_id = [] {
+        std::array<uint8_t, 60> response{};
+        constexpr char text[] =
+            "\r\nLOGIMOUSE C7 Firmware Revision 3.0\r\n";
+        std::copy_n(text, sizeof(text) - 1, response.begin());
+        return response;
+    }();
     const int idx = sio_port_index(port);
     auto &rt = sio_device_runtime_[idx];
     const auto push_byte = [&](uint8_t b) {
@@ -932,9 +983,8 @@ void partner::queue_logitech_c7_identification(sio_port_id port)
         request_sio_service();
     };
 
-    for (const char *p = k_logitech_id; *p; ++p)
-        push_byte((uint8_t)*p);
-    push_byte(0x00);
+    for (uint8_t byte : k_logitech_id)
+        push_byte(byte);
 }
 
 void partner::queue_logitech_c7_poll_report(sio_port_id port)
@@ -1019,23 +1069,67 @@ void partner::inject_serial_mouse_motion(int dx, int dy, bool left_pressed, bool
             continue;
         }
 
-        int rem_x = dx;
-        int rem_y = -dy;
-        bool sent = false;
-        while (rem_x != 0 || rem_y != 0)
+        /* SDL may deliver many motion events in one 60 Hz frame, while a
+           2400-baud mouse can put only about four bytes on the wire in that
+           time. Accumulate excess motion and keep at most one packet waiting
+           behind the byte being shifted. The old byte-per-event queue grew
+           for roughly ten seconds, then dropped individual bytes and left
+           the guest packet decoder permanently out of phase. Button edges
+           are forced into complete packets so clicks are not coalesced away. */
+        /* Preserve the wire order around button edges. Any motion accumulated
+           while the old button state was active must precede the edge packet;
+           otherwise a quick drag is decoded as movement after button-up. Keep
+           only one final old-state packet at an overloaded edge so latency
+           remains bounded. */
+        if (button_change && rt.mouse_buttons_initialized)
         {
-            const int step_x = clamp_delta(rem_x, -127, 127);
-            const int step_y = clamp_delta(rem_y, -127, 127);
-            queue_mouse_packet(port, step_x, step_y, buttons);
-            rem_x -= step_x;
-            rem_y -= step_y;
-            sent = true;
+            (void)queue_pending_streaming_mouse_packet(port, false);
+            rt.mouse_accum_dx = 0;
+            rt.mouse_accum_dy = 0;
         }
-        if (!sent && button_change) {
-            queue_mouse_packet(port, 0, 0, buttons);
-        }
+
         rt.last_mouse_buttons = buttons;
         rt.mouse_buttons_initialized = true;
+
+        const int64_t accumulated_x = (int64_t)rt.mouse_accum_dx + dx;
+        /* Microsoft reports Y in screen-coordinate direction. Mouse Systems
+           negates its wire Y in the SDK decoder, so compensate only for that
+           protocol here. This keeps inject_serial_mouse_motion() coordinates
+           identical for every emulated mouse. */
+        const int wire_dy = kind == sio_device_kind::mouse_microsoft ? dy : -dy;
+        const int64_t accumulated_y = (int64_t)rt.mouse_accum_dy + wire_dy;
+        rt.mouse_accum_dx = (int32_t)std::clamp<int64_t>(
+            accumulated_x, INT32_MIN, INT32_MAX);
+        rt.mouse_accum_dy = (int32_t)std::clamp<int64_t>(
+            accumulated_y, INT32_MIN, INT32_MAX);
+        if (button_change || rt.rx_fifo.empty())
+            (void)queue_pending_streaming_mouse_packet(port, button_change);
+    }
+}
+
+void partner::deactivate_serial_mouse_input()
+{
+    const std::array<sio_port_id, 3> ports = {
+        sio_port_id::sio1_b, sio_port_id::sio2_a, sio_port_id::sio2_b
+    };
+    for (sio_port_id port : ports)
+    {
+        const int idx = sio_port_index(port);
+        const auto kind = sio_device_cfg_[idx].kind;
+        if (kind != sio_device_kind::mouse_microsoft &&
+            kind != sio_device_kind::mouse_mousesystems &&
+            kind != sio_device_kind::mouse_logitech)
+            continue;
+
+        auto &rt = sio_device_runtime_[idx];
+        rt.mouse_accum_dx = 0;
+        rt.mouse_accum_dy = 0;
+        const bool button_change =
+            rt.mouse_buttons_initialized && rt.last_mouse_buttons != 0;
+        rt.last_mouse_buttons = 0;
+        rt.mouse_buttons_initialized = true;
+        if (button_change && kind != sio_device_kind::mouse_logitech)
+            (void)queue_pending_streaming_mouse_packet(port, true);
     }
 }
 
@@ -1313,8 +1407,19 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
 
     const bool line_event = ch.line_tx_event_pending ||
                             ch.line_rx_event_pending;
+    const bool mouse_device =
+        cfg.kind == sio_device_kind::mouse_microsoft ||
+        cfg.kind == sio_device_kind::mouse_mousesystems ||
+        cfg.kind == sio_device_kind::mouse_logitech;
+    /* A physical streaming mouse can overrun an unattended three-byte UART
+       FIFO.  The virtual mouse instead keeps one complete wire stream pending
+       and starts its next byte only after foreground mouse_poll() consumes the
+       preceding byte.  This preserves packet boundaries without building an
+       unbounded host-event queue while the guest is painting. */
+    const bool mouse_byte_unread = mouse_device && ch.rx_fifo_count != 0;
     const bool can_start_rx = !rt.rx_fifo.empty() &&
                               !ch.line_rx_active &&
+                              !mouse_byte_unread &&
                               z80sio_rx_enabled(chip, channel);
     const bool internal_poll_due =
         cfg.kind == sio_device_kind::internal_squid &&
@@ -1424,6 +1529,11 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
         }
     }
 
+    if (rt.rx_fifo.empty() &&
+        (cfg.kind == sio_device_kind::mouse_microsoft ||
+         cfg.kind == sio_device_kind::mouse_mousesystems))
+        (void)queue_pending_streaming_mouse_packet(port, false);
+
     if (rt.rx_fifo.empty())
         return;
 
@@ -1431,12 +1541,21 @@ void partner::service_sio_device(sio_port_id port, z80sio_t *chip, int channel)
     // staged at the cable remain pending until the guest advertises room.
     if (cfg.kind == sio_device_kind::internal_squid && !ch.rts)
         return;
+    // can_start_rx was calculated before a just-completed line character was
+    // transferred into the SIO FIFO. Recheck the live FIFO here so that same
+    // service pass cannot immediately launch a second polled-mouse byte.
+    if (mouse_device && ch.rx_fifo_count != 0)
+        return;
 
     const uint8_t data = rt.rx_fifo.front();
     if (!z80sio_line_receive(chip, channel, data, tick_count,
                              PARTNER_CPU_CLOCK_HZ, PARTNER_SIO_CLOCK_HZ))
         return;
     rt.rx_fifo.pop_front();
+    if (rt.rx_fifo.empty() &&
+        (cfg.kind == sio_device_kind::mouse_microsoft ||
+         cfg.kind == sio_device_kind::mouse_mousesystems))
+        (void)queue_pending_streaming_mouse_packet(port, false);
 }
 
 void partner::service_virtual_devices()
@@ -2650,6 +2769,8 @@ uint8_t partner::io_read(uint16_t port)
     if (partner_sio0_port((uint8_t)port))
     {
         const uint8_t data = z80sio_cpu_read(&sio, (uint8_t)port);
+        if ((port & 0x01u) == 0)
+            request_sio_service();
         static const bool trace_sio = [] {
             const char *s = std::getenv("IDP_TRACE_SIO");
             return s && s[0] && s[0] != '0';
@@ -2662,7 +2783,10 @@ uint8_t partner::io_read(uint16_t port)
     // Z80 SIO chip 1: E0/E1 = channel A data/control, E2/E3 = channel B data/control.
     if (partner_sio1_port((uint8_t)port))
     {
-        return z80sio_cpu_read(&sio2, (uint8_t)port);
+        const uint8_t data = z80sio_cpu_read(&sio2, (uint8_t)port);
+        if ((port & 0x01u) == 0)
+            request_sio_service();
+        return data;
     }
 
     // Z80 DMA: 0xC0 — kernel hd_dma_setup$ uses otir; route through the chip
@@ -2800,7 +2924,7 @@ void partner::io_write(uint16_t port, uint8_t data)
         z80sio_cpu_write(&sio, (uint8_t)port, data);
         request_sio_service();
         if (channel_reset)
-            reset_internal_squid_session(channel == Z80SIO_CHANNEL_B
+            reset_sio_device_session(channel == Z80SIO_CHANNEL_B
                 ? sio_port_id::sio1_b : sio_port_id::sio1_a);
         return;
     }
@@ -2813,7 +2937,7 @@ void partner::io_write(uint16_t port, uint8_t data)
         z80sio_cpu_write(&sio2, (uint8_t)port, data);
         request_sio_service();
         if (channel_reset)
-            reset_internal_squid_session(channel == Z80SIO_CHANNEL_B
+            reset_sio_device_session(channel == Z80SIO_CHANNEL_B
                 ? sio_port_id::sio2_b : sio_port_id::sio2_a);
         return;
     }

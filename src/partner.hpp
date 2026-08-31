@@ -63,6 +63,7 @@ public:
         size_t pending_rx_bytes = 0;
         uint64_t tx_bytes = 0;
         uint64_t rx_bytes = 0;
+        uint64_t session_generation = 0;
         std::string detail;
     };
 
@@ -194,6 +195,7 @@ public:
     void clear_virtual_printer_text() { virtual_printer_text_.clear(); }
 
     void inject_serial_mouse_motion(int dx, int dy, bool left_pressed, bool right_pressed, bool middle_pressed);
+    void deactivate_serial_mouse_input();
     bool has_serial_mouse_attached() const;
     bool has_logitech_mouse_attached() const;
 
@@ -355,6 +357,7 @@ private:
         int32_t mouse_accum_dy = 0;
         uint64_t tx_bytes = 0;
         uint64_t rx_bytes = 0;
+        uint64_t session_generation = 0;
         uint64_t next_internal_squid_poll_tick = 0;
         tcp_bridge_runtime tcp{};
     };
@@ -373,12 +376,13 @@ private:
     void apply_pio_device_output(pio_port_id port, uint8_t data);
     void pulse_pio_output_ack(pio_port_id port);
     void queue_mouse_packet(sio_port_id port, int dx, int dy, uint8_t buttons);
+    bool queue_pending_streaming_mouse_packet(sio_port_id port, bool force);
     void queue_logitech_c7_poll_report(sio_port_id port);
     void queue_logitech_c7_identification(sio_port_id port);
     static int sio_port_index(sio_port_id port) { return (int)port; }
     static int pio_port_index(pio_port_id port) { return (int)port; }
     void reset_sio_device_runtime(sio_port_id port);
-    void reset_internal_squid_session(sio_port_id port);
+    void reset_sio_device_session(sio_port_id port);
     void cleanup_tcp_bridge(tcp_bridge_runtime &tcp);
     bool ensure_tcp_bridge_listeners(sio_port_id port);
     void poll_tcp_bridge(sio_port_id port, z80sio_channel_t &ch);
